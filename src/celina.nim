@@ -197,42 +197,9 @@ import posix
 # Add event reading functionality
 proc readKeyInput(): Option[Event] =
   ## Read a single key input event (non-blocking)
-  # Set stdin to non-blocking
-  let flags = fcntl(STDIN_FILENO, F_GETFL, 0)
-  if fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK) == -1:
-    return none(Event)
-
-  var ch: char
-  let bytesRead = read(STDIN_FILENO, addr ch, 1)
-
-  # Restore blocking mode
-  discard fcntl(STDIN_FILENO, F_SETFL, flags)
-
-  if bytesRead > 0:
-    let event = Event(
-      kind: EventKind.Key,
-      key: KeyEvent(
-        code:
-          case ch
-          of '\x1b':
-            KeyCode.Escape
-          # ESC
-          of '\r', '\n':
-            KeyCode.Enter
-          of '\x08', '\x7f':
-            KeyCode.Backspace
-          of '\t':
-            KeyCode.Tab
-          of ' ':
-            KeyCode.Space
-          else:
-            KeyCode.Char,
-        char: ch,
-        modifiers: {},
-      ),
-    )
+  let event = pollKey()
+  if event.kind != EventKind.Unknown:
     return some(event)
-
   return none(Event)
 
 proc tick(app: App): bool =
