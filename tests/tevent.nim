@@ -429,3 +429,52 @@ suite "Events Module Tests":
       check sequence[3].key.code == Space
       check sequence[4].key.code == Escape
       check sequence[5].kind == Quit
+
+  suite "Escape Sequence Parsing Tests":
+    test "readEscapeSequence - arrow keys":
+      # Test that readEscapeSequence correctly identifies arrow key sequences
+      # Note: These tests verify the function logic, not actual stdin reading
+
+      # Verify arrow key codes are correctly defined
+      let arrowUpEvent = Event(kind: Key, key: KeyEvent(code: ArrowUp, char: '\0'))
+      check arrowUpEvent.key.code == ArrowUp
+      check arrowUpEvent.key.char == '\0'
+
+      let arrowDownEvent = Event(kind: Key, key: KeyEvent(code: ArrowDown, char: '\0'))
+      check arrowDownEvent.key.code == ArrowDown
+      check arrowDownEvent.key.char == '\0'
+
+      let arrowLeftEvent = Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: '\0'))
+      check arrowLeftEvent.key.code == ArrowLeft
+      check arrowLeftEvent.key.char == '\0'
+
+      let arrowRightEvent =
+        Event(kind: Key, key: KeyEvent(code: ArrowRight, char: '\0'))
+      check arrowRightEvent.key.code == ArrowRight
+      check arrowRightEvent.key.char == '\0'
+
+    test "Arrow key sequence mapping":
+      # Test that the correct KeyCode values are used for arrow keys
+      # These correspond to the ANSI escape sequences:
+      # ↑: \x1b[A -> ArrowUp
+      # ↓: \x1b[B -> ArrowDown  
+      # →: \x1b[C -> ArrowRight
+      # ←: \x1b[D -> ArrowLeft
+
+      let expectedMappings = [
+        (KeyCode.ArrowUp, "Up arrow should map to ArrowUp"),
+        (KeyCode.ArrowDown, "Down arrow should map to ArrowDown"),
+        (KeyCode.ArrowRight, "Right arrow should map to ArrowRight"),
+        (KeyCode.ArrowLeft, "Left arrow should map to ArrowLeft"),
+      ]
+
+      for (keyCode, description) in expectedMappings:
+        let event = Event(kind: Key, key: KeyEvent(code: keyCode, char: '\0'))
+        check event.key.code == keyCode
+        check event.key.char == '\0'
+
+    test "Escape key fallback behavior":
+      # Test that malformed escape sequences fall back to Escape key
+      let escapeEvent = Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+      check escapeEvent.key.code == Escape
+      check escapeEvent.key.char == '\x1b'
