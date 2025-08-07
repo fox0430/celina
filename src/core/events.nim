@@ -54,34 +54,6 @@ type
     of Quit, Unknown:
       discard
 
-# Helper function to read escape sequences
-proc readEscapeSequence*(): Event =
-  ## Read and parse escape sequences for arrow keys and function keys
-  var ch: char
-  # Read the second byte after ESC
-  if stdin.readBuffer(addr ch, 1) == 1:
-    if ch == '[': # CSI sequence
-      # Read the third byte
-      if stdin.readBuffer(addr ch, 1) == 1:
-        case ch
-        of 'A': # Up arrow
-          return Event(kind: Key, key: KeyEvent(code: ArrowUp, char: '\0'))
-        of 'B': # Down arrow
-          return Event(kind: Key, key: KeyEvent(code: ArrowDown, char: '\0'))
-        of 'C': # Right arrow
-          return Event(kind: Key, key: KeyEvent(code: ArrowRight, char: '\0'))
-        of 'D': # Left arrow
-          return Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: '\0'))
-        else:
-          # Unknown escape sequence, treat as escape
-          return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
-    else:
-      # Not a CSI sequence, treat as escape
-      return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
-  else:
-    # Failed to read more bytes, treat as escape
-    return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
-
 # Simple non-blocking key reading
 proc readKey*(): Event =
   ## Read a key event (blocking)
@@ -96,8 +68,10 @@ proc readKey*(): Event =
       return Event(kind: Key, key: KeyEvent(code: Space, char: ch))
     of '\x08', '\x7f': # Backspace or DEL
       return Event(kind: Key, key: KeyEvent(code: Backspace, char: ch))
-    of '\x1b': # Escape - check for escape sequences
-      return readEscapeSequence()
+    of '\x1b': # Escape or start of escape sequence
+      # In non-blocking mode, we can't reliably read multi-byte sequences
+      # Just return Escape for now
+      return Event(kind: Key, key: KeyEvent(code: Escape, char: ch))
     of '\x03': # Ctrl+C
       return Event(kind: Quit)
     else:
