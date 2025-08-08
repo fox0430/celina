@@ -148,7 +148,7 @@ proc renderFull*(terminal: Terminal, buffer: Buffer) =
   for y in 0 ..< buffer.area.height:
     for x in 0 ..< buffer.area.width:
       let cell = buffer[x, y]
-      if not cell.isEmpty:
+      if not cell.isEmpty or cell.style != defaultStyle():
         renderCell(cell, buffer.area.x + x, buffer.area.y + y)
 
   terminal.lastBuffer = buffer
