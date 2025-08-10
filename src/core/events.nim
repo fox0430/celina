@@ -54,29 +54,34 @@ type
     of Quit, Unknown:
       discard
 
-# Simple non-blocking key reading
+# Simple key reading
 proc readKey*(): Event =
-  ## Read a key event (blocking)
+  ## Read a key event (blocking or non-blocking depending on stdin mode)
   var ch: char
-  if stdin.readBuffer(addr ch, 1) == 1:
-    case ch
-    of '\r', '\n':
-      return Event(kind: Key, key: KeyEvent(code: Enter, char: ch))
-    of '\t':
-      return Event(kind: Key, key: KeyEvent(code: Tab, char: ch))
-    of ' ':
-      return Event(kind: Key, key: KeyEvent(code: Space, char: ch))
-    of '\x08', '\x7f': # Backspace or DEL
-      return Event(kind: Key, key: KeyEvent(code: Backspace, char: ch))
-    of '\x1b': # Escape or start of escape sequence
-      # In non-blocking mode, we can't reliably read multi-byte sequences
-      # Just return Escape for now
-      return Event(kind: Key, key: KeyEvent(code: Escape, char: ch))
-    of '\x03': # Ctrl+C
-      return Event(kind: Quit)
+  try:
+    if stdin.readBuffer(addr ch, 1) == 1:
+      case ch
+      of '\r', '\n':
+        return Event(kind: Key, key: KeyEvent(code: Enter, char: ch))
+      of '\t':
+        return Event(kind: Key, key: KeyEvent(code: Tab, char: ch))
+      of ' ':
+        return Event(kind: Key, key: KeyEvent(code: Space, char: ch))
+      of '\x08', '\x7f': # Backspace or DEL
+        return Event(kind: Key, key: KeyEvent(code: Backspace, char: ch))
+      of '\x1b': # Escape or start of escape sequence
+        # In non-blocking mode, we can't reliably read multi-byte sequences
+        # Just return Escape for now
+        return Event(kind: Key, key: KeyEvent(code: Escape, char: ch))
+      of '\x03': # Ctrl+C
+        return Event(kind: Quit)
+      else:
+        return Event(kind: Key, key: KeyEvent(code: Char, char: ch))
     else:
-      return Event(kind: Key, key: KeyEvent(code: Char, char: ch))
-  else:
+      return Event(kind: Unknown)
+  except IOError:
+    # Handle EAGAIN/EWOULDBLOCK in non-blocking mode
+    # This typically means no data is available to read
     return Event(kind: Unknown)
 
 # Polling key reading

@@ -337,6 +337,16 @@ suite "Colors Module Tests":
       check s.fg.kind == Default
       check s.bg.kind == Default
       check s.modifiers.len == 0
+    
+    test "Style.default() override":
+      # Verify that Style.default() returns the same as defaultStyle()
+      # instead of Nim's auto-generated zero values
+      let style1 = Style.default()
+      let style2 = defaultStyle()
+      check style1 == style2
+      check style1.fg.kind == Default
+      check style1.bg.kind == Default
+      # Without our override, this would be Style(fg: Black, bg: Black)
 
     test "bold() with default color":
       let s = bold()
@@ -487,7 +497,7 @@ suite "Colors Module Tests":
 
     test "Style toAnsiSequence() - foreground only":
       let s = style(Color.Red)
-      check s.toAnsiSequence() == "\e[31m"
+      check s.toAnsiSequence() == "\e[31;49m"
 
     test "Style toAnsiSequence() - background only":
       let s = style(bg = color(Color.Blue))

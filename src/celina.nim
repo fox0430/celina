@@ -126,7 +126,7 @@ proc onRender*(app: App, handler: proc(buffer: var Buffer)) =
   ##   let area = buffer.area
   ##   let centerX = area.width div 2 - 5  # Center "Hello!"
   ##   let centerY = area.height div 2
-  ##   buffer.setString(centerX, centerY, "Hello!", Style.default())
+  ##   buffer.setString(centerX, centerY, "Hello!", defaultStyle())
   ## ```
   app.renderHandler = handler
 
@@ -253,7 +253,7 @@ proc run*(
   ##
   ## app.onRender proc(buffer: var Buffer) =
   ##   # Render UI
-  ##   buffer.drawString(0, 0, "Hello!", Style.default())
+  ##   buffer.drawString(0, 0, "Hello!", defaultStyle())
   ##
   ## app.run()
   ## ```
@@ -341,7 +341,7 @@ proc quickRun*(
   ##   renderHandler = proc(buffer: var Buffer) =
   ##     buffer.clear()
   ##     let area = buffer.area
-  ##     buffer.setString(10, area.height div 2, "Press 'q' to quit", Style.default())
+  ##     buffer.setString(10, area.height div 2, "Press 'q' to quit", defaultStyle())
   ## )
   ## ```
   var app = newApp(config)
