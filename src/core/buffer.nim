@@ -138,7 +138,7 @@ proc setString*(
   ## Handles Unicode characters and wide characters properly
   if text.len == 0:
     return
-  
+
   # Validate starting position
   if not buffer.isValidPos(x, y):
     return
@@ -148,7 +148,7 @@ proc setString*(
   try:
     for rune in text.runes:
       let width = runeWidth(rune)
-      
+
       # Check if we have enough space for this character
       if currentX < 0 or currentX >= buffer.area.width:
         break
@@ -157,7 +157,7 @@ proc setString*(
 
       if buffer.isValidPos(currentX, y):
         buffer[currentX, y] = cell($rune, style)
-        
+
         # For wide characters, mark the next cell as occupied (empty)
         if width == 2 and buffer.isValidPos(currentX + 1, y):
           buffer[currentX + 1, y] = cell("", style)
