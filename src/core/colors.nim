@@ -5,6 +5,17 @@
 
 import std/[strformat, strutils, math]
 
+## Note on Style.default() vs defaultStyle():
+## ==========================================
+## Nim automatically generates a default() function for all types, which returns
+## zero values for all fields. For Style, this would be Style(fg: Black, bg: Black),
+## which creates invisible black text on black background.
+##
+## To avoid this issue, we explicitly override Style.default() to return the same
+## result as defaultStyle(), which uses the terminal's default colors.
+##
+## Both Style.default() and defaultStyle() can be used interchangeably.
+
 type
   Color* = enum
     ## Basic 16 terminal colors
@@ -59,8 +70,8 @@ type
     Hidden
 
   Style* = object ## Complete styling information for a cell
-    fg*: ColorValue # Foreground color
-    bg*: ColorValue # Background color
+    fg*: ColorValue = ColorValue(kind: Default) # Foreground color
+    bg*: ColorValue = ColorValue(kind: Default) # Background color
     modifiers*: set[StyleModifier] # Text modifiers
 
 # Equality comparison for RgbColor
@@ -303,6 +314,12 @@ proc defaultStyle*(): Style {.inline.} =
   ## Default style with no special formatting
   style()
 
+proc default*(T: typedesc[Style]): Style {.inline.} =
+  ## Override Nim's default() to return a proper default style
+  ## This ensures Style.default() returns the same as defaultStyle()
+  ## instead of Style(fg: Black, bg: Black) which would be invisible
+  defaultStyle()
+
 proc bold*(fg: Color = Reset): Style {.inline.} =
   ## Bold text style
   style(fg, modifiers = {Bold})
@@ -404,9 +421,12 @@ proc toAnsiSequence*(style: Style): string =
   if style.fg.kind != Default:
     codes.add(style.fg.toAnsiCode(false))
 
-  # Background color
+  # Background color - always set to ensure terminal default is used
   if style.bg.kind != Default:
     codes.add(style.bg.toAnsiCode(true))
+  elif style.fg.kind != Default:
+    # When only foreground is set, explicitly reset background to terminal default
+    codes.add("49")
 
   # Modifiers
   for modifier in style.modifiers:
