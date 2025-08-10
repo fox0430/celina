@@ -193,6 +193,17 @@ proc tick(app: App): bool =
   ## Process one application tick (events + render)
   ## Returns false if application should quit
   try:
+    # Check for resize event first
+    let resizeOpt = checkResize()
+    if resizeOpt.isSome():
+      let resizeEvent = resizeOpt.get()
+      app.handleResize()
+
+      # Also pass resize event to user handler
+      if app.eventHandler != nil:
+        if not app.eventHandler(resizeEvent):
+          return false
+
     # Handle pending events using centralized event handling
     let eventOpt = readKeyInput()
     if eventOpt.isSome():
@@ -254,6 +265,9 @@ proc run*(
 
   try:
     app.setup(config)
+
+    # Initialize signal handling for resize detection
+    initSignalHandling()
 
     # Main application loop
     while app.tick():

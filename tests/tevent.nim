@@ -9,8 +9,9 @@ suite "Events Module Tests":
     test "EventKind enum values":
       check EventKind.Key.ord == 0
       check EventKind.Mouse.ord == 1
-      check EventKind.Quit.ord == 2
-      check EventKind.Unknown.ord == 3
+      check EventKind.Resize.ord == 2
+      check EventKind.Quit.ord == 3
+      check EventKind.Unknown.ord == 4
 
   suite "KeyCode Tests":
     test "Basic key codes":
