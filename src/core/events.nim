@@ -3,11 +3,12 @@
 ## This module provides comprehensive event handling for keyboard input,
 ## including escape sequences and arrow keys for POSIX systems.
 
-import std/[os, posix, options]
+import std/[os, posix, options, strutils]
 
 type
   EventKind* = enum
     Key
+    Mouse
     Quit
     Unknown
 
@@ -42,17 +43,172 @@ type
     Alt
     Shift
 
+  MouseButton* = enum
+    Left
+    Right
+    Middle
+    WheelUp
+    WheelDown
+
+  MouseEventKind* = enum
+    Press
+    Release
+    Move
+    Drag
+
   KeyEvent* = object
     code*: KeyCode
     char*: char # Only valid when code == Char
+    modifiers*: set[KeyModifier]
+
+  MouseEvent* = object
+    kind*: MouseEventKind
+    button*: MouseButton
+    x*: int
+    y*: int
     modifiers*: set[KeyModifier]
 
   Event* = object
     case kind*: EventKind
     of Key:
       key*: KeyEvent
+    of Mouse:
+      mouse*: MouseEvent
     of Quit, Unknown:
       discard
+
+# Mouse modifier parsing functions
+proc parseMouseModifiers(button_byte: int): set[KeyModifier] =
+  ## Parse mouse modifiers from X10 button byte
+  result = {}
+  if (button_byte and 0x04) != 0:
+    result.incl(Shift)
+  if (button_byte and 0x08) != 0:
+    result.incl(Alt)
+  if (button_byte and 0x10) != 0:
+    result.incl(Ctrl)
+
+proc parseMouseModifiersSGR(button_code: int): set[KeyModifier] =
+  ## Parse mouse modifiers from SGR button code
+  result = {}
+  if (button_code and 0x04) != 0:
+    result.incl(Shift)
+  if (button_code and 0x08) != 0:
+    result.incl(Alt)
+  if (button_code and 0x10) != 0:
+    result.incl(Ctrl)
+
+# Mouse event parsing functions
+proc parseMouseEventX10(): Event =
+  ## Parse X10 mouse format: ESC[Mbxy
+  ## where b is button byte, x,y are coordinate bytes
+  var data: array[3, char]
+  if stdin.readBuffer(addr data[0], 3) == 3:
+    let button_byte = data[0].ord
+    let x = data[1].ord - 33 # X10 uses offset 33
+    let y = data[2].ord - 33 # X10 uses offset 33
+
+    let button_info = button_byte and 0x03
+    let is_drag = (button_byte and 0x20) != 0
+    let is_wheel = (button_byte and 0x40) != 0
+
+    var button: MouseButton
+    var kind: MouseEventKind
+
+    if is_wheel:
+      if (button_byte and 0x01) != 0:
+        button = WheelDown
+      else:
+        button = WheelUp
+      kind = Press
+    else:
+      case button_info
+      of 0:
+        button = Left
+      of 1:
+        button = Middle
+      of 2:
+        button = Right
+      else:
+        button = Left
+
+      if is_drag:
+        kind = Drag
+      elif (button_byte and 0x03) == 3:
+        kind = Release
+      else:
+        kind = Press
+
+    let modifiers = parseMouseModifiers(button_byte)
+
+    return Event(
+      kind: EventKind.Mouse,
+      mouse: MouseEvent(kind: kind, button: button, x: x, y: y, modifiers: modifiers),
+    )
+
+  return Event(kind: Unknown)
+
+proc parseMouseEventSGR(): Event =
+  ## Parse SGR mouse format: ESC[<button;x;y;M/m
+  ## M for press, m for release
+  var buffer: string
+  var ch: char
+
+  # Read until we get M or m
+  while stdin.readBuffer(addr ch, 1) == 1:
+    if ch == 'M' or ch == 'm':
+      break
+    buffer.add(ch)
+
+  # Parse the SGR format: button;x;y
+  let parts = buffer.split(';')
+  if parts.len >= 3:
+    try:
+      let button_code = parseInt(parts[0])
+      let x = parseInt(parts[1]) - 1 # SGR uses 1-based coordinates
+      let y = parseInt(parts[2]) - 1
+
+      let is_release = (ch == 'm')
+      let is_wheel = (button_code and 0x40) != 0
+      let button_info = button_code and 0x03
+
+      var button: MouseButton
+      var kind: MouseEventKind
+
+      if is_wheel:
+        if (button_code and 0x01) != 0:
+          button = WheelDown
+        else:
+          button = WheelUp
+        kind = Press
+      else:
+        case button_info
+        of 0:
+          button = Left
+        of 1:
+          button = Middle
+        of 2:
+          button = Right
+        else:
+          button = Left
+
+        if is_release:
+          kind = Release
+        elif (button_code and 0x20) != 0:
+          kind = Drag
+        else:
+          kind = Press
+
+      let modifiers = parseMouseModifiersSGR(button_code)
+
+      return Event(
+        kind: EventKind.Mouse,
+        mouse: MouseEvent(kind: kind, button: button, x: x, y: y, modifiers: modifiers),
+      )
+    except ValueError:
+      return Event(kind: Unknown)
+
+  return Event(kind: Unknown)
 
 # Advanced key reading with escape sequence support
 proc readKey*(): Event =
@@ -84,6 +240,10 @@ proc readKey*(): Event =
               return Event(kind: Key, key: KeyEvent(code: ArrowRight, char: '\0'))
             of 'D': # Arrow Left
               return Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: '\0'))
+            of 'M': # Mouse event (X10 format)
+              return parseMouseEventX10()
+            of '<': # SGR mouse format
+              return parseMouseEventSGR()
             else:
               return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
           else:
@@ -145,6 +305,12 @@ proc readKeyInput*(): Option[Event] =
             return some(Event(kind: Key, key: KeyEvent(code: ArrowRight, char: '\0')))
           of 'D': # Arrow Left
             return some(Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: '\0')))
+          of 'M': # Mouse event (X10 format)
+            let mouseEvent = parseMouseEventX10()
+            return some(mouseEvent)
+          of '<': # SGR mouse format
+            let mouseEvent = parseMouseEventSGR()
+            return some(mouseEvent)
           else:
             return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
         else:

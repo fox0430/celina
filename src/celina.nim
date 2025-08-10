@@ -144,9 +144,8 @@ proc setup(app: App, config: AppConfig) =
   if config.alternateScreen:
     app.terminal.enableAlternateScreen()
 
-  # Note: Mouse capture not implemented in terminal.nim yet
-  # if config.mouseCapture:
-  #   app.terminal.enableMouse()
+  if config.mouseCapture:
+    app.terminal.enableMouse()
 
   hideCursor()
   clearScreen()
@@ -155,9 +154,8 @@ proc cleanup(app: App, config: AppConfig) =
   ## Internal cleanup procedure to restore terminal state
   showCursor()
 
-  # Note: Mouse capture not implemented in terminal.nim yet
-  # if config.mouseCapture:
-  #   app.terminal.disableMouse()
+  if config.mouseCapture:
+    app.terminal.disableMouse()
 
   if config.alternateScreen:
     app.terminal.disableAlternateScreen()
@@ -260,7 +258,7 @@ proc run*(
     # Main application loop
     while app.tick():
       # Optional: Add frame rate limiting here
-      sleep(16) # ~60 FPS
+      sleep(8) # ~120 FPS for better mouse responsiveness
   except TerminalError as e:
     # Terminal errors are critical, ensure cleanup and re-raise
     try:
