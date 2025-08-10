@@ -43,6 +43,18 @@ type
     movable*: bool ## Whether window can be moved
     modal*: bool ## Whether window is modal
 
+  WindowInfo* = object ## Information about a window
+    id*: WindowId
+    title*: string
+    area*: Rect
+    state*: WindowState
+    zIndex*: int
+    visible*: bool
+    focused*: bool
+    resizable*: bool
+    movable*: bool
+    modal*: bool
+
   WindowManager* = ref object ## Manages multiple windows and their interactions
     windows*: seq[Window]
     nextWindowId: int
@@ -425,3 +437,18 @@ proc sendToBack*(wm: WindowManager, windowId: WindowId) =
       else:
         0
     window.zIndex = minZ - 1
+
+proc toWindowInfo*(window: Window): WindowInfo =
+  ## Convert a Window to WindowInfo
+  WindowInfo(
+    id: window.id,
+    title: window.title,
+    area: window.area,
+    state: window.state,
+    zIndex: window.zIndex,
+    visible: window.visible,
+    focused: window.focused,
+    resizable: window.resizable,
+    movable: window.movable,
+    modal: window.modal,
+  )
