@@ -17,7 +17,7 @@
 ##   main()
 ## ```
 
-import std/[os, options, unicode]
+import std/[os, options, unicode, strutils]
 
 import core/[geometry, colors, buffer, events, terminal, layout, windows]
 import widgets/[text, base]
@@ -191,22 +191,11 @@ proc render(app: App) =
   # The terminal.draw() method should handle diff calculation internally
   app.terminal.draw(app.buffer, force = false)
 
-# Additional imports for input handling
-import posix
-
-# Add event reading functionality
-proc readKeyInput(): Option[Event] =
-  ## Read a single key input event (non-blocking)
-  let event = pollKey()
-  if event.kind != EventKind.Unknown:
-    return some(event)
-  return none(Event)
-
 proc tick(app: App): bool =
   ## Process one application tick (events + render)
   ## Returns false if application should quit
 
-  # Handle pending events
+  # Handle pending events using centralized event handling
   let eventOpt = readKeyInput()
   if eventOpt.isSome():
     let event = eventOpt.get()
@@ -353,10 +342,21 @@ proc quickRun*(
 # Version Information
 # ============================================================================
 
-const
-  CelinaVersion* = "0.1.0"
-  CelinaVersionInfo* = "Celina TUI Library v" & CelinaVersion
+proc parseVersionFromNimble(): string {.compileTime.} =
+  ## Parse version from nimble file content at compile time
+  const nimbleContent = staticRead("../celina.nimble")
+  for line in nimbleContent.splitLines():
+    let trimmed = line.strip()
+    if trimmed.startsWith("version"):
+      # Extract version from line like: version = "0.1.0"
+      let parts = trimmed.split("=")
+      if parts.len >= 2:
+        let versionPart = parts[1].strip()
+        # Remove quotes
+        return versionPart.strip(chars = {'"', ' ', '\t'})
+  return "unknown"
 
 proc version*(): string =
   ## Get the library version string
-  CelinaVersionInfo
+  const CelinaVersion = parseVersionFromNimble()
+  return CelinaVersion
