@@ -26,7 +26,6 @@ jobs:
     name: build ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    needs: before
     strategy:
       matrix:
         os:
