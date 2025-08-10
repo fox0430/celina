@@ -37,12 +37,14 @@ suite "Layout System Tests":
       let c_neg = ratio(-2, 5)
       check c_neg.numerator == 0
 
-      # Test invalid denominator raises exception
-      expect(ValueError):
-        discard ratio(1, 0)
+      # Test invalid denominator uses safe default (1:1 ratio)
+      let c_zero_denom = ratio(1, 0)
+      check c_zero_denom.denominator == 1  # Should default to 1
+      check c_zero_denom.numerator == 1
 
-      expect(ValueError):
-        discard ratio(1, -1)
+      let c_neg_denom = ratio(3, -1)
+      check c_neg_denom.denominator == 1  # Should default to 1
+      check c_neg_denom.numerator == 3
 
     test "Min constraint":
       let c = min(15)
