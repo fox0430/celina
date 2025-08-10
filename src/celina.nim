@@ -337,6 +337,32 @@ proc getFocusedWindow*(app: App): Option[Window] =
     return app.windowManager.getFocusedWindow()
   return none(Window)
 
+proc getWindows*(app: App): seq[Window] =
+  ## Get all windows in the application
+  if app.windowMode and not app.windowManager.isNil:
+    return app.windowManager.windows
+  return @[]
+
+proc getWindowCount*(app: App): int =
+  ## Get the total number of windows
+  if app.windowMode and not app.windowManager.isNil:
+    return app.windowManager.windows.len
+  return 0
+
+proc getFocusedWindowId*(app: App): Option[WindowId] =
+  ## Get the ID of the currently focused window
+  if app.windowMode and not app.windowManager.isNil:
+    return app.windowManager.focusedWindow
+  return none(WindowId)
+
+proc getWindowInfo*(app: App, windowId: WindowId): Option[WindowInfo] =
+  ## Get window information by ID
+  if app.windowMode and not app.windowManager.isNil:
+    let windowOpt = app.windowManager.getWindow(windowId)
+    if windowOpt.isSome():
+      return some(windowOpt.get().toWindowInfo())
+  return none(WindowInfo)
+
 # ============================================================================
 # Convenience Functions
 # ============================================================================
