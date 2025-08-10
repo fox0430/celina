@@ -2,14 +2,15 @@
 
 import std/unittest
 
-import ../src/core/events
+import ../src/core/events {.all.}
 
 suite "Events Module Tests":
   suite "EventKind Tests":
     test "EventKind enum values":
       check EventKind.Key.ord == 0
-      check EventKind.Quit.ord == 1
-      check EventKind.Unknown.ord == 2
+      check EventKind.Mouse.ord == 1
+      check EventKind.Quit.ord == 2
+      check EventKind.Unknown.ord == 3
 
   suite "KeyCode Tests":
     test "Basic key codes":
@@ -478,3 +479,290 @@ suite "Events Module Tests":
       let escapeEvent = Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
       check escapeEvent.key.code == Escape
       check escapeEvent.key.char == '\x1b'
+
+  # Mouse Event Tests
+  suite "Mouse Event Tests":
+    test "MouseButton enum values":
+      check MouseButton.Left.ord == 0
+      check MouseButton.Right.ord == 1
+      check MouseButton.Middle.ord == 2
+      check MouseButton.WheelUp.ord == 3
+      check MouseButton.WheelDown.ord == 4
+
+    test "MouseEventKind enum values":
+      check MouseEventKind.Press.ord == 0
+      check MouseEventKind.Release.ord == 1
+      check MouseEventKind.Move.ord == 2
+      check MouseEventKind.Drag.ord == 3
+
+    test "MouseEvent creation - left click":
+      let mouseEvent = MouseEvent(kind: Press, button: Left, x: 10, y: 5, modifiers: {})
+      check mouseEvent.kind == Press
+      check mouseEvent.button == Left
+      check mouseEvent.x == 10
+      check mouseEvent.y == 5
+      check mouseEvent.modifiers.len == 0
+
+    test "MouseEvent creation - with modifiers":
+      let mouseEvent =
+        MouseEvent(kind: Press, button: Right, x: 20, y: 15, modifiers: {Ctrl, Shift})
+      check mouseEvent.kind == Press
+      check mouseEvent.button == Right
+      check mouseEvent.x == 20
+      check mouseEvent.y == 15
+      check Ctrl in mouseEvent.modifiers
+      check Shift in mouseEvent.modifiers
+      check Alt notin mouseEvent.modifiers
+      check mouseEvent.modifiers.len == 2
+
+    test "MouseEvent creation - wheel events":
+      let wheelUpEvent =
+        MouseEvent(kind: Press, button: WheelUp, x: 0, y: 0, modifiers: {})
+      check wheelUpEvent.kind == Press
+      check wheelUpEvent.button == WheelUp
+
+      let wheelDownEvent =
+        MouseEvent(kind: Press, button: WheelDown, x: 0, y: 0, modifiers: {})
+      check wheelDownEvent.kind == Press
+      check wheelDownEvent.button == WheelDown
+
+    test "MouseEvent creation - drag event":
+      let dragEvent = MouseEvent(kind: Drag, button: Left, x: 50, y: 30, modifiers: {})
+      check dragEvent.kind == Drag
+      check dragEvent.button == Left
+      check dragEvent.x == 50
+      check dragEvent.y == 30
+
+    test "MouseEvent creation - release event":
+      let releaseEvent =
+        MouseEvent(kind: Release, button: Middle, x: 100, y: 200, modifiers: {Alt})
+      check releaseEvent.kind == Release
+      check releaseEvent.button == Middle
+      check releaseEvent.x == 100
+      check releaseEvent.y == 200
+      check Alt in releaseEvent.modifiers
+
+    test "MouseEvent creation - move event":
+      let moveEvent = MouseEvent(
+        kind: Move,
+        button: Left, # Note: button may not be relevant for Move events
+        x: 75,
+        y: 125,
+        modifiers: {},
+      )
+      check moveEvent.kind == Move
+      check moveEvent.x == 75
+      check moveEvent.y == 125
+
+    test "Event creation - Mouse event":
+      let mouseEvent =
+        MouseEvent(kind: Press, button: Left, x: 25, y: 35, modifiers: {Ctrl})
+      let event = Event(kind: Mouse, mouse: mouseEvent)
+
+      check event.kind == Mouse
+      check event.mouse.kind == Press
+      check event.mouse.button == Left
+      check event.mouse.x == 25
+      check event.mouse.y == 35
+      check Ctrl in event.mouse.modifiers
+
+  suite "Mouse Modifier Parsing Tests":
+    test "parseMouseModifiers - no modifiers":
+      let modifiers = parseMouseModifiers(0x00) # No modifier bits set
+      check modifiers.len == 0
+      check Ctrl notin modifiers
+      check Shift notin modifiers
+      check Alt notin modifiers
+
+    test "parseMouseModifiers - single modifiers":
+      # Test Shift modifier (bit 2)
+      let shiftMods = parseMouseModifiers(0x04)
+      check Shift in shiftMods
+      check Ctrl notin shiftMods
+      check Alt notin shiftMods
+      check shiftMods.len == 1
+
+      # Test Alt modifier (bit 3)  
+      let altMods = parseMouseModifiers(0x08)
+      check Alt in altMods
+      check Ctrl notin altMods
+      check Shift notin altMods
+      check altMods.len == 1
+
+      # Test Ctrl modifier (bit 4)
+      let ctrlMods = parseMouseModifiers(0x10)
+      check Ctrl in ctrlMods
+      check Shift notin ctrlMods
+      check Alt notin ctrlMods
+      check ctrlMods.len == 1
+
+    test "parseMouseModifiers - multiple modifiers":
+      # Test Ctrl+Shift (bits 2 and 4)
+      let ctrlShiftMods = parseMouseModifiers(0x14)
+      check Ctrl in ctrlShiftMods
+      check Shift in ctrlShiftMods
+      check Alt notin ctrlShiftMods
+      check ctrlShiftMods.len == 2
+
+      # Test Ctrl+Alt (bits 3 and 4)
+      let ctrlAltMods = parseMouseModifiers(0x18)
+      check Ctrl in ctrlAltMods
+      check Alt in ctrlAltMods
+      check Shift notin ctrlAltMods
+      check ctrlAltMods.len == 2
+
+      # Test all modifiers (bits 2, 3, and 4)
+      let allMods = parseMouseModifiers(0x1C)
+      check Ctrl in allMods
+      check Shift in allMods
+      check Alt in allMods
+      check allMods.len == 3
+
+    test "parseMouseModifiersSGR - same behavior as X10":
+      # SGR format should have same modifier parsing behavior
+      let noMods = parseMouseModifiersSGR(0x00)
+      check noMods.len == 0
+
+      let shiftMods = parseMouseModifiersSGR(0x04)
+      check Shift in shiftMods
+      check shiftMods.len == 1
+
+      let allMods = parseMouseModifiersSGR(0x1C)
+      check Ctrl in allMods
+      check Shift in allMods
+      check Alt in allMods
+      check allMods.len == 3
+
+  suite "Mouse Event Integration Tests":
+    test "Complete mouse interaction sequence":
+      # Simulate a mouse drag sequence
+      let events = [
+        Event(
+          kind: Mouse,
+          mouse: MouseEvent(kind: Press, button: Left, x: 10, y: 10, modifiers: {}),
+        ),
+        Event(
+          kind: Mouse,
+          mouse: MouseEvent(kind: Drag, button: Left, x: 15, y: 12, modifiers: {}),
+        ),
+        Event(
+          kind: Mouse,
+          mouse: MouseEvent(kind: Drag, button: Left, x: 20, y: 15, modifiers: {}),
+        ),
+        Event(
+          kind: Mouse,
+          mouse: MouseEvent(kind: Release, button: Left, x: 25, y: 18, modifiers: {}),
+        ),
+      ]
+
+      check events[0].kind == Mouse
+      check events[0].mouse.kind == Press
+      check events[0].mouse.button == Left
+
+      check events[1].mouse.kind == Drag
+      check events[1].mouse.x == 15
+      check events[1].mouse.y == 12
+
+      check events[2].mouse.kind == Drag
+      check events[2].mouse.x == 20
+
+      check events[3].mouse.kind == Release
+      check events[3].mouse.x == 25
+
+    test "Mouse wheel scrolling sequence":
+      let wheelEvents = [
+        Event(
+          kind: Mouse,
+          mouse: MouseEvent(kind: Press, button: WheelUp, x: 50, y: 50, modifiers: {}),
+        ),
+        Event(
+          kind: Mouse,
+          mouse: MouseEvent(kind: Press, button: WheelUp, x: 50, y: 50, modifiers: {}),
+        ),
+        Event(
+          kind: Mouse,
+          mouse: MouseEvent(kind: Press, button: WheelDown, x: 50, y: 50, modifiers: {}),
+        ),
+      ]
+
+      check wheelEvents[0].mouse.button == WheelUp
+      check wheelEvents[1].mouse.button == WheelUp
+      check wheelEvents[2].mouse.button == WheelDown
+
+    test "Mouse with keyboard modifiers":
+      let ctrlClickEvent = Event(
+        kind: Mouse,
+        mouse: MouseEvent(kind: Press, button: Right, x: 100, y: 100, modifiers: {Ctrl}),
+      )
+      check ctrlClickEvent.mouse.button == Right
+      check Ctrl in ctrlClickEvent.mouse.modifiers
+
+      let shiftDragEvent = Event(
+        kind: Mouse,
+        mouse:
+          MouseEvent(kind: Drag, button: Left, x: 200, y: 150, modifiers: {Shift, Alt}),
+      )
+      check shiftDragEvent.mouse.kind == Drag
+      check Shift in shiftDragEvent.mouse.modifiers
+      check Alt in shiftDragEvent.mouse.modifiers
+
+  suite "Event Type Discrimination with Mouse":
+    test "Mouse vs Key vs other events":
+      let mouseEvent = Event(
+        kind: Mouse,
+        mouse: MouseEvent(kind: Press, button: Left, x: 0, y: 0, modifiers: {}),
+      )
+      let keyEvent =
+        Event(kind: Key, key: KeyEvent(code: Char, char: 'a', modifiers: {}))
+      let quitEvent = Event(kind: Quit)
+
+      check mouseEvent.kind == Mouse
+      check keyEvent.kind == Key
+      check quitEvent.kind == Quit
+
+      check mouseEvent.kind != Key
+      check mouseEvent.kind != Quit
+      check keyEvent.kind != Mouse
+      check quitEvent.kind != Mouse
+
+    test "Mouse event field access":
+      let mouseEvent = Event(
+        kind: Mouse,
+        mouse:
+          MouseEvent(kind: Press, button: Middle, x: 42, y: 84, modifiers: {Ctrl, Alt}),
+      )
+
+      check mouseEvent.kind == Mouse
+      check mouseEvent.mouse.kind == Press
+      check mouseEvent.mouse.button == Middle
+      check mouseEvent.mouse.x == 42
+      check mouseEvent.mouse.y == 84
+      check Ctrl in mouseEvent.mouse.modifiers
+      check Alt in mouseEvent.mouse.modifiers
+      check Shift notin mouseEvent.mouse.modifiers
+
+  suite "Mouse Coordinate Edge Cases":
+    test "Zero coordinates":
+      let zeroEvent = Event(
+        kind: Mouse,
+        mouse: MouseEvent(kind: Press, button: Left, x: 0, y: 0, modifiers: {}),
+      )
+      check zeroEvent.mouse.x == 0
+      check zeroEvent.mouse.y == 0
+
+    test "Large coordinates":
+      let largeEvent = Event(
+        kind: Mouse,
+        mouse: MouseEvent(kind: Move, button: Left, x: 9999, y: 9999, modifiers: {}),
+      )
+      check largeEvent.mouse.x == 9999
+      check largeEvent.mouse.y == 9999
+
+    test "Negative coordinates handling":
+      # While not typical in mouse events, test system robustness
+      let negativeEvent = Event(
+        kind: Mouse,
+        mouse: MouseEvent(kind: Move, button: Left, x: -1, y: -1, modifiers: {}),
+      )
+      check negativeEvent.mouse.x == -1
+      check negativeEvent.mouse.y == -1
