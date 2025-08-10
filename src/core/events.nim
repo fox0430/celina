@@ -5,10 +5,22 @@
 
 import std/[os, posix, options, strutils]
 
+# Define SIGWINCH if not available
+when not declared(SIGWINCH):
+  const SIGWINCH = 28
+
+# Global flag for resize detection
+var resizeDetected* = false
+
+# Signal handler for SIGWINCH
+proc sigwinchHandler(sig: cint) {.noconv.} =
+  resizeDetected = true
+
 type
   EventKind* = enum
     Key
     Mouse
+    Resize
     Quit
     Unknown
 
@@ -74,7 +86,7 @@ type
       key*: KeyEvent
     of Mouse:
       mouse*: MouseEvent
-    of Quit, Unknown:
+    of Resize, Quit, Unknown:
       discard
 
 # Mouse modifier parsing functions
@@ -376,3 +388,16 @@ proc waitForAnyKey*(): bool =
   ## Wait for any key press, return true if not quit
   let event = waitForKey()
   return event.kind != Quit
+
+# Initialize signal handling
+proc initSignalHandling*() =
+  ## Initialize signal handling for terminal resize
+  signal(SIGWINCH, sigwinchHandler)
+
+# Check for resize event
+proc checkResize*(): Option[Event] =
+  ## Check if a resize event occurred
+  if resizeDetected:
+    resizeDetected = false
+    return some(Event(kind: Resize))
+  return none(Event)
