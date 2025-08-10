@@ -3,3 +3,6 @@ nimblecache/
 htmldocs/
 
 src/celina
+
+tests/*
+!tests/*.*

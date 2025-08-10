@@ -114,17 +114,32 @@ proc rgb*(r, g, b: int): ColorValue {.inline.} =
 
 proc rgb*(hex: string): ColorValue =
   ## Create a ColorValue from hex string (e.g., "#FF0000" or "FF0000")
-  var hexStr = hex
-  if hexStr.startsWith("#"):
-    hexStr = hexStr[1 ..^ 1]
+  ## 
+  ## Parameters:
+  ## - hex: Hex color string, with or without '#' prefix
+  ##
+  ## Returns:
+  ## - ColorValue with parsed RGB color, or black (0,0,0) if parsing fails
+  ##
+  ## Note: This function handles errors gracefully by returning black instead of raising exceptions
+  try:
+    var hexStr = hex
+    if hexStr.startsWith("#"):
+      hexStr = hexStr[1 ..^ 1]
 
-  if hexStr.len != 6:
-    raise newException(ValueError, "Hex color must be 6 characters long")
+    if hexStr.len != 6:
+      return ColorValue(kind: Rgb, rgb: RgbColor(r: 0, g: 0, b: 0))
 
-  let r = parseHexInt(hexStr[0 .. 1]).uint8
-  let g = parseHexInt(hexStr[2 .. 3]).uint8
-  let b = parseHexInt(hexStr[4 .. 5]).uint8
-  ColorValue(kind: Rgb, rgb: RgbColor(r: r, g: g, b: b))
+    let r = parseHexInt(hexStr[0 .. 1]).uint8
+    let g = parseHexInt(hexStr[2 .. 3]).uint8
+    let b = parseHexInt(hexStr[4 .. 5]).uint8
+    ColorValue(kind: Rgb, rgb: RgbColor(r: r, g: g, b: b))
+  except ValueError:
+    # Return black on parsing error
+    ColorValue(kind: Rgb, rgb: RgbColor(r: 0, g: 0, b: 0))
+  except CatchableError:
+    # Return black on any other error
+    ColorValue(kind: Rgb, rgb: RgbColor(r: 0, g: 0, b: 0))
 
 proc color256*(index: uint8): ColorValue {.inline.} =
   ## Create a ColorValue from 256-color palette index (0-255)
@@ -132,9 +147,9 @@ proc color256*(index: uint8): ColorValue {.inline.} =
 
 proc color256*(index: int): ColorValue {.inline.} =
   ## Create a ColorValue from 256-color palette index (0-255)
-  if index < 0 or index > 255:
-    raise newException(ValueError, "Color index must be between 0 and 255")
-  ColorValue(kind: Indexed256, indexed256: index.uint8)
+  ## Clamps to valid range if out of bounds
+  let clampedIndex = clamp(index, 0, 255)
+  ColorValue(kind: Indexed256, indexed256: clampedIndex.uint8)
 
 proc defaultColor*(): ColorValue {.inline.} =
   ## Create a default ColorValue
@@ -225,17 +240,17 @@ proc salmon*(): ColorValue {.inline.} =
 # 256-color palette convenience functions
 proc grayscale*(level: int): ColorValue =
   ## Create grayscale color from 256-color palette (levels 0-23)
-  ## 0 = black, 23 = white
-  if level < 0 or level > 23:
-    raise newException(ValueError, "Grayscale level must be between 0 and 23")
-  color256(232 + level.uint8)
+  ## 0 = black, 23 = white. Clamps to valid range if out of bounds.
+  let clampedLevel = clamp(level, 0, 23)
+  color256(232 + clampedLevel.uint8)
 
 proc cubeColor*(r, g, b: int): ColorValue =
   ## Create color from 6x6x6 RGB cube in 256-color palette
-  ## Each component: 0-5 (0=darkest, 5=brightest)
-  if r < 0 or r > 5 or g < 0 or g > 5 or b < 0 or b > 5:
-    raise newException(ValueError, "RGB cube components must be between 0 and 5")
-  color256(16 + 36 * r + 6 * g + b)
+  ## Each component: 0-5 (0=darkest, 5=brightest). Clamps to valid range if out of bounds.
+  let clampedR = clamp(r, 0, 5)
+  let clampedG = clamp(g, 0, 5)
+  let clampedB = clamp(b, 0, 5)
+  color256(16 + 36 * clampedR + 6 * clampedG + clampedB)
 
 # Common 256-color palette shortcuts
 proc brightColors*(): seq[ColorValue] =
