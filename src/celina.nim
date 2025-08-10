@@ -194,26 +194,33 @@ proc render(app: App) =
 proc tick(app: App): bool =
   ## Process one application tick (events + render)
   ## Returns false if application should quit
+  try:
+    # Handle pending events using centralized event handling
+    let eventOpt = readKeyInput()
+    if eventOpt.isSome():
+      let event = eventOpt.get()
 
-  # Handle pending events using centralized event handling
-  let eventOpt = readKeyInput()
-  if eventOpt.isSome():
-    let event = eventOpt.get()
+      # Try window manager event handling first
+      var eventHandled = false
+      if app.windowMode and not app.windowManager.isNil:
+        eventHandled = app.windowManager.handleEvent(event)
 
-    # Try window manager event handling first
-    var eventHandled = false
-    if app.windowMode and not app.windowManager.isNil:
-      eventHandled = app.windowManager.handleEvent(event)
+      # If not handled by windows, call user event handler
+      if not eventHandled and app.eventHandler != nil:
+        if not app.eventHandler(event):
+          return false
 
-    # If not handled by windows, call user event handler
-    if not eventHandled and app.eventHandler != nil:
-      if not app.eventHandler(event):
-        return false
+    # Render frame
+    app.render()
 
-  # Render frame
-  app.render()
-
-  return not app.shouldQuit
+    return not app.shouldQuit
+  except TerminalError:
+    # Terminal errors should propagate up
+    raise
+  except CatchableError:
+    # Other errors in tick should not crash the application
+    # but indicate to quit
+    return false
 
 proc run*(
     app: App,
@@ -254,8 +261,27 @@ proc run*(
     while app.tick():
       # Optional: Add frame rate limiting here
       sleep(16) # ~60 FPS
+  except TerminalError as e:
+    # Terminal errors are critical, ensure cleanup and re-raise
+    try:
+      app.cleanup(config)
+    except:
+      discard # Ignore cleanup errors in error state
+    raise e
+  except CatchableError as e:
+    # Other errors should also trigger cleanup
+    try:
+      app.cleanup(config)
+    except:
+      discard # Ignore cleanup errors in error state
+    raise e
   finally:
-    app.cleanup(config)
+    # Always try cleanup in normal termination
+    try:
+      app.cleanup(config)
+    except CatchableError:
+      # Cleanup errors in normal flow should not crash
+      discard
 
 proc quit*(app: App) =
   ## Signal the application to quit gracefully
