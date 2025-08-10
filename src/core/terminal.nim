@@ -11,6 +11,7 @@ type
     size*: Size
     alternateScreen*: bool
     rawMode*: bool
+    mouseEnabled*: bool
     lastBuffer*: Buffer
 
   TerminalError* = object of CatchableError
@@ -37,6 +38,7 @@ proc newTerminal*(): Terminal =
     size: size(80, 24), # Default size
     alternateScreen: false,
     rawMode: false,
+    mouseEnabled: false,
   )
   result.updateSize()
 
@@ -74,6 +76,35 @@ proc disableAlternateScreen*(terminal: Terminal) =
     stdout.write("\e[?1049l") # Disable alternate screen
     stdout.flushFile()
     terminal.alternateScreen = false
+
+# Mouse control
+proc enableMouse*(terminal: Terminal) =
+  ## Enable mouse reporting
+  if not terminal.mouseEnabled:
+    # Enable X10 mouse reporting
+    stdout.write("\e[?9h")
+    # Enable mouse button tracking
+    stdout.write("\e[?1000h")
+    # Enable mouse motion tracking
+    stdout.write("\e[?1002h")
+    # Enable all mouse events including focus
+    stdout.write("\e[?1003h")
+    # Enable SGR extended mouse mode
+    stdout.write("\e[?1006h")
+    stdout.flushFile()
+    terminal.mouseEnabled = true
+
+proc disableMouse*(terminal: Terminal) =
+  ## Disable mouse reporting
+  if terminal.mouseEnabled:
+    # Disable all mouse modes in reverse order
+    stdout.write("\e[?1006l") # Disable SGR extended mode
+    stdout.write("\e[?1003l") # Disable all mouse events
+    stdout.write("\e[?1002l") # Disable mouse motion tracking
+    stdout.write("\e[?1000l") # Disable mouse button tracking
+    stdout.write("\e[?9l") # Disable X10 mouse reporting
+    stdout.flushFile()
+    terminal.mouseEnabled = false
 
 # Cursor control
 proc hideCursor*() =
@@ -173,9 +204,15 @@ proc setup*(terminal: Terminal) =
   clearScreen()
   terminal.updateSize()
 
+proc setupWithMouse*(terminal: Terminal) =
+  ## Setup terminal for TUI mode with mouse support
+  terminal.setup()
+  terminal.enableMouse()
+
 proc cleanup*(terminal: Terminal) =
   ## Cleanup and restore terminal
   showCursor()
+  terminal.disableMouse()
   terminal.disableRawMode()
   terminal.disableAlternateScreen()
 
@@ -208,6 +245,10 @@ proc isRawMode*(terminal: Terminal): bool =
 proc isAlternateScreen*(terminal: Terminal): bool =
   ## Check if alternate screen is active
   terminal.alternateScreen
+
+proc isMouseEnabled*(terminal: Terminal): bool =
+  ## Check if mouse reporting is enabled
+  terminal.mouseEnabled
 
 proc getSize*(terminal: Terminal): Size =
   ## Get current terminal size
