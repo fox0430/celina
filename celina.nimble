@@ -1,11 +1,10 @@
 # Package
 
-version       = "0.1.0"
-author        = "fox0430"
-description   = "TUI library"
-license       = "MIT"
-srcDir        = "src"
-
+version = "0.1.0"
+author = "fox0430"
+description = "CLI library"
+license = "MIT"
+srcDir = "src"
 
 # Dependencies
 
