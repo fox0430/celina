@@ -125,34 +125,44 @@ proc renderCell*(cell: Cell, x, y: int) =
 
 proc render*(terminal: Terminal, buffer: Buffer) =
   ## Render a buffer to the terminal using differential updates
-  if terminal.lastBuffer.area != buffer.area:
-    # Size changed, full redraw needed
-    clearScreen()
-    terminal.lastBuffer = newBuffer(buffer.area)
+  try:
+    if terminal.lastBuffer.area != buffer.area:
+      # Size changed, full redraw needed
+      clearScreen()
+      terminal.lastBuffer = newBuffer(buffer.area)
 
-  # Calculate differences and render only changed cells
-  let changes = terminal.lastBuffer.diff(buffer)
+    # Calculate differences and render only changed cells
+    let changes = terminal.lastBuffer.diff(buffer)
 
-  for change in changes:
-    let absolutePos = pos(buffer.area.x + change.pos.x, buffer.area.y + change.pos.y)
-    renderCell(change.cell, absolutePos.x, absolutePos.y)
+    for change in changes:
+      let absolutePos = pos(buffer.area.x + change.pos.x, buffer.area.y + change.pos.y)
+      renderCell(change.cell, absolutePos.x, absolutePos.y)
 
-  # Update last buffer
-  terminal.lastBuffer = buffer
-  stdout.flushFile()
+    # Update last buffer
+    terminal.lastBuffer = buffer
+    stdout.flushFile()
+  except IOError as e:
+    raise newException(TerminalError, "Failed to render buffer: " & e.msg)
+  except CatchableError as e:
+    raise newException(TerminalError, "Rendering error: " & e.msg)
 
 proc renderFull*(terminal: Terminal, buffer: Buffer) =
   ## Force a full render of the buffer (useful for initial draw)
-  clearScreen()
+  try:
+    clearScreen()
 
-  for y in 0 ..< buffer.area.height:
-    for x in 0 ..< buffer.area.width:
-      let cell = buffer[x, y]
-      if not cell.isEmpty or cell.style != defaultStyle():
-        renderCell(cell, buffer.area.x + x, buffer.area.y + y)
+    for y in 0 ..< buffer.area.height:
+      for x in 0 ..< buffer.area.width:
+        let cell = buffer[x, y]
+        if not cell.isEmpty or cell.style != defaultStyle():
+          renderCell(cell, buffer.area.x + x, buffer.area.y + y)
 
-  terminal.lastBuffer = buffer
-  stdout.flushFile()
+    terminal.lastBuffer = buffer
+    stdout.flushFile()
+  except IOError as e:
+    raise newException(TerminalError, "Failed to render full buffer: " & e.msg)
+  except CatchableError as e:
+    raise newException(TerminalError, "Full rendering error: " & e.msg)
 
 # Terminal setup and cleanup
 proc setup*(terminal: Terminal) =
@@ -172,10 +182,23 @@ proc cleanup*(terminal: Terminal) =
 # High-level rendering interface
 proc draw*(terminal: Terminal, buffer: Buffer, force: bool = false) =
   ## Draw a buffer to the terminal
-  if force or terminal.lastBuffer.area.isEmpty:
-    terminal.renderFull(buffer)
-  else:
-    terminal.render(buffer)
+  ## 
+  ## Parameters:
+  ## - buffer: The buffer to render to the terminal
+  ## - force: If true, forces a full redraw regardless of changes
+  ##
+  ## Raises:
+  ## - TerminalError: If rendering fails due to I/O errors or terminal issues
+  try:
+    if force or terminal.lastBuffer.area.isEmpty:
+      terminal.renderFull(buffer)
+    else:
+      terminal.render(buffer)
+  except TerminalError:
+    # Re-raise terminal errors
+    raise
+  except CatchableError as e:
+    raise newException(TerminalError, "Draw operation failed: " & e.msg)
 
 # Terminal state queries
 proc isRawMode*(terminal: Terminal): bool =

@@ -162,11 +162,12 @@ suite "Colors Module Tests":
       check colorVal.kind == Indexed256
       check colorVal.indexed256 == 200
 
-    test "color256() function bounds checking":
-      expect(ValueError):
-        discard color256(-1)
-      expect(ValueError):
-        discard color256(256)
+    test "color256() function bounds clamping":
+      # Test that out of bounds values are clamped instead of throwing
+      let colorVal1 = color256(-1)  # Should clamp to 0
+      let colorVal2 = color256(256)  # Should clamp to 255
+      check colorVal1.indexed256 == 0
+      check colorVal2.indexed256 == 255
 
     test "hex color parsing":
       let colorVal1 = rgb("FF0080")
@@ -182,11 +183,18 @@ suite "Colors Module Tests":
       check colorVal2.rgb.g == 255
       check colorVal2.rgb.b == 128
 
-    test "hex color parsing error":
-      expect(ValueError):
-        discard rgb("FF00") # Too short
-      expect(ValueError):
-        discard rgb("FF0080CC") # Too long
+    test "hex color parsing error handling":
+      # Test that invalid hex strings return black instead of throwing
+      let colorVal1 = rgb("FF00")      # Too short -> should return black
+      let colorVal2 = rgb("FF0080CC")  # Too long -> should return black
+      let colorVal3 = rgb("INVALID")   # Invalid hex -> should return black
+      
+      check colorVal1.kind == Rgb
+      check colorVal1.rgb == RgbColor(r: 0, g: 0, b: 0)
+      check colorVal2.kind == Rgb
+      check colorVal2.rgb == RgbColor(r: 0, g: 0, b: 0)
+      check colorVal3.kind == Rgb
+      check colorVal3.rgb == RgbColor(r: 0, g: 0, b: 0)
 
     test "defaultColor() function":
       let colorVal = defaultColor()
@@ -570,11 +578,12 @@ suite "Colors Module Tests":
       check gray23.kind == Indexed256
       check gray23.indexed256 == 255 # 232 + 23
 
-    test "grayscale() function - boundary values":
-      expect(ValueError):
-        discard grayscale(-1)
-      expect(ValueError):
-        discard grayscale(24)
+    test "grayscale() function - boundary values clamping":
+      # Test that out of bounds values are clamped instead of throwing
+      let gray_neg = grayscale(-1)   # Should clamp to 0
+      let gray_high = grayscale(24)  # Should clamp to 23
+      check gray_neg.indexed256 == 232  # 232 + 0
+      check gray_high.indexed256 == 255  # 232 + 23
 
     test "cubeColor() function - valid range":
       let cube000 = cubeColor(0, 0, 0)
@@ -588,19 +597,21 @@ suite "Colors Module Tests":
       check cube123.kind == Indexed256
       check cube123.indexed256 == 67 # 16 + 36*1 + 6*2 + 3
 
-    test "cubeColor() function - boundary values":
-      expect(ValueError):
-        discard cubeColor(-1, 0, 0)
-      expect(ValueError):
-        discard cubeColor(0, -1, 0)
-      expect(ValueError):
-        discard cubeColor(0, 0, -1)
-      expect(ValueError):
-        discard cubeColor(6, 0, 0)
-      expect(ValueError):
-        discard cubeColor(0, 6, 0)
-      expect(ValueError):
-        discard cubeColor(0, 0, 6)
+    test "cubeColor() function - boundary values clamping":
+      # Test that out of bounds values are clamped instead of throwing
+      let cube_neg_r = cubeColor(-1, 0, 0)  # Should clamp r to 0
+      let cube_neg_g = cubeColor(0, -1, 0)  # Should clamp g to 0  
+      let cube_neg_b = cubeColor(0, 0, -1)  # Should clamp b to 0
+      let cube_high_r = cubeColor(6, 0, 0)  # Should clamp r to 5
+      let cube_high_g = cubeColor(0, 6, 0)  # Should clamp g to 5
+      let cube_high_b = cubeColor(0, 0, 6)  # Should clamp b to 5
+      
+      check cube_neg_r.indexed256 == 16     # 16 + 36*0 + 6*0 + 0
+      check cube_neg_g.indexed256 == 16     # 16 + 36*0 + 6*0 + 0
+      check cube_neg_b.indexed256 == 16     # 16 + 36*0 + 6*0 + 0
+      check cube_high_r.indexed256 == 196   # 16 + 36*5 + 6*0 + 0
+      check cube_high_g.indexed256 == 46    # 16 + 36*0 + 6*5 + 0
+      check cube_high_b.indexed256 == 21    # 16 + 36*0 + 6*0 + 5
 
     test "brightColors() function":
       let colors = brightColors()

@@ -59,9 +59,9 @@ proc percentage*(value: int): Constraint {.inline.} =
 
 proc ratio*(numerator, denominator: int): Constraint =
   ## Create a ratio constraint
-  if denominator <= 0:
-    raise newException(ValueError, "Denominator must be positive")
-  Constraint(kind: Ratio, numerator: max(0, numerator), denominator: denominator)
+  ## Uses 1:1 ratio if denominator is invalid
+  let safeDenominator = if denominator <= 0: 1 else: denominator
+  Constraint(kind: Ratio, numerator: max(0, numerator), denominator: safeDenominator)
 
 proc min*(value: int): Constraint {.inline.} =
   ## Create a minimum size constraint

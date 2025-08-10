@@ -135,20 +135,40 @@ proc setString*(
     buffer: var Buffer, x, y: int, text: string, style: Style = defaultStyle()
 ) =
   ## Set a string starting at the given coordinates
+  ## Handles Unicode characters and wide characters properly
+  if text.len == 0:
+    return
+  
+  # Validate starting position
+  if not buffer.isValidPos(x, y):
+    return
+
   var currentX = x
 
-  for rune in text.runes:
-    let width = runeWidth(rune)
-    if currentX + width > buffer.area.width:
-      break
+  try:
+    for rune in text.runes:
+      let width = runeWidth(rune)
+      
+      # Check if we have enough space for this character
+      if currentX < 0 or currentX >= buffer.area.width:
+        break
+      if currentX + width > buffer.area.width:
+        break
 
-    if buffer.isValidPos(currentX, y):
-      buffer[currentX, y] = cell($rune, style)
-      # For wide characters, mark the next cell as occupied (empty)
-      if width == 2 and buffer.isValidPos(currentX + 1, y):
-        buffer[currentX + 1, y] = cell("", style)
+      if buffer.isValidPos(currentX, y):
+        buffer[currentX, y] = cell($rune, style)
+        
+        # For wide characters, mark the next cell as occupied (empty)
+        if width == 2 and buffer.isValidPos(currentX + 1, y):
+          buffer[currentX + 1, y] = cell("", style)
 
-    currentX += width
+      currentX += width
+  except ValueError:
+    # Handle malformed Unicode gracefully by stopping
+    return
+  except CatchableError:
+    # Handle other unexpected errors
+    return
 
 proc setString*(
     buffer: var Buffer, pos: Position, text: string, style: Style = defaultStyle()
