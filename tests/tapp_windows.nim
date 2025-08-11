@@ -1,6 +1,7 @@
 ## Tests for App window manager APIs
 
 import std/[unittest, options]
+
 import ../src/celina
 
 suite "App Window Manager API Tests":

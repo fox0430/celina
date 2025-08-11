@@ -1,4 +1,4 @@
-## Base widget system for Celina TUI library
+## Base widget system for Celina CLI library
 ##
 ## This module defines the fundamental widget traits and base classes
 ## for building UI components.

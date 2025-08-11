@@ -1,4 +1,4 @@
-## Buffer system for Celina TUI library
+## Buffer system for Celina CLI library
 ##
 ## This module provides the core buffer abstraction for managing
 ## terminal screen content and efficient rendering.

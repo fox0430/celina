@@ -1,4 +1,4 @@
-## Constraint-based layout system for Celina TUI library
+#core/layout.nim# Constraint-based layout system for Celina CLI library
 ##
 ## This module provides a flexible constraint-based layout system similar to
 ## Ratatui's layout capabilities, allowing for responsive UI design.
