@@ -1,6 +1,7 @@
 ## Tests for the layout system
 
-import unittest
+import std/unittest
+
 import ../src/core/layout
 import ../src/core/geometry
 

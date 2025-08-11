@@ -1,4 +1,4 @@
-## Core geometric types for Celina TUI library
+## Core geometric types for Celina CLI library
 ##
 ## This module defines the fundamental geometric types used throughout
 ## the library for positioning, sizing, and area calculations.

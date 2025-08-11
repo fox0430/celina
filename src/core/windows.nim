@@ -1,4 +1,4 @@
-## Window management system for Celina TUI library
+## Window management system for Celina CLI library
 ##
 ## This module provides window management capabilities, allowing for
 ## overlapping, resizable, and focusable window areas within the terminal.
@@ -28,6 +28,26 @@ type
     bottomLeft*: string
     bottomRight*: string
 
+  # Event handling types
+  EventPhase* = enum
+    epCapture # Event travels down from root to target
+    epTarget # Event at target window
+    epBubble # Event bubbles up from target to root
+
+  WindowEvent* = object
+    originalEvent*: Event
+    phase*: EventPhase
+    target*: WindowId
+    currentTarget*: WindowId
+    propagationStopped*: bool
+    defaultPrevented*: bool
+
+  WindowEventHandler* = proc(window: Window, event: Event): bool
+  WindowKeyHandler* = proc(window: Window, key: KeyEvent): bool
+  WindowMouseHandler* = proc(window: Window, mouse: MouseEvent): bool
+  WindowResizeHandler* = proc(window: Window, newSize: Size): bool
+  EventHandler* = proc(event: var WindowEvent): bool
+
   Window* = ref object ## Represents a window within the terminal
     id*: WindowId
     area*: Rect ## Window position and size
@@ -42,6 +62,12 @@ type
     resizable*: bool ## Whether window can be resized
     movable*: bool ## Whether window can be moved
     modal*: bool ## Whether window is modal
+    # Event handlers
+    eventHandler*: Option[WindowEventHandler] ## General event handler
+    keyHandler*: Option[WindowKeyHandler] ## Key-specific handler
+    mouseHandler*: Option[WindowMouseHandler] ## Mouse-specific handler
+    resizeHandler*: Option[WindowResizeHandler] ## Resize handler
+    acceptsEvents*: bool ## Whether window accepts events
 
   WindowInfo* = object ## Information about a window
     id*: WindowId
@@ -106,6 +132,7 @@ proc newWindow*(
     resizable: bool = true,
     movable: bool = true,
     modal: bool = false,
+    acceptsEvents: bool = true,
 ): Window =
   ## Create a new window
   result = Window(
@@ -120,35 +147,63 @@ proc newWindow*(
     resizable: resizable,
     movable: movable,
     modal: modal,
+    eventHandler: none(WindowEventHandler),
+    keyHandler: none(WindowKeyHandler),
+    mouseHandler: none(WindowMouseHandler),
+    resizeHandler: none(WindowResizeHandler),
+    acceptsEvents: acceptsEvents,
   )
 
   # Calculate content area (excluding borders)
   result.contentArea = area
   if border.isSome():
     let b = border.get()
-    result.contentArea =
-      area.shrink(if b.left or b.right: 1 else: 0, if b.top or b.bottom: 1 else: 0)
+    # Proper calculation with min size guarantee
+    let leftMargin = if b.left: 1 else: 0
+    let rightMargin = if b.right: 1 else: 0
+    let topMargin = if b.top: 1 else: 0
+    let bottomMargin = if b.bottom: 1 else: 0
 
-  # Create buffer for content area (using size only, not absolute position)
+    result.contentArea = rect(
+      area.x + leftMargin,
+      area.y + topMargin,
+      max(1, area.width - leftMargin - rightMargin),
+      max(1, area.height - topMargin - bottomMargin),
+    )
+
+  # Create buffer for content area (always use (0,0) origin for window buffers)
   result.buffer = newBuffer(result.contentArea.width, result.contentArea.height)
+  # Ensure buffer area starts at (0,0) - window buffers are always relative
+  result.buffer.area = rect(0, 0, result.contentArea.width, result.contentArea.height)
 
 proc calculateContentArea(window: Window): Rect =
   ## Calculate the content area based on window area and border
   result = window.area
   if window.border.isSome():
     let border = window.border.get()
-    let hMargin = (if border.left: 1 else: 0) + (if border.right: 1 else: 0)
-    let vMargin = (if border.top: 1 else: 0) + (if border.bottom: 1 else: 0)
-    result = result.shrink(hMargin div 2, vMargin div 2)
+    # Correct calculation: shrink by border thickness, not half
+    let leftMargin = if border.left: 1 else: 0
+    let rightMargin = if border.right: 1 else: 0
+    let topMargin = if border.top: 1 else: 0
+    let bottomMargin = if border.bottom: 1 else: 0
+
+    result = rect(
+      result.x + leftMargin,
+      result.y + topMargin,
+      max(1, result.width - leftMargin - rightMargin),
+      max(1, result.height - topMargin - bottomMargin),
+    )
 
 proc updateContentArea(window: Window) =
   ## Update the content area and resize buffer when window area changes
   let newContentArea = window.calculateContentArea()
   if newContentArea != window.contentArea:
     window.contentArea = newContentArea
-    # Resize buffer to new dimensions (width/height only, not absolute position)
+    # Always resize buffer to start at (0,0) - window buffers are relative coordinate system
     let newBufferArea = rect(0, 0, newContentArea.width, newContentArea.height)
     window.buffer.resize(newBufferArea)
+    # Ensure buffer area is always (0,0) based after resize
+    window.buffer.area = newBufferArea
 
 # ============================================================================
 # Window operations
@@ -159,7 +214,6 @@ proc move*(window: Window, newPos: Position) =
   if not window.movable:
     return
 
-  let offset = newPos - window.area.position
   window.area.x = newPos.x
   window.area.y = newPos.y
   window.updateContentArea()
@@ -174,9 +228,17 @@ proc resize*(window: Window, newSize: Size) =
   window.updateContentArea()
 
 proc setArea*(window: Window, newArea: Rect) =
-  ## Set window area (combines move and resize)
+  ## Set window area (combines move and resize) - safe coordinate system update
   window.area = newArea
   window.updateContentArea()
+
+proc getContentSize*(window: Window): Size =
+  ## Get the current content area size (safe access)
+  size(window.contentArea.width, window.contentArea.height)
+
+proc getContentBuffer*(window: Window): Buffer =
+  ## Get the window content buffer (always (0,0) based)
+  window.buffer
 
 proc show*(window: Window) =
   ## Show the window
@@ -213,6 +275,58 @@ proc setBorder*(window: Window, border: Option[WindowBorder]) =
   ## Set window border configuration
   window.border = border
   window.updateContentArea()
+
+# ============================================================================
+# Window event handling
+# ============================================================================
+
+proc setEventHandler*(window: Window, handler: WindowEventHandler) =
+  ## Set general event handler for window
+  window.eventHandler = some(handler)
+
+proc setKeyHandler*(window: Window, handler: WindowKeyHandler) =
+  ## Set key event handler for window
+  window.keyHandler = some(handler)
+
+proc setMouseHandler*(window: Window, handler: WindowMouseHandler) =
+  ## Set mouse event handler for window  
+  window.mouseHandler = some(handler)
+
+proc setResizeHandler*(window: Window, handler: WindowResizeHandler) =
+  ## Set resize handler for window
+  window.resizeHandler = some(handler)
+
+proc clearEventHandlers*(window: Window) =
+  ## Clear all event handlers for window
+  window.eventHandler = none(WindowEventHandler)
+  window.keyHandler = none(WindowKeyHandler)
+  window.mouseHandler = none(WindowMouseHandler)
+  window.resizeHandler = none(WindowResizeHandler)
+
+proc handleWindowEvent*(window: Window, event: Event): bool =
+  ## Handle event for a specific window, returns true if handled
+  if not window.acceptsEvents or not window.visible:
+    return false
+
+  # Try specific handlers first
+  case event.kind
+  of EventKind.Key:
+    if window.keyHandler.isSome():
+      return window.keyHandler.get()(window, event.key)
+  of EventKind.Mouse:
+    if window.mouseHandler.isSome():
+      # Check if mouse event is within window bounds
+      let mousePos = pos(event.mouse.x, event.mouse.y)
+      if window.area.contains(mousePos):
+        return window.mouseHandler.get()(window, event.mouse)
+  else:
+    discard
+
+  # Try general event handler
+  if window.eventHandler.isSome():
+    return window.eventHandler.get()(window, event)
+
+  return false
 
 # ============================================================================
 # Window rendering
@@ -276,16 +390,31 @@ proc render*(window: Window, destBuffer: var Buffer) =
   # Merge window content buffer into destination at content area position
   let contentPos = pos(window.contentArea.x, window.contentArea.y)
 
-  # Ensure window buffer area starts at (0,0) for correct merging
-  if window.buffer.area.x != 0 or window.buffer.area.y != 0:
-    let fixedArea = rect(0, 0, window.buffer.area.width, window.buffer.area.height)
-    window.buffer.area = fixedArea
-
+  # Window buffer should always be (0,0) based - no need for runtime checks
+  # This is guaranteed by updateContentArea and window creation
   destBuffer.merge(window.buffer, contentPos)
 
 # ============================================================================
 # WindowManager implementation
 # ============================================================================
+
+proc destroyWindow*(window: Window) =
+  ## Clean up window resources to prevent memory leaks
+  if not window.isNil():
+    # Clear buffer contents
+    window.buffer.clear()
+    # Reset references
+    window.title = ""
+    window.border = none(WindowBorder)
+
+proc destroyWindowManager*(wm: WindowManager) =
+  ## Clean up all windows and resources in the manager
+  if not wm.isNil():
+    for window in wm.windows:
+      window.destroyWindow()
+    wm.windows.setLen(0)
+    wm.focusedWindow = none(WindowId)
+    wm.modalWindow = none(WindowId)
 
 proc newWindowManager*(): WindowManager =
   ## Create a new window manager
@@ -354,7 +483,12 @@ proc addWindow*(wm: WindowManager, window: Window): WindowId =
   return window.id
 
 proc removeWindow*(wm: WindowManager, windowId: WindowId) =
-  ## Remove a window from the manager
+  ## Remove a window from the manager with proper cleanup
+  let windowToRemove = wm.getWindow(windowId)
+  if windowToRemove.isSome():
+    # Clean up resources before removal
+    windowToRemove.get().destroyWindow()
+
   wm.windows = wm.windows.filterIt(it.id != windowId)
 
   # Update focus if the focused window was removed
@@ -375,40 +509,21 @@ proc getFocusedWindow*(wm: WindowManager): Option[Window] =
   return none(Window)
 
 proc getVisibleWindows*(wm: WindowManager): seq[Window] =
-  ## Get all visible windows sorted by Z-index
-  result = wm.windows.filterIt(it.visible).sortedByIt(it.zIndex)
+  ## Get all visible windows sorted by Z-index (memory-efficient)
+  result = @[]
+  # Pre-allocate for typical window counts
+  if wm.windows.len > 0:
+    result = newSeqOfCap[Window](min(wm.windows.len, 16))
 
-proc handleEvent*(wm: WindowManager, event: Event): bool =
-  ## Handle an event, routing it to the appropriate window
-  ## Returns true if the event was handled
+  for window in wm.windows:
+    if window.visible:
+      result.add(window)
 
-  # If there's a modal window, only it can handle events
-  if wm.modalWindow.isSome():
-    let modalWindow = wm.getWindow(wm.modalWindow.get())
-    if modalWindow.isSome():
-      # Modal window exists - event handling would go here
-      # For now, we don't handle events at the window level
-      return false
-
-  # Otherwise, route to focused window
-  let focusedWindow = wm.getFocusedWindow()
-  if focusedWindow.isSome():
-    # Focused window exists - event handling would go here
-    # For now, we don't handle events at the window level
-    return false
-
-  return false
-
-proc render*(wm: WindowManager, destBuffer: var Buffer) =
-  ## Render all windows to the destination buffer
-  let visibleWindows = wm.getVisibleWindows()
-
-  for window in visibleWindows:
-    window.render(destBuffer)
-
-# ============================================================================
-# Utility functions
-# ============================================================================
+  # Most windows will already be in Z-index order, so this should be fast
+  result.sort(
+    proc(a, b: Window): int =
+      cmp(a.zIndex, b.zIndex)
+  )
 
 proc findWindowAt*(wm: WindowManager, pos: Position): Option[Window] =
   ## Find the topmost window at the given position
@@ -421,6 +536,84 @@ proc findWindowAt*(wm: WindowManager, pos: Position): Option[Window] =
       return some(window)
 
   return none(Window)
+
+proc handleEvent*(wm: WindowManager, event: Event): bool =
+  ## Handle an event, routing it to the appropriate window
+  ## Returns true if the event was handled
+
+  # If there's a modal window, only it can handle events
+  if wm.modalWindow.isSome():
+    let modalWindow = wm.getWindow(wm.modalWindow.get())
+    if modalWindow.isSome():
+      return modalWindow.get().handleWindowEvent(event)
+
+  # For mouse events, find the topmost window at mouse position
+  if event.kind == EventKind.Mouse:
+    let mousePos = pos(event.mouse.x, event.mouse.y)
+    let windowAtPos = wm.findWindowAt(mousePos)
+    if windowAtPos.isSome():
+      let window = windowAtPos.get()
+      # Auto-focus window on mouse click
+      if event.mouse.kind == Press:
+        wm.focusWindow(window.id)
+      return window.handleWindowEvent(event)
+
+  # For other events, route to focused window
+  let focusedWindow = wm.getFocusedWindow()
+  if focusedWindow.isSome():
+    return focusedWindow.get().handleWindowEvent(event)
+
+  return false
+
+proc dispatchResize*(wm: WindowManager, newSize: Size) =
+  ## Dispatch resize event to all windows with resize handlers
+  for window in wm.windows:
+    if window.resizeHandler.isSome() and window.visible:
+      discard window.resizeHandler.get()(window, newSize)
+
+proc render*(wm: WindowManager, destBuffer: var Buffer) =
+  ## Render all windows to the destination buffer
+  let visibleWindows = wm.getVisibleWindows()
+
+  for window in visibleWindows:
+    window.render(destBuffer)
+
+# ============================================================================
+# Window Event System
+# ============================================================================
+
+proc stopPropagation*(event: var WindowEvent) =
+  ## Stop event from propagating further
+  event.propagationStopped = true
+
+proc preventDefault*(event: var WindowEvent) =
+  ## Prevent default action for this event
+  event.defaultPrevented = true
+
+proc dispatchEvent*(wm: WindowManager, event: Event): bool =
+  ## Dispatch event through window hierarchy with bubbling
+  result = false
+
+  # Find target window based on event type
+  var targetWindow: Option[Window]
+
+  case event.kind
+  of EventKind.Mouse:
+    targetWindow = wm.findWindowAt(pos(event.mouse.x, event.mouse.y))
+  of EventKind.Key:
+    targetWindow = wm.getFocusedWindow()
+  else:
+    return false
+
+  if targetWindow.isNone():
+    return false
+
+  # Dispatch to target window's event handlers
+  result = targetWindow.get().handleWindowEvent(event)
+
+# ============================================================================
+# Utility functions
+# ============================================================================
 
 proc bringToFront*(wm: WindowManager, windowId: WindowId) =
   ## Bring a window to the front

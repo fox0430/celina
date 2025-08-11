@@ -1,6 +1,6 @@
-import unittest
+import std/unittest
+
 import ../src/core/events
-import std/options
 
 suite "Mouse event tests":
   test "MouseEvent creation":

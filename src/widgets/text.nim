@@ -1,4 +1,4 @@
-## Text widget for Celina TUI library
+## Text widget for Celina CLI library
 ##
 ## This module provides text rendering widgets with various alignment
 ## and styling options.

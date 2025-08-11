@@ -1,4 +1,4 @@
-## Color and style definitions for Celina TUI library
+## Color and style definitions for Celina CLI library
 ##
 ## This module provides color definitions, styling options, and utilities
 ## for terminal text formatting.
