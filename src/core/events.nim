@@ -1,4 +1,4 @@
-## Event handling for Celina TUI library
+## Event handling for Celina CLI library
 ##
 ## This module provides comprehensive event handling for keyboard input,
 ## including escape sequences and arrow keys for POSIX systems.

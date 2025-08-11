@@ -3,7 +3,6 @@
 import std/[unittest, unicode, strutils]
 
 import ../src/core/buffer
-import ../src/core/geometry
 import ../src/core/colors
 
 suite "Unicode Support Tests":

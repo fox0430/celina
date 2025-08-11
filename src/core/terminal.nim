@@ -1,4 +1,4 @@
-## Terminal interface for Celina TUI library
+## Terminal interface for Celina CLI library
 ##
 ## This module provides terminal control and rendering capabilities
 ## using ANSI escape sequences for POSIX systems (Linux, macOS, etc.).
@@ -197,7 +197,7 @@ proc renderFull*(terminal: Terminal, buffer: Buffer) =
 
 # Terminal setup and cleanup
 proc setup*(terminal: Terminal) =
-  ## Setup terminal for TUI mode
+  ## Setup terminal for CLI mode
   terminal.enableAlternateScreen()
   terminal.enableRawMode()
   hideCursor()
@@ -205,7 +205,7 @@ proc setup*(terminal: Terminal) =
   terminal.updateSize()
 
 proc setupWithMouse*(terminal: Terminal) =
-  ## Setup terminal for TUI mode with mouse support
+  ## Setup terminal for CLI mode with mouse support
   terminal.setup()
   terminal.enableMouse()
 
@@ -219,7 +219,7 @@ proc cleanup*(terminal: Terminal) =
 # High-level rendering interface
 proc draw*(terminal: Terminal, buffer: Buffer, force: bool = false) =
   ## Draw a buffer to the terminal
-  ## 
+  ##
   ## Parameters:
   ## - buffer: The buffer to render to the terminal
   ## - force: If true, forces a full redraw regardless of changes

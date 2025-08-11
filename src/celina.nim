@@ -1,4 +1,4 @@
-## Celina TUI Library
+## Celina CLI Library
 ## ==================
 ##
 ## A powerful Terminal User Interface library for Nim, inspired by Ratatui.
@@ -35,7 +35,7 @@ export base
 export unicode
 
 type
-  ## Main application context for TUI applications
+  ## Main application context for CLI applications
   App* = ref object
     terminal: Terminal
     buffer: Buffer
@@ -66,7 +66,7 @@ proc newApp*(
       windowMode: false,
     )
 ): App =
-  ## Create a new TUI application with the specified configuration
+  ## Create a new CLI application with the specified configuration
   ##
   ## Example:
   ## ```nim
@@ -209,15 +209,16 @@ proc tick(app: App): bool =
     if eventOpt.isSome():
       let event = eventOpt.get()
 
-      # Try window manager event handling first
-      var eventHandled = false
-      if app.windowMode and not app.windowManager.isNil:
-        eventHandled = app.windowManager.handleEvent(event)
-
-      # If not handled by windows, call user event handler
-      if not eventHandled and app.eventHandler != nil:
-        if not app.eventHandler(event):
+      # Always call user event handler first for application-level control
+      var shouldContinue = true
+      if app.eventHandler != nil:
+        shouldContinue = app.eventHandler(event)
+        if not shouldContinue:
           return false
+
+      # Then try window manager event handling
+      if app.windowMode and not app.windowManager.isNil:
+        discard app.windowManager.handleEvent(event)
 
     # Render frame
     app.render()
@@ -363,6 +364,12 @@ proc getWindowInfo*(app: App, windowId: WindowId): Option[WindowInfo] =
       return some(windowOpt.get().toWindowInfo())
   return none(WindowInfo)
 
+proc handleWindowEvent*(app: App, event: Event): bool =
+  ## Handle an event through the window manager
+  if app.windowMode and not app.windowManager.isNil:
+    return app.windowManager.handleEvent(event)
+  return false
+
 # ============================================================================
 # Convenience Functions
 # ============================================================================
@@ -378,7 +385,7 @@ proc quickRun*(
       windowMode: false,
     ),
 ) =
-  ## Quick way to run a simple TUI application
+  ## Quick way to run a simple CLI application
   ##
   ## Example:
   ## ```nim
