@@ -12,8 +12,12 @@ Still under development
 - Event-driven architecture for keyboard and mouse input
 - Widget system for building interactive components
 
+## Platform Support
+
+- Unix like operation system (Linux, macOS, etc)
+
 ## Install
 
 ```bash
-nimble install https://github.com/fox0430/celina
+nimble install celina
 ```
