@@ -415,7 +415,7 @@ proc quickRun*(
 
 proc parseVersionFromNimble(): string {.compileTime.} =
   ## Parse version from nimble file content at compile time
-  const nimbleContent = staticRead("../celina.nimble")
+  const nimbleContent = staticRead("./celina.nimble")
   for line in nimbleContent.splitLines():
     let trimmed = line.strip()
     if trimmed.startsWith("version"):
