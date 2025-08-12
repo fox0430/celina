@@ -30,8 +30,8 @@ proc main() =
       if event.kind == EventKind.Key:
         # Quit when 'q' is pressed
         if event.key.code == KeyCode.Char and event.key.char == 'q':
-          return false  # Returning false exits the app
-      return true  # Continue running for all other events
+          return false # Returning false exits the app
+      return true # Continue running for all other events
   )
 
   # Start the main event loop
