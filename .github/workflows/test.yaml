@@ -50,3 +50,8 @@ jobs:
     - name: Run unit test
       run: |
         nimble test -y
+
+    - name: Build example
+      run: |
+        nimble install
+        nim c -r examples/hello_world.nim

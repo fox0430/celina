@@ -6,3 +6,6 @@ src/celina
 
 tests/*
 !tests/*.*
+
+examples/*
+!examples/*.*
