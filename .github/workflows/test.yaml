@@ -50,3 +50,10 @@ jobs:
     - name: Run unit test
       run: |
         nimble test -y
+
+    - name: Build example
+      run: |
+        nimble install
+        nim c examples/hello_world.nim
+
+        nimble uninstall celina
