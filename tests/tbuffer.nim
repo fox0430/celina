@@ -30,17 +30,20 @@ suite "Buffer Module Tests":
       check StyleModifier.Bold in styledCell.style.modifiers
 
     test "Cell utility functions":
-      let emptyCell = cell(" ")
+      let emptyCell = cell("")
+      let spaceCell = cell(" ")
       let nonEmptyCell = cell("X")
       let whitespaceCell = cell("   ")
 
       # isEmpty test
       check emptyCell.isEmpty()
+      check not spaceCell.isEmpty() # Space is content
       check not nonEmptyCell.isEmpty()
-      check whitespaceCell.isEmpty() # Should strip whitespace
+      check not whitespaceCell.isEmpty() # Whitespace content is not empty
 
       # width test
-      check emptyCell.width() == 1
+      check emptyCell.width() == 0 # Empty cell has no width
+      check spaceCell.width() == 1 # Space has width 1
       check nonEmptyCell.width() == 1
       check cell("").width() == 0
 
@@ -443,7 +446,7 @@ suite "Buffer Module Tests":
       buffer[4, 0] = cell("X")
 
       check buffer[0, 0].isEmpty()
-      check buffer[1, 0].isEmpty()
-      check buffer[2, 0].isEmpty()
-      check buffer[3, 0].isEmpty()
+      check not buffer[1, 0].isEmpty() # Space is content
+      check not buffer[2, 0].isEmpty() # Tab is content
+      check not buffer[3, 0].isEmpty() # Multiple spaces are content
       check not buffer[4, 0].isEmpty()

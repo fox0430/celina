@@ -30,8 +30,8 @@ proc cell*(symbol: Rune, style: Style = defaultStyle()): Cell {.inline.} =
 
 # Cell utilities
 proc isEmpty*(cell: Cell): bool {.inline.} =
-  ## Check if cell contains only whitespace
-  cell.symbol.strip().len == 0
+  ## Check if cell is truly empty (no content at all)
+  cell.symbol.len == 0
 
 proc runeWidth*(r: Rune): int =
   ## Get the display width of a rune using Unicode standard width detection
