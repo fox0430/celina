@@ -4,7 +4,8 @@
 ## overlapping, resizable, and focusable window areas within the terminal.
 
 import std/[algorithm, sequtils, options]
-import geometry, buffer, colors, events
+
+import ../core/[geometry, buffer, colors, events]
 
 type
   WindowId* = distinct int ## Unique identifier for windows
