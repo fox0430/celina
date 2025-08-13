@@ -89,11 +89,6 @@ proc draw16ColorPalette(buf: var Buffer, x, y: int) =
     ]
 
   for i, (col, name) in normalColors:
-    let bg =
-      if col == Black:
-        color(White)
-      else:
-        defaultColor()
     buf.setString(x + i * 20, y + 2, "   ", Style(bg: color(col)))
     buf.setString(x + i * 20, y + 3, name, Style(fg: color(BrightWhite)))
 
