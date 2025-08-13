@@ -413,21 +413,6 @@ proc quickRun*(
 # Version Information
 # ============================================================================
 
-proc parseVersionFromNimble(): string {.compileTime.} =
-  ## Parse version from nimble file content at compile time
-  const nimbleContent = staticRead("./celina.nimble")
-  for line in nimbleContent.splitLines():
-    let trimmed = line.strip()
-    if trimmed.startsWith("version"):
-      # Extract version from line like: version = "0.1.0"
-      let parts = trimmed.split("=")
-      if parts.len >= 2:
-        let versionPart = parts[1].strip()
-        # Remove quotes
-        return versionPart.strip(chars = {'"', ' ', '\t'})
-  return "unknown"
-
 proc version*(): string =
   ## Get the library version string
-  const CelinaVersion = parseVersionFromNimble()
-  return CelinaVersion
+  return "0.1.0"
