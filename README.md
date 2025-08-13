@@ -21,3 +21,7 @@ Still under development
 ```bash
 nimble install celina
 ```
+
+## Documentation
+
+https://fox0430.github.io/celina/celina.html
