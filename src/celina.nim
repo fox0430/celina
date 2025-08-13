@@ -19,8 +19,8 @@
 
 import std/[os, options, unicode, strutils]
 
-import core/[geometry, colors, buffer, events, terminal, layout, windows]
-import widgets/[text, base]
+import core/[geometry, colors, buffer, events, terminal, layout]
+import widgets/[text, base, windows]
 
 # Re-export all public APIs from core modules
 export geometry

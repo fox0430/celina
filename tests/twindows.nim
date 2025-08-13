@@ -2,7 +2,9 @@
 
 import std/[unittest, options]
 
-import ../src/core/[windows, geometry, buffer, colors, events]
+import ../src/core/[geometry, buffer, colors, events]
+
+import ../src/widgets/windows {.all.}
 
 suite "Window Tests":
   test "Create window with default settings":
