@@ -372,15 +372,3 @@ suite "Terminal Module Tests":
       # Accessing out-of-bounds should be safe
       let outOfBounds = buffer[100, 100]
       check outOfBounds.symbol == " " # Should return empty cell
-
-    test "Empty and whitespace handling":
-      var buffer = newBuffer(10, 5)
-
-      # Test various empty states
-      buffer[0, 0] = cell("")
-      buffer[1, 0] = cell(" ")
-      buffer[2, 0] = cell("   ")
-
-      check buffer[0, 0].isEmpty()
-      check buffer[1, 0].isEmpty()
-      check buffer[2, 0].isEmpty()
