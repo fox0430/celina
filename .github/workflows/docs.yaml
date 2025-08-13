@@ -24,7 +24,9 @@ jobs:
         repo-token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Gen docs
-      run: nim doc --project --index:on --outdir:./htmldocs src/celina.nim
+      run: |
+        nimble install --depsOnly
+        nim doc --project --index:on --outdir:./htmldocs src/celina.nim
 
     - uses: actions/upload-pages-artifact@v3
       with:
