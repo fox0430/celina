@@ -5,14 +5,12 @@ on:
     paths:
       - '.github/workflows/test.yaml'
       - 'celina.nimble'
-      - 'nimble.lock'
       - 'src/**'
       - 'tests/**'
   push:
     paths:
       - '.github/workflows/test.yaml'
       - 'celina.nimble'
-      - 'nimble.lock'
       - 'src/**'
       - 'tests/**'
     branches:
@@ -22,38 +20,53 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: build ${{ matrix.os }}
+  tests:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       matrix:
         os:
-          - ubuntu-latest
+          - 'ubuntu-latest'
+          - 'macOS-latest'
+        nim-version:
+          - '2.0.0'
+          - '2.0.16'
+          - 'stable'
+          - 'devel'
+
+    name: Tests on ${{ matrix.nim-version }} (${{ matrix.os }})
     steps:
-    - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
-    - name: Cache nimble
-      id: cache-nimble
-      uses: actions/cache@v4
-      with:
-        path: ~/.nimble
-        key: unit-tests-nimble-v2-${{ github.sha }}
-        restore-keys: |
-          unit-tests-nimble-v2-
+      - name: Cache nimble
+        id: cache-nimble
+        uses: actions/cache@v4
+        with:
+          path: ~/.nimble
+          key: ${{ runner.os }}-nimble-v2-${{ hashFiles('*.nimble') }}
+          restore-keys: |
+            ${{ runner.os }}-nimble-v2-
 
-    - uses: jiro4989/setup-nim-action@v2
-      with:
-        nim-version: 2.2.4
-        repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup Nim (stable/release)
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: ${{ matrix.nim-version }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        if: matrix.nim-version != 'devel'
 
-    - name: Run unit test
-      run: |
-        nimble test -y
+      - name: Setup Nim (devel)
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: ${{ matrix.nim-version }}
+          use-nightlies: true
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        if: matrix.nim-version == 'devel'
 
-    - name: Build example
-      run: |
-        nimble install
-        nim c examples/hello_world.nim
+      - name: Run tests
+        run: nimble test -y
 
-        nimble uninstall celina
+      - name: Build example
+        run: |
+          nimble install
+          nim c examples/hello_world.nim
+          nimble uninstall celina -y
