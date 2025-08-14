@@ -280,7 +280,7 @@ proc run*(
     # Initialize signal handling for resize detection
     initSignalHandling()
 
-    # Main application loop with Ratatui-style event polling
+    # Main application loop with event polling
     while app.tick():
       # No sleep needed - polling timeout controls frame rate
       discard
