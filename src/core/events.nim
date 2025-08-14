@@ -31,12 +31,21 @@ type
     Escape # Escape key
     Backspace # Backspace key
     Tab # Tab key
+    BackTab # Shift+Tab
     Space # Space key
     # Arrow keys
     ArrowUp
     ArrowDown
     ArrowLeft
-    ArrowRight # Function keys
+    ArrowRight
+    # Navigation keys
+    Home
+    End
+    PageUp
+    PageDown
+    Insert
+    Delete
+    # Function keys
     F1
     F2
     F3
@@ -252,10 +261,139 @@ proc readKey*(): Event =
               return Event(kind: Key, key: KeyEvent(code: ArrowRight, char: '\0'))
             of 'D': # Arrow Left
               return Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: '\0'))
+            of 'H': # Home
+              return Event(kind: Key, key: KeyEvent(code: Home, char: '\0'))
+            of 'F': # End
+              return Event(kind: Key, key: KeyEvent(code: End, char: '\0'))
+            of 'Z': # Shift+Tab (BackTab)
+              return Event(kind: Key, key: KeyEvent(code: BackTab, char: '\0'))
             of 'M': # Mouse event (X10 format)
               return parseMouseEventX10()
             of '<': # SGR mouse format
               return parseMouseEventSGR()
+            of '1' .. '6':
+              # Could be function key or special key with modifiers
+              var seq: string = $final
+              var nextChar: char
+              if stdin.readBuffer(addr nextChar, 1) == 1:
+                seq.add(nextChar)
+                if nextChar == '~':
+                  # Special keys with numeric codes
+                  case final
+                  of '1': # Home (alternative)
+                    return Event(kind: Key, key: KeyEvent(code: Home, char: '\0'))
+                  of '2': # Insert
+                    return Event(kind: Key, key: KeyEvent(code: Insert, char: '\0'))
+                  of '3': # Delete
+                    return Event(kind: Key, key: KeyEvent(code: Delete, char: '\0'))
+                  of '4': # End (alternative)
+                    return Event(kind: Key, key: KeyEvent(code: End, char: '\0'))
+                  of '5': # PageUp
+                    return Event(kind: Key, key: KeyEvent(code: PageUp, char: '\0'))
+                  of '6': # PageDown
+                    return Event(kind: Key, key: KeyEvent(code: PageDown, char: '\0'))
+                  else:
+                    return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+                elif nextChar == ';':
+                  # Modified key sequence ESC[1;modifierX where X is the key
+                  var modSeq: string = seq & nextChar
+                  var modChar: char
+                  if stdin.readBuffer(addr modChar, 1) == 1:
+                    modSeq.add(modChar)
+                    # Parse modifier (2=Shift, 3=Alt, 4=Shift+Alt, 5=Ctrl, 6=Ctrl+Shift, 7=Ctrl+Alt, 8=Ctrl+Shift+Alt)
+                    let modifier = parseInt($modChar)
+                    var modifiers: set[KeyModifier] = {}
+                    if (modifier and 1) != 0:
+                      modifiers.incl(Shift)
+                    if (modifier and 2) != 0:
+                      modifiers.incl(Alt)
+                    if (modifier and 4) != 0:
+                      modifiers.incl(Ctrl)
+
+                    var keyChar: char
+                    if stdin.readBuffer(addr keyChar, 1) == 1:
+                      case keyChar
+                      of 'A': # Modified Arrow Up
+                        return Event(
+                          kind: Key,
+                          key: KeyEvent(code: ArrowUp, char: '\0', modifiers: modifiers),
+                        )
+                      of 'B': # Modified Arrow Down
+                        return Event(
+                          kind: Key,
+                          key:
+                            KeyEvent(code: ArrowDown, char: '\0', modifiers: modifiers),
+                        )
+                      of 'C': # Modified Arrow Right
+                        return Event(
+                          kind: Key,
+                          key:
+                            KeyEvent(code: ArrowRight, char: '\0', modifiers: modifiers),
+                        )
+                      of 'D': # Modified Arrow Left
+                        return Event(
+                          kind: Key,
+                          key:
+                            KeyEvent(code: ArrowLeft, char: '\0', modifiers: modifiers),
+                        )
+                      of 'H': # Modified Home
+                        return Event(
+                          kind: Key,
+                          key: KeyEvent(code: Home, char: '\0', modifiers: modifiers),
+                        )
+                      of 'F': # Modified End
+                        return Event(
+                          kind: Key,
+                          key: KeyEvent(code: End, char: '\0', modifiers: modifiers),
+                        )
+                      of '~':
+                        # Modified special keys
+                        case final
+                        of '1': # Modified Home
+                          return Event(
+                            kind: Key,
+                            key: KeyEvent(code: Home, char: '\0', modifiers: modifiers),
+                          )
+                        of '2': # Modified Insert
+                          return Event(
+                            kind: Key,
+                            key:
+                              KeyEvent(code: Insert, char: '\0', modifiers: modifiers),
+                          )
+                        of '3': # Modified Delete
+                          return Event(
+                            kind: Key,
+                            key:
+                              KeyEvent(code: Delete, char: '\0', modifiers: modifiers),
+                          )
+                        of '4': # Modified End
+                          return Event(
+                            kind: Key,
+                            key: KeyEvent(code: End, char: '\0', modifiers: modifiers),
+                          )
+                        of '5': # Modified PageUp
+                          return Event(
+                            kind: Key,
+                            key:
+                              KeyEvent(code: PageUp, char: '\0', modifiers: modifiers),
+                          )
+                        of '6': # Modified PageDown
+                          return Event(
+                            kind: Key,
+                            key:
+                              KeyEvent(code: PageDown, char: '\0', modifiers: modifiers),
+                          )
+                        else:
+                          return
+                            Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+                      else:
+                        return
+                          Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+                else:
+                  # Might be function key, but we'll skip for now
+                  return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+              else:
+                return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
             else:
               return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
           else:
@@ -317,12 +455,171 @@ proc readKeyInput*(): Option[Event] =
             return some(Event(kind: Key, key: KeyEvent(code: ArrowRight, char: '\0')))
           of 'D': # Arrow Left
             return some(Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: '\0')))
+          of 'H': # Home
+            return some(Event(kind: Key, key: KeyEvent(code: Home, char: '\0')))
+          of 'F': # End
+            return some(Event(kind: Key, key: KeyEvent(code: End, char: '\0')))
+          of 'Z': # Shift+Tab (BackTab)
+            return some(Event(kind: Key, key: KeyEvent(code: BackTab, char: '\0')))
           of 'M': # Mouse event (X10 format)
             let mouseEvent = parseMouseEventX10()
             return some(mouseEvent)
           of '<': # SGR mouse format
             let mouseEvent = parseMouseEventSGR()
             return some(mouseEvent)
+          of '1' .. '6':
+            # Could be function key or special key with modifiers
+            var nextChar: char
+            if read(STDIN_FILENO, addr nextChar, 1) == 1:
+              if nextChar == '~':
+                # Special keys with numeric codes
+                case final
+                of '1': # Home (alternative)
+                  return some(Event(kind: Key, key: KeyEvent(code: Home, char: '\0')))
+                of '2': # Insert
+                  return some(Event(kind: Key, key: KeyEvent(code: Insert, char: '\0')))
+                of '3': # Delete
+                  return some(Event(kind: Key, key: KeyEvent(code: Delete, char: '\0')))
+                of '4': # End (alternative)
+                  return some(Event(kind: Key, key: KeyEvent(code: End, char: '\0')))
+                of '5': # PageUp
+                  return some(Event(kind: Key, key: KeyEvent(code: PageUp, char: '\0')))
+                of '6': # PageDown
+                  return
+                    some(Event(kind: Key, key: KeyEvent(code: PageDown, char: '\0')))
+                else:
+                  return
+                    some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+              elif nextChar == ';':
+                # Modified key sequence
+                var modChar: char
+                if read(STDIN_FILENO, addr modChar, 1) == 1:
+                  # Parse modifier
+                  let modifier = parseInt($modChar)
+                  var modifiers: set[KeyModifier] = {}
+                  if (modifier and 1) != 0:
+                    modifiers.incl(Shift)
+                  if (modifier and 2) != 0:
+                    modifiers.incl(Alt)
+                  if (modifier and 4) != 0:
+                    modifiers.incl(Ctrl)
+
+                  var keyChar: char
+                  if read(STDIN_FILENO, addr keyChar, 1) == 1:
+                    case keyChar
+                    of 'A': # Modified Arrow Up
+                      return some(
+                        Event(
+                          kind: Key,
+                          key: KeyEvent(code: ArrowUp, char: '\0', modifiers: modifiers),
+                        )
+                      )
+                    of 'B': # Modified Arrow Down
+                      return some(
+                        Event(
+                          kind: Key,
+                          key:
+                            KeyEvent(code: ArrowDown, char: '\0', modifiers: modifiers),
+                        )
+                      )
+                    of 'C': # Modified Arrow Right
+                      return some(
+                        Event(
+                          kind: Key,
+                          key:
+                            KeyEvent(code: ArrowRight, char: '\0', modifiers: modifiers),
+                        )
+                      )
+                    of 'D': # Modified Arrow Left
+                      return some(
+                        Event(
+                          kind: Key,
+                          key:
+                            KeyEvent(code: ArrowLeft, char: '\0', modifiers: modifiers),
+                        )
+                      )
+                    of 'H': # Modified Home
+                      return some(
+                        Event(
+                          kind: Key,
+                          key: KeyEvent(code: Home, char: '\0', modifiers: modifiers),
+                        )
+                      )
+                    of 'F': # Modified End
+                      return some(
+                        Event(
+                          kind: Key,
+                          key: KeyEvent(code: End, char: '\0', modifiers: modifiers),
+                        )
+                      )
+                    of '~':
+                      # Modified special keys
+                      case final
+                      of '1': # Modified Home
+                        return some(
+                          Event(
+                            kind: Key,
+                            key: KeyEvent(code: Home, char: '\0', modifiers: modifiers),
+                          )
+                        )
+                      of '2': # Modified Insert
+                        return some(
+                          Event(
+                            kind: Key,
+                            key:
+                              KeyEvent(code: Insert, char: '\0', modifiers: modifiers),
+                          )
+                        )
+                      of '3': # Modified Delete
+                        return some(
+                          Event(
+                            kind: Key,
+                            key:
+                              KeyEvent(code: Delete, char: '\0', modifiers: modifiers),
+                          )
+                        )
+                      of '4': # Modified End
+                        return some(
+                          Event(
+                            kind: Key,
+                            key: KeyEvent(code: End, char: '\0', modifiers: modifiers),
+                          )
+                        )
+                      of '5': # Modified PageUp
+                        return some(
+                          Event(
+                            kind: Key,
+                            key:
+                              KeyEvent(code: PageUp, char: '\0', modifiers: modifiers),
+                          )
+                        )
+                      of '6': # Modified PageDown
+                        return some(
+                          Event(
+                            kind: Key,
+                            key:
+                              KeyEvent(code: PageDown, char: '\0', modifiers: modifiers),
+                          )
+                        )
+                      else:
+                        return some(
+                          Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+                        )
+                    else:
+                      return some(
+                        Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+                      )
+                  else:
+                    return
+                      some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+                else:
+                  return
+                    some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+              else:
+                # Might be function key, but we'll skip for now
+                return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+            else:
+              return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
           else:
             return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
         else:
