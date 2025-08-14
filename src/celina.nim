@@ -204,21 +204,28 @@ proc tick(app: App): bool =
         if not app.eventHandler(resizeEvent):
           return false
 
-    # Handle pending events using centralized event handling
-    let eventOpt = readKeyInput()
-    if eventOpt.isSome():
-      let event = eventOpt.get()
+    # Process multiple events in batch to reduce input lag during high event rates
+    var eventCount = 0
+    const maxEventsPerTick = 5 # Process fewer events per frame for smoother rendering
 
-      # Always call user event handler first for application-level control
-      var shouldContinue = true
-      if app.eventHandler != nil:
-        shouldContinue = app.eventHandler(event)
-        if not shouldContinue:
-          return false
+    while eventCount < maxEventsPerTick:
+      let eventOpt = readKeyInput()
+      if eventOpt.isSome():
+        let event = eventOpt.get()
+        eventCount.inc()
 
-      # Then try window manager event handling
-      if app.windowMode and not app.windowManager.isNil:
-        discard app.windowManager.handleEvent(event)
+        # Always call user event handler first for application-level control
+        var shouldContinue = true
+        if app.eventHandler != nil:
+          shouldContinue = app.eventHandler(event)
+          if not shouldContinue:
+            return false
+
+        # Then try window manager event handling
+        if app.windowMode and not app.windowManager.isNil:
+          discard app.windowManager.handleEvent(event)
+      else:
+        break # No more events available
 
     # Render frame
     app.render()
@@ -272,8 +279,8 @@ proc run*(
 
     # Main application loop
     while app.tick():
-      # Optional: Add frame rate limiting here
-      sleep(8) # ~120 FPS for better mouse responsiveness
+      # Frame rate limiting
+      sleep(8) # ~120 FPS
   except TerminalError as e:
     # Terminal errors are critical, ensure cleanup and re-raise
     try:
