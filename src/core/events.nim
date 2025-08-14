@@ -708,9 +708,10 @@ proc pollEvents*(timeoutMs: int): bool =
   FD_ZERO(readSet)
   FD_SET(STDIN_FILENO, readSet)
 
-  var timeout =
-    Timeval(tv_sec: Time(timeoutMs div 1000), tv_usec: (timeoutMs mod 1000) * 1000)
+  var timeout = Timeval(
+    tv_sec: Time(timeoutMs div 1000), tv_usec: Suseconds((timeoutMs mod 1000) * 1000)
+  )
 
   # Use select to check if input is available with timeout
-  let result = select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout)
-  return result > 0
+  let r = select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout)
+  return r > 0
