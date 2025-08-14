@@ -20,27 +20,36 @@ suite "Events Module Tests":
       check KeyCode.Escape.ord == 2
       check KeyCode.Backspace.ord == 3
       check KeyCode.Tab.ord == 4
-      check KeyCode.Space.ord == 5
+      check KeyCode.BackTab.ord == 5
+      check KeyCode.Space.ord == 6
 
     test "Arrow key codes":
-      check KeyCode.ArrowUp.ord == 6
-      check KeyCode.ArrowDown.ord == 7
-      check KeyCode.ArrowLeft.ord == 8
-      check KeyCode.ArrowRight.ord == 9
+      check KeyCode.ArrowUp.ord == 7
+      check KeyCode.ArrowDown.ord == 8
+      check KeyCode.ArrowLeft.ord == 9
+      check KeyCode.ArrowRight.ord == 10
+
+    test "Navigation key codes":
+      check KeyCode.Home.ord == 11
+      check KeyCode.End.ord == 12
+      check KeyCode.PageUp.ord == 13
+      check KeyCode.PageDown.ord == 14
+      check KeyCode.Insert.ord == 15
+      check KeyCode.Delete.ord == 16
 
     test "Function key codes":
-      check KeyCode.F1.ord == 10
-      check KeyCode.F2.ord == 11
-      check KeyCode.F3.ord == 12
-      check KeyCode.F4.ord == 13
-      check KeyCode.F5.ord == 14
-      check KeyCode.F6.ord == 15
-      check KeyCode.F7.ord == 16
-      check KeyCode.F8.ord == 17
-      check KeyCode.F9.ord == 18
-      check KeyCode.F10.ord == 19
-      check KeyCode.F11.ord == 20
-      check KeyCode.F12.ord == 21
+      check KeyCode.F1.ord == 17
+      check KeyCode.F2.ord == 18
+      check KeyCode.F3.ord == 19
+      check KeyCode.F4.ord == 20
+      check KeyCode.F5.ord == 21
+      check KeyCode.F6.ord == 22
+      check KeyCode.F7.ord == 23
+      check KeyCode.F8.ord == 24
+      check KeyCode.F9.ord == 25
+      check KeyCode.F10.ord == 26
+      check KeyCode.F11.ord == 27
+      check KeyCode.F12.ord == 28
 
   suite "KeyModifier Tests":
     test "KeyModifier enum values":
@@ -372,6 +381,132 @@ suite "Events Module Tests":
       check keyEvent.key.code == Enter
       check keyEvent.key.char == '\r'
       check Ctrl in keyEvent.key.modifiers
+
+  suite "Navigation Key Tests":
+    test "Navigation key creation":
+      let navKeys = [Home, End, PageUp, PageDown, Insert, Delete]
+
+      for navKey in navKeys:
+        let keyEvent = KeyEvent(code: navKey, char: '\0', modifiers: {})
+        let event = Event(kind: Key, key: keyEvent)
+        check event.kind == Key
+        check event.key.code == navKey
+        check event.key.char == '\0'
+        check event.key.modifiers.len == 0
+
+    test "Navigation keys with modifiers":
+      let homeCtrlEvent =
+        Event(kind: Key, key: KeyEvent(code: Home, char: '\0', modifiers: {Ctrl}))
+      check homeCtrlEvent.key.code == Home
+      check Ctrl in homeCtrlEvent.key.modifiers
+
+      let endShiftEvent =
+        Event(kind: Key, key: KeyEvent(code: End, char: '\0', modifiers: {Shift}))
+      check endShiftEvent.key.code == End
+      check Shift in endShiftEvent.key.modifiers
+
+      let pageUpAltEvent =
+        Event(kind: Key, key: KeyEvent(code: PageUp, char: '\0', modifiers: {Alt}))
+      check pageUpAltEvent.key.code == PageUp
+      check Alt in pageUpAltEvent.key.modifiers
+
+      let pageDownMultiEvent = Event(
+        kind: Key, key: KeyEvent(code: PageDown, char: '\0', modifiers: {Ctrl, Shift})
+      )
+      check pageDownMultiEvent.key.code == PageDown
+      check Ctrl in pageDownMultiEvent.key.modifiers
+      check Shift in pageDownMultiEvent.key.modifiers
+
+      let insertEvent =
+        Event(kind: Key, key: KeyEvent(code: Insert, char: '\0', modifiers: {}))
+      check insertEvent.key.code == Insert
+      check insertEvent.key.modifiers.len == 0
+
+      let deleteEvent =
+        Event(kind: Key, key: KeyEvent(code: Delete, char: '\0', modifiers: {Ctrl}))
+      check deleteEvent.key.code == Delete
+      check Ctrl in deleteEvent.key.modifiers
+
+  suite "BackTab and Modified Keys Tests":
+    test "BackTab (Shift+Tab) key creation":
+      let backTabEvent =
+        Event(kind: Key, key: KeyEvent(code: BackTab, char: '\0', modifiers: {}))
+      check backTabEvent.key.code == BackTab
+      check backTabEvent.key.char == '\0'
+      check backTabEvent.key.modifiers.len == 0
+
+    test "Modified arrow keys":
+      # Ctrl+Arrow keys for word navigation
+      let ctrlUpEvent =
+        Event(kind: Key, key: KeyEvent(code: ArrowUp, char: '\0', modifiers: {Ctrl}))
+      check ctrlUpEvent.key.code == ArrowUp
+      check Ctrl in ctrlUpEvent.key.modifiers
+      check Shift notin ctrlUpEvent.key.modifiers
+
+      let ctrlDownEvent =
+        Event(kind: Key, key: KeyEvent(code: ArrowDown, char: '\0', modifiers: {Ctrl}))
+      check ctrlDownEvent.key.code == ArrowDown
+      check Ctrl in ctrlDownEvent.key.modifiers
+
+      let ctrlLeftEvent =
+        Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: '\0', modifiers: {Ctrl}))
+      check ctrlLeftEvent.key.code == ArrowLeft
+      check Ctrl in ctrlLeftEvent.key.modifiers
+
+      let ctrlRightEvent =
+        Event(kind: Key, key: KeyEvent(code: ArrowRight, char: '\0', modifiers: {Ctrl}))
+      check ctrlRightEvent.key.code == ArrowRight
+      check Ctrl in ctrlRightEvent.key.modifiers
+
+      # Shift+Arrow keys for selection
+      let shiftUpEvent =
+        Event(kind: Key, key: KeyEvent(code: ArrowUp, char: '\0', modifiers: {Shift}))
+      check shiftUpEvent.key.code == ArrowUp
+      check Shift in shiftUpEvent.key.modifiers
+      check Ctrl notin shiftUpEvent.key.modifiers
+
+      # Ctrl+Shift+Arrow for extended selection
+      let ctrlShiftLeftEvent = Event(
+        kind: Key, key: KeyEvent(code: ArrowLeft, char: '\0', modifiers: {Ctrl, Shift})
+      )
+      check ctrlShiftLeftEvent.key.code == ArrowLeft
+      check Ctrl in ctrlShiftLeftEvent.key.modifiers
+      check Shift in ctrlShiftLeftEvent.key.modifiers
+      check Alt notin ctrlShiftLeftEvent.key.modifiers
+
+    test "Modified navigation keys":
+      # Ctrl+Home/End for document navigation
+      let ctrlHomeEvent =
+        Event(kind: Key, key: KeyEvent(code: Home, char: '\0', modifiers: {Ctrl}))
+      check ctrlHomeEvent.key.code == Home
+      check Ctrl in ctrlHomeEvent.key.modifiers
+
+      let ctrlEndEvent =
+        Event(kind: Key, key: KeyEvent(code: End, char: '\0', modifiers: {Ctrl}))
+      check ctrlEndEvent.key.code == End
+      check Ctrl in ctrlEndEvent.key.modifiers
+
+      # Shift+PageUp/PageDown for selection
+      let shiftPageUpEvent =
+        Event(kind: Key, key: KeyEvent(code: PageUp, char: '\0', modifiers: {Shift}))
+      check shiftPageUpEvent.key.code == PageUp
+      check Shift in shiftPageUpEvent.key.modifiers
+
+      let shiftPageDownEvent =
+        Event(kind: Key, key: KeyEvent(code: PageDown, char: '\0', modifiers: {Shift}))
+      check shiftPageDownEvent.key.code == PageDown
+      check Shift in shiftPageDownEvent.key.modifiers
+
+      # Ctrl+Insert/Delete for clipboard operations
+      let ctrlInsertEvent =
+        Event(kind: Key, key: KeyEvent(code: Insert, char: '\0', modifiers: {Ctrl}))
+      check ctrlInsertEvent.key.code == Insert
+      check Ctrl in ctrlInsertEvent.key.modifiers
+
+      let shiftDeleteEvent =
+        Event(kind: Key, key: KeyEvent(code: Delete, char: '\0', modifiers: {Shift}))
+      check shiftDeleteEvent.key.code == Delete
+      check Shift in shiftDeleteEvent.key.modifiers
 
   suite "Edge Case Tests":
     test "Empty modifier set":
