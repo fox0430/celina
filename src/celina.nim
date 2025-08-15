@@ -204,30 +204,33 @@ proc tick(app: App): bool =
         if not app.eventHandler(resizeEvent):
           return false
 
-    # Process multiple events in batch to reduce input lag during high event rates
-    var eventCount = 0
-    const maxEventsPerTick = 5 # Process fewer events per frame for smoother rendering
+    # Event polling with timeout (16ms = ~60 FPS)
+    if pollEvents(16):
+      # Events are available - process them in batch
+      var eventCount = 0
+      const maxEventsPerTick = 5 # Limit events per frame for smooth rendering
 
-    while eventCount < maxEventsPerTick:
-      let eventOpt = readKeyInput()
-      if eventOpt.isSome():
-        let event = eventOpt.get()
-        eventCount.inc()
+      while eventCount < maxEventsPerTick:
+        let eventOpt = readKeyInput()
+        if eventOpt.isSome():
+          let event = eventOpt.get()
+          eventCount.inc()
 
-        # Always call user event handler first for application-level control
-        var shouldContinue = true
-        if app.eventHandler != nil:
-          shouldContinue = app.eventHandler(event)
-          if not shouldContinue:
-            return false
+          # Always call user event handler first for application-level control
+          var shouldContinue = true
+          if app.eventHandler != nil:
+            shouldContinue = app.eventHandler(event)
+            if not shouldContinue:
+              return false
 
-        # Then try window manager event handling
-        if app.windowMode and not app.windowManager.isNil:
-          discard app.windowManager.handleEvent(event)
-      else:
-        break # No more events available
+          # Then try window manager event handling
+          if app.windowMode and not app.windowManager.isNil:
+            discard app.windowManager.handleEvent(event)
+        else:
+          break # No more events available
+    # If no events available (timeout), we continue to render
 
-    # Render frame
+    # Always render - either after processing events or on timeout
     app.render()
 
     return not app.shouldQuit
@@ -277,10 +280,10 @@ proc run*(
     # Initialize signal handling for resize detection
     initSignalHandling()
 
-    # Main application loop
+    # Main application loop with event polling
     while app.tick():
-      # Frame rate limiting
-      sleep(8) # ~120 FPS
+      # No sleep needed - polling timeout controls frame rate
+      discard
   except TerminalError as e:
     # Terminal errors are critical, ensure cleanup and re-raise
     try:
