@@ -906,14 +906,14 @@ suite "Events Module Tests":
   suite "Mouse Wheel Event Parsing Tests":
     test "SGR mouse parsing - wheel event detection":
       # Test wheel event bit patterns in SGR format
-      let wheelUpCode = 64    # 0x40 = wheel up
-      let wheelDownCode = 65  # 0x41 = wheel down
-      
+      let wheelUpCode = 64 # 0x40 = wheel up
+      let wheelDownCode = 65 # 0x41 = wheel down
+
       let isWheelUp = (wheelUpCode and 0x40) != 0
       let isWheelDown = (wheelDownCode and 0x40) != 0
       let directionUp = (wheelUpCode and 0x01) == 0
       let directionDown = (wheelDownCode and 0x01) != 0
-      
+
       check isWheelUp
       check isWheelDown
       check directionUp
@@ -921,24 +921,24 @@ suite "Events Module Tests":
 
     test "SGR mouse parsing - wheel events with modifiers":
       # Test wheel events combined with modifiers
-      let ctrlWheelUp = parseMouseModifiersSGR(64 or 0x10)  # Wheel up + Ctrl
+      let ctrlWheelUp = parseMouseModifiersSGR(64 or 0x10) # Wheel up + Ctrl
       let shiftWheelDown = parseMouseModifiersSGR(65 or 0x04) # Wheel down + Shift
-      let altWheelUp = parseMouseModifiersSGR(64 or 0x08)   # Wheel up + Alt
-      
+      let altWheelUp = parseMouseModifiersSGR(64 or 0x08) # Wheel up + Alt
+
       check Ctrl in ctrlWheelUp
-      check Shift in shiftWheelDown  
+      check Shift in shiftWheelDown
       check Alt in altWheelUp
 
     test "X10 mouse parsing - wheel event detection":
       # Test X10 wheel event bit patterns
-      let wheelUpByte = 0x60  # 0x40 (wheel) + 0x20 (typical X10 pattern)
+      let wheelUpByte = 0x60 # 0x40 (wheel) + 0x20 (typical X10 pattern)
       let wheelDownByte = 0x61 # 0x40 (wheel) + 0x01 (down direction)
-      
+
       let isWheelUp = (wheelUpByte and 0x40) != 0
       let isWheelDown = (wheelDownByte and 0x40) != 0
       let directionUp = (wheelUpByte and 0x01) == 0
       let directionDown = (wheelDownByte and 0x01) != 0
-      
+
       check isWheelUp
       check isWheelDown
       check directionUp
@@ -946,10 +946,10 @@ suite "Events Module Tests":
 
     test "X10 mouse parsing - wheel events with modifiers":
       # Test X10 wheel events with keyboard modifiers
-      let ctrlWheelUp = parseMouseModifiers(0x70)    # Wheel + Ctrl (0x10)
+      let ctrlWheelUp = parseMouseModifiers(0x70) # Wheel + Ctrl (0x10)
       let shiftWheelDown = parseMouseModifiers(0x65) # Wheel down + Shift (0x04)
-      let altWheelUp = parseMouseModifiers(0x68)     # Wheel + Alt (0x08)
-      
+      let altWheelUp = parseMouseModifiers(0x68) # Wheel + Alt (0x08)
+
       check Ctrl in ctrlWheelUp
       check Shift in shiftWheelDown
       check Alt in altWheelUp
@@ -957,25 +957,17 @@ suite "Events Module Tests":
     test "Mouse wheel rapid scrolling simulation":
       # Simulate rapid wheel scrolling that might cause performance issues
       var wheelEvents: seq[MouseEvent] = @[]
-      
-      for i in 0..99:
+
+      for i in 0 .. 99:
         if i mod 2 == 0:
-          wheelEvents.add(MouseEvent(
-            kind: Press,
-            button: WheelUp,
-            x: 100,
-            y: 100,
-            modifiers: {}
-          ))
+          wheelEvents.add(
+            MouseEvent(kind: Press, button: WheelUp, x: 100, y: 100, modifiers: {})
+          )
         else:
-          wheelEvents.add(MouseEvent(
-            kind: Press,
-            button: WheelDown, 
-            x: 100,
-            y: 100,
-            modifiers: {}
-          ))
-      
+          wheelEvents.add(
+            MouseEvent(kind: Press, button: WheelDown, x: 100, y: 100, modifiers: {})
+          )
+
       check wheelEvents.len == 100
       check wheelEvents[0].button == WheelUp
       check wheelEvents[1].button == WheelDown
@@ -983,26 +975,16 @@ suite "Events Module Tests":
 
     test "Mouse wheel coordinate bounds":
       # Test wheel events at extreme coordinates
-      let wheelAtZero = MouseEvent(
-        kind: Press,
-        button: WheelUp,
-        x: 0,
-        y: 0,
-        modifiers: {}
-      )
-      
-      let wheelAtLarge = MouseEvent(
-        kind: Press,
-        button: WheelDown,
-        x: 65535,
-        y: 32767,
-        modifiers: {}
-      )
-      
+      let wheelAtZero =
+        MouseEvent(kind: Press, button: WheelUp, x: 0, y: 0, modifiers: {})
+
+      let wheelAtLarge =
+        MouseEvent(kind: Press, button: WheelDown, x: 65535, y: 32767, modifiers: {})
+
       check wheelAtZero.x == 0
       check wheelAtZero.y == 0
       check wheelAtZero.button == WheelUp
-      
+
       check wheelAtLarge.x == 65535
       check wheelAtLarge.y == 32767
       check wheelAtLarge.button == WheelDown
@@ -1011,21 +993,17 @@ suite "Events Module Tests":
     test "Event parsing bounds checking":
       # Test that the new safety limits work correctly
       # These are compile-time constants from the parsing functions
-      const maxReadCount = 20  # From parseMouseEventSGR
-      
+      const maxReadCount = 20 # From parseMouseEventSGR
+
       check maxReadCount > 0
-      check maxReadCount <= 50  # Reasonable upper bound
+      check maxReadCount <= 50 # Reasonable upper bound
 
     test "Mouse event validation":
       # Test that mouse events maintain consistent state
       let validEvent = MouseEvent(
-        kind: Press,
-        button: WheelUp,
-        x: 100,
-        y: 50,
-        modifiers: {Ctrl, Shift}
+        kind: Press, button: WheelUp, x: 100, y: 50, modifiers: {Ctrl, Shift}
       )
-      
+
       # Validate all fields are as expected
       check validEvent.kind == Press
       check validEvent.button == WheelUp
