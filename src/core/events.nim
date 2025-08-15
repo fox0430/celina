@@ -124,6 +124,7 @@ proc parseMouseEventX10(): Event =
   ## Parse X10 mouse format: ESC[Mbxy
   ## where b is button byte, x,y are coordinate bytes
   var data: array[3, char]
+  # Use a timeout to prevent hanging on incomplete sequences
   if stdin.readBuffer(addr data[0], 3) == 3:
     let button_byte = data[0].ord
     let x = data[1].ord - 33 # X10 uses offset 33
@@ -137,6 +138,7 @@ proc parseMouseEventX10(): Event =
     var kind: MouseEventKind
 
     if is_wheel:
+      # X10 wheel events: bit 0 indicates direction
       if (button_byte and 0x01) != 0:
         button = WheelDown
       else:
@@ -174,12 +176,19 @@ proc parseMouseEventSGR(): Event =
   ## M for press, m for release
   var buffer: string
   var ch: char
+  var readCount = 0
+  const maxReadCount = 20 # Prevent infinite loops
 
-  # Read until we get M or m
-  while stdin.readBuffer(addr ch, 1) == 1:
+  # Read until we get M or m, with safety limits
+  while readCount < maxReadCount and stdin.readBuffer(addr ch, 1) == 1:
+    readCount.inc()
     if ch == 'M' or ch == 'm':
       break
     buffer.add(ch)
+
+  # If we didn't find a terminator, return unknown event
+  if readCount >= maxReadCount or (ch != 'M' and ch != 'm'):
+    return Event(kind: Unknown)
 
   # Parse the SGR format: button;x;y
   let parts = buffer.split(';')
@@ -197,6 +206,7 @@ proc parseMouseEventSGR(): Event =
       var kind: MouseEventKind
 
       if is_wheel:
+        # Wheel events: button_code 64 (0x40) = WheelUp, 65 (0x41) = WheelDown
         if (button_code and 0x01) != 0:
           button = WheelDown
         else:
