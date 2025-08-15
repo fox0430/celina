@@ -698,3 +698,20 @@ proc checkResize*(): Option[Event] =
     resizeDetected = false
     return some(Event(kind: Resize))
   return none(Event)
+
+# Event polling with timeout
+proc pollEvents*(timeoutMs: int): bool =
+  ## Poll for available events with a timeout
+  ## Returns true if events are available, false if timeout occurred
+  ## Similar to crossterm::event::poll()
+  var readSet: TFdSet
+  FD_ZERO(readSet)
+  FD_SET(STDIN_FILENO, readSet)
+
+  var timeout = Timeval(
+    tv_sec: Time(timeoutMs div 1000), tv_usec: Suseconds((timeoutMs mod 1000) * 1000)
+  )
+
+  # Use select to check if input is available with timeout
+  let r = select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout)
+  return r > 0
