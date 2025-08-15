@@ -17,7 +17,7 @@
 ##   main()
 ## ```
 
-import std/[os, options, unicode, strutils]
+import std/[options, unicode]
 
 import core/[geometry, colors, buffer, events, terminal, layout]
 import widgets/[text, base, windows]
