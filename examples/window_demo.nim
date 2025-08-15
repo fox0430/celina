@@ -8,7 +8,7 @@
 ## - Window borders and titles
 ## - Mouse interaction with windows
 
-import ../src/celina
+import pkg/celina
 
 import std/[strformat, strutils, random, options]
 
