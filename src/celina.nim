@@ -22,17 +22,10 @@ import std/[options, unicode]
 import core/[geometry, colors, buffer, events, terminal, layout]
 import widgets/[text, base, windows]
 
-# Re-export all public APIs from core modules
-export geometry
-export colors
-export buffer
-export events
-export layout
-export terminal
-export windows
-export text
-export base
-export unicode
+export geometry, colors, buffer, events, layout, terminal, windows, text, base, unicode
+
+# Note: Async APIs are available through async_celina module
+# import async_celina for async/await support using Chronos
 
 type
   ## Main application context for CLI applications

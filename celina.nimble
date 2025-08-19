@@ -10,3 +10,4 @@ srcDir = "src"
 
 requires "nim >= 2.0.0"
 requires "unicodedb"
+requires "chronos >= 4.0.4"
