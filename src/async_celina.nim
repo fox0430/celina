@@ -7,8 +7,8 @@
 ##
 ## Basic Async Usage:
 ## ```nim
-## import chronos
-## import async_celina
+## import pkg/chronos
+## import pkg/async_celina
 ##
 ## proc main() {.async.} =
 ##   await quickRunAsync(

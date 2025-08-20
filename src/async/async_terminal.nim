@@ -5,7 +5,7 @@
 
 import std/[strformat, termios, posix]
 
-import chronos
+import pkg/chronos
 
 import async_buffer
 import ../core/[geometry, colors, buffer]
@@ -50,13 +50,8 @@ proc newAsyncTerminal*(): AsyncTerminal =
   result.stdinFd = STDIN_FILENO.AsyncFD
   result.stdoutFd = STDOUT_FILENO.AsyncFD
 
-  # Register with async dispatcher
-  try:
-    register(result.stdinFd)
-    register(result.stdoutFd)
-  except AsyncError as e:
-    raise
-      newException(AsyncTerminalError, "Failed to register file descriptors: " & e.msg)
+  # AsyncFD registration is handled automatically by Chronos
+  # No manual registration needed
 
   updateSize(result)
 
@@ -245,12 +240,8 @@ proc cleanupAsync*(terminal: AsyncTerminal) {.async.} =
   terminal.disableRawMode()
   terminal.disableAlternateScreen()
 
-  # Unregister file descriptors
-  try:
-    unregister(terminal.stdinFd)
-    unregister(terminal.stdoutFd)
-  except AsyncError:
-    discard # Ignore unregistration errors during cleanup
+  # AsyncFD cleanup is handled automatically by Chronos
+  # No manual unregistration needed
 
 # High-level async rendering interface
 proc drawAsync*(

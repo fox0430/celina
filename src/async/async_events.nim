@@ -5,7 +5,7 @@
 
 import std/[posix, options]
 
-import chronos
+import pkg/chronos
 
 import async_io
 import ../core/events

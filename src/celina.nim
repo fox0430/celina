@@ -7,7 +7,7 @@
 ##
 ## Basic Usage:
 ## ```nim
-## import celina
+## import pkg/celina
 ##
 ## proc main() =
 ##   var app = newApp()

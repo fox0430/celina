@@ -3,9 +3,9 @@
 ## This module provides true non-blocking I/O using Chronos-compatible methods
 ## for terminal input/output without blocking the async event loop.
 
-import std/[os, posix, selectors]
+import std/[posix, selectors]
 
-import chronos
+import pkg/chronos
 
 type
   AsyncIOError* = object of CatchableError

@@ -5,7 +5,7 @@
 
 import std/atomics
 
-import chronos
+import pkg/chronos
 
 import ../core/[buffer, geometry, colors]
 
