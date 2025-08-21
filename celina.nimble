@@ -10,4 +10,6 @@ srcDir = "src"
 
 requires "nim >= 2.0.2"
 requires "unicodedb"
-requires "chronos >= 4.0.4"
+
+task test, "test":
+  exec "nim c -r tests/all_tests.nim"
