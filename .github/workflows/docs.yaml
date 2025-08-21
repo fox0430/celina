@@ -23,9 +23,13 @@ jobs:
         nim-version: 'stable'
         repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Install packages
+      run: |
+        nimble install chronos -y
+        nimble install --depsOnly
+
     - name: Gen docs
       run: |
-        nimble install --depsOnly
         nim doc --project --index:on --outdir:./htmldocs -d:asyncBackend=chronos src/celina.nim
 
     - uses: actions/upload-pages-artifact@v3

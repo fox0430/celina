@@ -62,6 +62,9 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
         if: matrix.nim-version == 'devel'
 
+      - name: Install chronos
+        run: nimble install chronos -y
+
       - name: Run tests
         run: nimble test -y
 
