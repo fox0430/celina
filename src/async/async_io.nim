@@ -133,7 +133,7 @@ proc hasInputAsync*(
   ## Check if input is available asynchronously
   if globalInputReader.isNil:
     initAsyncIO()
-  
+
   # Double-check that initialization succeeded
   if globalInputReader.isNil:
     return false
@@ -154,7 +154,7 @@ proc readCharAsync*(): Future[char] {.async, gcsafe.} =
   ## Read a character asynchronously
   if globalInputReader.isNil:
     initAsyncIO()
-  
+
   # Double-check that initialization succeeded
   if globalInputReader.isNil:
     return '\0'
@@ -169,7 +169,7 @@ proc peekCharAsync*(): Future[char] {.async, gcsafe.} =
   ## Peek at next character without consuming it
   if globalInputReader.isNil:
     initAsyncIO()
-  
+
   # Double-check that initialization succeeded
   if globalInputReader.isNil:
     return '\0'
@@ -194,7 +194,7 @@ proc readStdinAsync*(
   ## Read available stdin data asynchronously
   if globalInputReader.isNil:
     initAsyncIO()
-  
+
   # Double-check that initialization succeeded
   if globalInputReader.isNil:
     return ""

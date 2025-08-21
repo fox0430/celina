@@ -1,7 +1,7 @@
 ## Async Hello World Example
 ## =====================================================
 
-import ../src/celina
+import pkg/celina
 
 when not defined(asyncBackend) or asyncBackend != "chronos":
   {.fatal: "This example require `-d:asyncBackend=chronos`".}
