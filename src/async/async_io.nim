@@ -133,6 +133,10 @@ proc hasInputAsync*(
   ## Check if input is available asynchronously
   if globalInputReader.isNil:
     initAsyncIO()
+  
+  # Double-check that initialization succeeded
+  if globalInputReader.isNil:
+    return false
 
   let timeoutMs = int(timeout.milliseconds)
 
@@ -150,6 +154,10 @@ proc readCharAsync*(): Future[char] {.async, gcsafe.} =
   ## Read a character asynchronously
   if globalInputReader.isNil:
     initAsyncIO()
+  
+  # Double-check that initialization succeeded
+  if globalInputReader.isNil:
+    return '\0'
 
   # Yield to other async tasks
   await sleepAsync(chronos.milliseconds(0))
@@ -161,6 +169,10 @@ proc peekCharAsync*(): Future[char] {.async, gcsafe.} =
   ## Peek at next character without consuming it
   if globalInputReader.isNil:
     initAsyncIO()
+  
+  # Double-check that initialization succeeded
+  if globalInputReader.isNil:
+    return '\0'
 
   await sleepAsync(chronos.milliseconds(0))
 
@@ -182,6 +194,10 @@ proc readStdinAsync*(
   ## Read available stdin data asynchronously
   if globalInputReader.isNil:
     initAsyncIO()
+  
+  # Double-check that initialization succeeded
+  if globalInputReader.isNil:
+    return ""
 
   let timeoutMs = int(timeout.milliseconds)
   await sleepAsync(chronos.milliseconds(0))
