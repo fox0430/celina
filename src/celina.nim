@@ -3,11 +3,11 @@
 ##
 ## A powerful Terminal User Interface library for Nim, inspired by Ratatui.
 ## Provides high-performance, type-safe components for building interactive
-## terminal applications.
+## terminal applications with both synchronous and asynchronous support.
 ##
 ## Basic Usage:
 ## ```nim
-## import celina
+## import pkg/celina
 ##
 ## proc main() =
 ##   var app = newApp()
@@ -16,23 +16,60 @@
 ## when isMainModule:
 ##   main()
 ## ```
+##
+## Async Usage (requires Chronos and `-d:asyncBackend=chronos`):
+## ```nim
+## import pkg/celina
+##
+## proc main() {.async.} =
+##   var app = newAsyncApp()
+##   await app.runAsync()
+##
+## when isMainModule:
+##   waitFor main()
+## ```
 
 import std/[options, unicode]
 
 import core/[geometry, colors, buffer, events, terminal, layout]
 import widgets/[text, base, windows]
 
-# Re-export all public APIs from core modules
-export geometry
-export colors
-export buffer
-export events
-export layout
-export terminal
-export windows
-export text
-export base
-export unicode
+export geometry, colors, buffer, events, layout, terminal, windows, text, base, unicode
+
+# Async backend configuration. `-d:none|chronos`
+const asyncBackend* {.strdefine.} = "none"
+
+when asyncBackend == "none":
+  const
+    hasAsyncSupport* = false
+    hasChronos* = false
+elif asyncBackend == "chronos":
+  const
+    hasAsyncSupport* = true
+    hasChronos* = true
+else:
+  {.fatal: "Unknown asyncBackend. `-d:none|asyncBackend`".}
+
+when hasAsyncSupport and hasChronos:
+  import std/times
+
+  import pkg/chronos
+
+  import async/async_app as asyncApp
+  import async/[async_terminal, async_events, async_io, async_buffer, async_windows]
+
+  export chronos
+  export async_app, async_terminal, async_events, async_io, async_buffer, async_windows
+
+  type AsyncPerfMonitor* = ref object
+    frameCount: int
+    eventCount: int
+    startTime: float
+    lastUpdate: float
+
+# ============================================================================
+# Synchronous API
+# ============================================================================
 
 type
   ## Main application context for CLI applications
@@ -147,12 +184,12 @@ proc setup(app: App, config: AppConfig) =
   if config.mouseCapture:
     app.terminal.enableMouse()
 
-  hideCursor()
-  clearScreen()
+  terminal.hideCursor()
+  terminal.clearScreen()
 
 proc cleanup(app: App, config: AppConfig) =
   ## Internal cleanup procedure to restore terminal state
-  showCursor()
+  terminal.showCursor()
 
   if config.mouseCapture:
     app.terminal.disableMouse()
@@ -194,9 +231,9 @@ proc tick(app: App): bool =
   ## Returns false if application should quit
   try:
     # Check for resize event first
-    let resizeOpt = checkResize()
+    let resizeOpt = events.checkResize()
     if resizeOpt.isSome():
-      let resizeEvent = resizeOpt.get()
+      let resizeEvent = resizeOpt.get
       app.handleResize()
 
       # Also pass resize event to user handler
@@ -205,15 +242,15 @@ proc tick(app: App): bool =
           return false
 
     # Event polling with timeout (16ms = ~60 FPS)
-    if pollEvents(16):
+    if events.pollEvents(16):
       # Events are available - process them in batch
       var eventCount = 0
       const maxEventsPerTick = 5 # Limit events per frame for smooth rendering
 
       while eventCount < maxEventsPerTick:
-        let eventOpt = readKeyInput()
+        let eventOpt = events.readKeyInput()
         if eventOpt.isSome():
-          let event = eventOpt.get()
+          let event = eventOpt.get
           eventCount.inc()
 
           # Always call user event handler first for application-level control
@@ -231,7 +268,7 @@ proc tick(app: App): bool =
     # If no events available (timeout), we continue to render
 
     # Always render - either after processing events or on timeout
-    app.render()
+    app.render
 
     return not app.shouldQuit
   except TerminalError:
@@ -278,7 +315,7 @@ proc run*(
     app.setup(config)
 
     # Initialize signal handling for resize detection
-    initSignalHandling()
+    events.initSignalHandling()
 
     # Main application loop with event polling
     while app.tick():
@@ -371,7 +408,7 @@ proc getWindowInfo*(app: App, windowId: WindowId): Option[WindowInfo] =
   if app.windowMode and not app.windowManager.isNil:
     let windowOpt = app.windowManager.getWindow(windowId)
     if windowOpt.isSome():
-      return some(windowOpt.get().toWindowInfo())
+      return some(windowOpt.get.toWindowInfo())
   return none(WindowInfo)
 
 proc handleWindowEvent*(app: App, event: Event): bool =
@@ -418,6 +455,45 @@ proc quickRun*(
   app.onEvent(eventHandler)
   app.onRender(renderHandler)
   app.run(config)
+
+# ============================================================================
+# Async API (when Chronos is available)
+# ============================================================================
+
+when hasAsyncSupport and hasChronos:
+  # Utility function to convert async to sync
+  proc asyncToSync*[T](asyncProc: Future[T]): T =
+    ## Convert async procedure to synchronous (blocks until complete)
+    return waitFor asyncProc
+
+  # Performance monitoring for async apps
+  proc newAsyncPerfMonitor*(): AsyncPerfMonitor =
+    let now = epochTime()
+    result =
+      AsyncPerfMonitor(frameCount: 0, eventCount: 0, startTime: now, lastUpdate: now)
+
+  proc recordFrame*(monitor: AsyncPerfMonitor) =
+    monitor.frameCount.inc()
+    monitor.lastUpdate = epochTime()
+
+  proc recordEvent*(monitor: AsyncPerfMonitor) =
+    monitor.eventCount.inc()
+
+  proc getFPS*(monitor: AsyncPerfMonitor): float =
+    let elapsed = epochTime() - monitor.startTime
+    if elapsed > 0:
+      return monitor.frameCount.float / elapsed
+    else:
+      return 0.0
+
+  proc getEventRate*(monitor: AsyncPerfMonitor): float =
+    let elapsed = epochTime() - monitor.startTime
+    if elapsed > 0:
+      return monitor.eventCount.float / elapsed
+    else:
+      return 0.0
+
+  # Async window management functions are available through async_app module
 
 # ============================================================================
 # Version Information

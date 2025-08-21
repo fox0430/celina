@@ -8,5 +8,8 @@ srcDir = "src"
 
 # Dependencies
 
-requires "nim >= 2.0.0"
+requires "nim >= 2.0.2"
 requires "unicodedb"
+
+task test, "test":
+  exec "nim c -r tests/all_tests.nim"
