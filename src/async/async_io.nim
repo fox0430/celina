@@ -143,12 +143,15 @@ proc hasInputAsync*(
   # Yield to other async tasks first
   await sleepAsync(chronos.milliseconds(0))
 
-  # Check for buffered data
-  if globalInputReader.buffer.len > 0:
+  # Check for buffered data - ensure globalInputReader is not nil
+  if not globalInputReader.isNil and globalInputReader.buffer.len > 0:
     return true
 
-  # Check for new data
-  return globalInputReader.hasDataAvailable(timeoutMs)
+  # Check for new data - ensure globalInputReader is not nil
+  if not globalInputReader.isNil:
+    return globalInputReader.hasDataAvailable(timeoutMs)
+  else:
+    return false
 
 proc readCharAsync*(): Future[char] {.async, gcsafe.} =
   ## Read a character asynchronously
@@ -162,8 +165,11 @@ proc readCharAsync*(): Future[char] {.async, gcsafe.} =
   # Yield to other async tasks
   await sleepAsync(chronos.milliseconds(0))
 
-  # Try to read from buffer or stdin
-  result = globalInputReader.readCharNonBlocking()
+  # Try to read from buffer or stdin - ensure globalInputReader is not nil
+  if not globalInputReader.isNil:
+    result = globalInputReader.readCharNonBlocking()
+  else:
+    result = '\0'
 
 proc peekCharAsync*(): Future[char] {.async, gcsafe.} =
   ## Peek at next character without consuming it
@@ -176,15 +182,17 @@ proc peekCharAsync*(): Future[char] {.async, gcsafe.} =
 
   await sleepAsync(chronos.milliseconds(0))
 
-  if globalInputReader.buffer.len > 0:
-    return globalInputReader.buffer[0]
+  # Ensure globalInputReader is not nil before accessing
+  if not globalInputReader.isNil:
+    if globalInputReader.buffer.len > 0:
+      return globalInputReader.buffer[0]
 
-  if globalInputReader.hasDataAvailable(0):
-    let newData = globalInputReader.readNonBlocking()
-    if newData.len > 0:
-      globalInputReader.buffer.add(newData)
-      if globalInputReader.buffer.len > 0:
-        return globalInputReader.buffer[0]
+    if globalInputReader.hasDataAvailable(0):
+      let newData = globalInputReader.readNonBlocking()
+      if newData.len > 0:
+        globalInputReader.buffer.add(newData)
+        if globalInputReader.buffer.len > 0:
+          return globalInputReader.buffer[0]
 
   return '\0'
 
@@ -202,7 +210,8 @@ proc readStdinAsync*(
   let timeoutMs = int(timeout.milliseconds)
   await sleepAsync(chronos.milliseconds(0))
 
-  if globalInputReader.hasDataAvailable(timeoutMs):
+  # Ensure globalInputReader is not nil before accessing
+  if not globalInputReader.isNil and globalInputReader.hasDataAvailable(timeoutMs):
     return globalInputReader.readNonBlocking()
   else:
     return ""
