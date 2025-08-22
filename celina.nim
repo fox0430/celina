@@ -31,8 +31,8 @@
 
 import std/[options, unicode]
 
-import core/[geometry, colors, buffer, events, terminal, layout]
-import widgets/[text, base, windows]
+import celina/core/[geometry, colors, buffer, events, terminal, layout]
+import celina/widgets/[text, base, windows]
 
 export geometry, colors, buffer, events, layout, terminal, windows, text, base, unicode
 
@@ -55,8 +55,8 @@ when hasAsyncSupport and hasChronos:
 
   import pkg/chronos
 
-  import async/async_app as asyncApp
-  import async/[async_terminal, async_events, async_io, async_buffer, async_windows]
+  import celina/async/async_app as asyncApp
+  import celina/async/[async_terminal, async_events, async_io, async_buffer, async_windows]
 
   export chronos
   export async_app, async_terminal, async_events, async_io, async_buffer, async_windows

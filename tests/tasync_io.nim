@@ -4,7 +4,7 @@ import std/unittest
 
 import pkg/chronos
 
-import ../src/async/async_io
+import ../celina/async/async_io
 
 suite "Safe Real AsyncIO Tests":
   test "module imports successfully":

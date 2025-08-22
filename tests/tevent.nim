@@ -2,7 +2,7 @@
 
 import std/unittest
 
-import ../src/core/events {.all.}
+import ../celina/core/events {.all.}
 
 suite "Events Module Tests":
   suite "EventKind Tests":
