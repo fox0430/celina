@@ -4,9 +4,9 @@ import std/[unittest, options]
 
 import pkg/chronos
 
-import ../src/async/async_events
-import ../src/async/async_io
-import ../src/core/events except resizeDetected
+import ../celina/async/async_events
+import ../celina/async/async_io
+import ../celina/core/events except resizeDetected
 
 suite "Async Event System Initialization":
   test "Initialize and cleanup async event system":

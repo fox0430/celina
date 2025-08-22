@@ -2,9 +2,9 @@
 
 import std/[unittest, options]
 
-import ../src/core/[geometry, buffer, colors, events]
+import ../celina/core/[geometry, buffer, colors, events]
 
-import ../src/widgets/windows {.all.}
+import ../celina/widgets/windows {.all.}
 
 suite "Window Tests":
   test "Create window with default settings":

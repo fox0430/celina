@@ -4,7 +4,7 @@ import std/[unittest, strutils, atomics]
 
 import pkg/chronos
 
-import ../src/async/async_buffer
+import ../celina/async/async_buffer
 
 suite "AsyncBuffer Module Tests":
   suite "AsyncBuffer Creation":

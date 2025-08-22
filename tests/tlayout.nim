@@ -2,8 +2,8 @@
 
 import std/unittest
 
-import ../src/core/layout
-import ../src/core/geometry
+import ../celina/core/layout
+import ../celina/core/geometry
 
 suite "Layout System Tests":
   suite "Constraint Tests":

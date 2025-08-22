@@ -30,7 +30,7 @@ jobs:
 
     - name: Gen docs
       run: |
-        nim doc --project --index:on --outdir:./htmldocs -d:asyncBackend=chronos src/celina.nim
+        nim doc --project --index:on --outdir:./htmldocs -d:asyncBackend=chronos ./celina.nim
 
     - uses: actions/upload-pages-artifact@v3
       with:

@@ -1,6 +1,6 @@
 import std/[unittest, strutils]
 
-import ../src/core/colors
+import ../celina/core/colors
 
 # Test suite for Colors module
 suite "Colors Module Tests":
