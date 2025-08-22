@@ -1,5 +1,7 @@
 ## Async Hello World Example
-## =====================================================
+##
+## `nimble install chronos`
+## `nim c -d:asyncBackend=chronos examples/async_hello_world.nim`
 
 import pkg/celina
 
