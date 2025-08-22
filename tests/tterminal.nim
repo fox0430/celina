@@ -218,17 +218,19 @@ suite "Terminal Module Tests":
     test "Terminal operations with invalid buffer sizes":
       let terminal = newTerminal()
 
-      # Test with empty buffer
+      # Terminal should handle empty buffer gracefully
       let emptyBuffer = newBuffer(0, 0)
-      check emptyBuffer.area.isEmpty()
-      check emptyBuffer.area.width == 0
-      check emptyBuffer.area.height == 0
+      terminal.lastBuffer = emptyBuffer
+      check terminal.lastBuffer.area.isEmpty()
+      check terminal.lastBuffer.area.width == 0
+      check terminal.lastBuffer.area.height == 0
 
     test "Terminal operations with oversized buffers":
       let terminal = newTerminal()
 
-      # Create buffer larger than terminal
+      # Terminal should handle buffers larger than screen
       let largeBuffer = newBuffer(terminal.size.width * 2, terminal.size.height * 2)
+      terminal.lastBuffer = largeBuffer
       check largeBuffer.area.width > terminal.size.width
       check largeBuffer.area.height > terminal.size.height
       check largeBuffer.area.width == terminal.size.width * 2
@@ -239,24 +241,40 @@ suite "Terminal Module Tests":
       let buffer1 = newBuffer(10, 5)
       let buffer2 = newBuffer(10, 5)
 
-      # Test buffer properties for differential rendering
-      check buffer1.area.width == 10
-      check buffer1.area.height == 5
-      check buffer2.area.width == 10
-      check buffer2.area.height == 5
+      # Terminal should track last buffer for differential rendering
+      terminal.lastBuffer = buffer1
+      check terminal.lastBuffer.area.width == 10
+      check terminal.lastBuffer.area.height == 5
+
+      # Change to different buffer
+      terminal.lastBuffer = buffer2
+      check terminal.lastBuffer.area == buffer2.area
 
     test "Buffer size changes trigger full redraw":
       let terminal = newTerminal()
       let buffer1 = newBuffer(10, 5)
       let buffer2 = newBuffer(15, 8) # Different size
 
-      # Size difference should be detectable
-      check buffer1.area != buffer2.area
+      # Terminal should detect buffer size changes
+      terminal.lastBuffer = buffer1
+      check terminal.lastBuffer.area == buffer1.area
+
+      terminal.lastBuffer = buffer2
+      check terminal.lastBuffer.area != buffer1.area
+      check terminal.lastBuffer.area == buffer2.area
 
     test "Terminal render with same-size buffers":
       let terminal = newTerminal()
       var buffer1 = newBuffer(10, 5)
       var buffer2 = newBuffer(10, 5)
+
+      # Terminal should handle same-size buffer transitions
+      terminal.lastBuffer = buffer1
+      check terminal.lastBuffer.area == buffer1.area
+
+      terminal.lastBuffer = buffer2
+      check terminal.lastBuffer.area == buffer2.area
+      check terminal.lastBuffer.area == buffer1.area # Same size
 
       # Same size, different content
       buffer1[1, 1] = cell("A")
@@ -291,9 +309,10 @@ suite "Terminal Module Tests":
       buffer[2, 0] = cell("🚀")
       buffer[3, 0] = cell("🌟")
 
-      # Should handle unicode properly
-      check buffer[0, 0].symbol == "α"
-      check buffer[2, 0].symbol == "🚀"
+      # Terminal should handle unicode content in lastBuffer
+      terminal.lastBuffer = buffer
+      check terminal.lastBuffer[0, 0].symbol == "α"
+      check terminal.lastBuffer[2, 0].symbol == "🚀"
 
     test "Terminal buffer operations":
       let terminal = newTerminal()
@@ -307,26 +326,67 @@ suite "Terminal Module Tests":
           else:
             buffer[x, y] = cell(".")
 
-      # Verify pattern
-      check buffer[0, 0].symbol == "#"
-      check buffer[1, 0].symbol == "."
-      check buffer[0, 1].symbol == "."
-      check buffer[1, 1].symbol == "#"
+      # Terminal should work with its own area-sized buffer
+      terminal.lastBuffer = buffer
+      check terminal.lastBuffer.area == terminal.getArea()
+      check terminal.lastBuffer[0, 0].symbol == "#"
+      check terminal.lastBuffer[1, 0].symbol == "."
+      check terminal.lastBuffer[0, 1].symbol == "."
+      check terminal.lastBuffer[1, 1].symbol == "#"
+
+  suite "Terminal State Management Features":
+    test "Terminal mode state tracking":
+      let terminal = newTerminal()
+
+      # Initial state should be false for all modes
+      check terminal.rawMode == false
+      check terminal.alternateScreen == false
+      check terminal.mouseEnabled == false
+
+    test "Terminal size management":
+      let terminal = newTerminal()
+
+      # Terminal should have default size initially
+      check terminal.size.width > 0
+      check terminal.size.height > 0
+
+      # updateSize should work without error
+      terminal.updateSize()
+      check terminal.size.width > 0
+      check terminal.size.height > 0
+
+    test "Terminal area calculation":
+      let terminal = newTerminal()
+      let area = terminal.getArea()
+
+      # Terminal area should match size
+      check area.width == terminal.size.width
+      check area.height == terminal.size.height
+      check area.x == 0
+      check area.y == 0
 
   suite "Performance Considerations":
     test "Large buffer handling":
       let terminal = newTerminal()
-      let largeBuffer = newBuffer(200, 100) # Large buffer
+      let hugeBuffer = newBuffer(200, 100) # Large buffer
 
-      # Should handle large buffers without issues
-      check largeBuffer.area.width == 200
-      check largeBuffer.area.height == 100
-      check largeBuffer.area.area() == 20000
+      # Terminal should handle large buffers in lastBuffer
+      terminal.lastBuffer = hugeBuffer
+      check terminal.lastBuffer.area.width == 200
+      check terminal.lastBuffer.area.height == 100
+      check terminal.lastBuffer.area.area() == 20000
 
     test "Repeated rendering with minimal changes":
       let terminal = newTerminal()
       var buffer1 = newBuffer(50, 20)
       var buffer2 = newBuffer(50, 20)
+
+      # Terminal should track buffer changes for efficient rendering
+      terminal.lastBuffer = buffer1
+      let originalArea = terminal.lastBuffer.area
+
+      terminal.lastBuffer = buffer2
+      check terminal.lastBuffer.area == originalArea # Same dimensions
 
       # Identical buffers should have no differences
       let noDiff = buffer1.diff(buffer2)
