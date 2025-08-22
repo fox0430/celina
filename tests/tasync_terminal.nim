@@ -202,7 +202,7 @@ suite "AsyncTerminal POSIX Platform Support":
     # In CI environments, this might be fallback size
     check size.width > 0
     check size.height > 0
-    check size.width >= 10  # Reasonable minimum
+    check size.width >= 10 # Reasonable minimum
     check size.height >= 5
 
     # Common fallback values

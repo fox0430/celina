@@ -200,7 +200,7 @@ suite "Terminal Module Tests":
       except SystemCallError:
         # CI environments may not have a real terminal, use fallback
         size = getTerminalSizeOrDefault()
-        check size.width == 80  # Default fallback size
+        check size.width == 80 # Default fallback size
         check size.height == 24
 
       # Verify size is reasonable
