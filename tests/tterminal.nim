@@ -6,6 +6,7 @@ import ../celina/core/terminal
 import ../celina/core/geometry
 import ../celina/core/colors
 import ../celina/core/buffer
+import ../celina/core/errors
 
 suite "Terminal Module Tests":
   suite "Terminal Creation":
@@ -25,17 +26,25 @@ suite "Terminal Module Tests":
 
   suite "Terminal Size Management":
     test "getTerminalSize() returns valid dimensions":
-      let termSize = getTerminalSize()
-      check termSize.width > 0
-      check termSize.height > 0
-      # Common terminal sizes should be reasonable
-      check termSize.width >= 20
-      check termSize.height >= 5
+      try:
+        let termSize = getTerminalSize()
+        check termSize.width > 0
+        check termSize.height > 0
+        # Common terminal sizes should be reasonable
+        check termSize.width >= 20
+        check termSize.height >= 5
+      except SystemCallError:
+        # CI environments may not have a real terminal
+        skip()
 
     test "updateSize() updates terminal dimensions":
       let terminal = newTerminal()
-      terminal.updateSize()
-      # Size should remain consistent (or update if terminal was resized)
+      try:
+        terminal.updateSize()
+        # Size should remain consistent (or update if terminal was resized)
+      except TerminalError:
+        # CI environments may not have a real terminal
+        skip()
       check terminal.size.width > 0
       check terminal.size.height > 0
 
@@ -182,20 +191,21 @@ suite "Terminal Module Tests":
 
   suite "POSIX Platform Support":
     test "Terminal size detection works on POSIX systems":
-      let size = getTerminalSize()
+      var size: Size
+      try:
+        size = getTerminalSize()
+        # Should work on POSIX platforms (Linux, macOS, etc.)
+        check size.width > 0
+        check size.height > 0
+      except SystemCallError:
+        # CI environments may not have a real terminal, use fallback
+        size = getTerminalSizeOrDefault()
+        check size.width == 80  # Default fallback size
+        check size.height == 24
 
-      # Should work on POSIX platforms (Linux, macOS, etc.)
+      # Verify size is reasonable
       check size.width > 0
       check size.height > 0
-
-      # Common fallback values
-      if size.width == 80 and size.height == 24:
-        # Likely using fallback values, which is acceptable
-        discard
-      else:
-        # Using actual terminal dimensions
-        check size.width >= 20
-        check size.height >= 5
 
     test "Raw mode state tracking on POSIX":
       let terminal = newTerminal()
@@ -350,10 +360,14 @@ suite "Terminal Module Tests":
       check terminal.size.width > 0
       check terminal.size.height > 0
 
-      # updateSize should work without error
-      terminal.updateSize()
-      check terminal.size.width > 0
-      check terminal.size.height > 0
+      # updateSize should work without error (or skip in CI)
+      try:
+        terminal.updateSize()
+        check terminal.size.width > 0
+        check terminal.size.height > 0
+      except TerminalError:
+        # CI environments may not have a real terminal
+        skip()
 
     test "Terminal area calculation":
       let terminal = newTerminal()

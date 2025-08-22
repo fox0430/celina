@@ -5,7 +5,7 @@ import std/unittest
 import pkg/chronos
 
 import ../celina/async/async_buffer
-import ../celina/core/[geometry, colors, buffer]
+import ../celina/core/[geometry, colors, buffer, errors]
 
 import ../celina/async/async_terminal {.all.}
 
@@ -38,17 +38,21 @@ suite "AsyncTerminal Basic Operations":
 
   test "updateSize gets terminal dimensions":
     let terminal = createTestTerminal()
-    terminal.updateSize()
-    # Size should change to actual terminal size
-    check terminal.size.width > 0
-    check terminal.size.height > 0
+    try:
+      terminal.updateSize()
+      # Size should change to actual terminal size
+      check terminal.size.width > 0
+      check terminal.size.height > 0
+    except TerminalError:
+      # CI environments may not have a real terminal
+      skip()
 
   test "getTerminalSizeAsync returns valid size":
     let size = getTerminalSizeAsync()
     check:
       size.width > 0
       size.height > 0
-      # Should be at least minimum reasonable terminal size
+      # Should be at least minimum reasonable terminal size (or fallback)
       size.width >= 10
       size.height >= 5
 
@@ -195,8 +199,11 @@ suite "AsyncTerminal POSIX Platform Support":
     let size = getTerminalSizeAsync()
 
     # Should work on POSIX platforms (Linux, macOS, etc.)
+    # In CI environments, this might be fallback size
     check size.width > 0
     check size.height > 0
+    check size.width >= 10  # Reasonable minimum
+    check size.height >= 5
 
     # Common fallback values
     if size.width == 80 and size.height == 24:
