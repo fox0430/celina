@@ -1,10 +1,11 @@
 # Test suite for async_buffer module
 
-import std/[unittest, strutils, atomics]
+import std/[unittest, strutils]
 
 import pkg/chronos
 
 import ../celina/async/async_buffer
+import ../celina/core/resources
 
 suite "AsyncBuffer Module Tests":
   suite "AsyncBuffer Creation":
@@ -13,7 +14,7 @@ suite "AsyncBuffer Module Tests":
       let asyncBuffer = newAsyncBuffer(area)
 
       check asyncBuffer.getArea() == area
-      check not asyncBuffer.isLocked()
+      # Lock state testing removed - proper locks don't expose lock state
 
     test "AsyncBuffer creation with dimensions":
       let asyncBuffer = newAsyncBuffer(80, 24)
@@ -32,7 +33,7 @@ suite "AsyncBuffer Module Tests":
 
       check cloned.getArea() == original.getArea()
       check cloned.getCell(2, 2).symbol == "t"
-      check not cloned.isLocked()
+      # Lock state testing removed - proper locks don't expose lock state
 
   suite "Thread-Safe Access":
     test "withBuffer template basic usage":
@@ -58,17 +59,16 @@ suite "AsyncBuffer Module Tests":
       check size.width == 15
       check size.height == 10
 
-    test "isLocked status":
+    test "Lock functionality":
       let asyncBuffer = newAsyncBuffer(5, 5)
 
-      check not asyncBuffer.isLocked()
-
+      # Lock state testing removed - proper locks don't expose lock state
+      # Instead test that withBuffer works (implying lock works)
       asyncBuffer.withBuffer:
-        # During withBuffer, lock should be acquired
         buffer.clear()
 
-      # After withBuffer, lock should be released
-      check not asyncBuffer.isLocked()
+      # Test that operation succeeded
+      check asyncBuffer.getCell(0, 0).symbol == " "
 
   suite "Synchronous Operations":
     test "Synchronous cell access":
@@ -388,7 +388,8 @@ suite "AsyncBuffer Module Tests":
 
       check stats.area.width == 15
       check stats.area.height == 8
-      check not stats.locked
+      # Lock state removed from stats - test resource ID instead
+      check stats.resourceId != ResourceId(0)
 
   suite "Concurrent Access Simulation":
     test "Multiple async operations":

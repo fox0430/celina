@@ -3,25 +3,49 @@
 ## This module provides memory-safe Buffer types that can be used
 ## in async closures without violating Nim's memory safety requirements.
 
-import std/atomics
+import std/[locks, strformat]
 
 import pkg/chronos
 
-import ../core/[buffer, geometry, colors]
+import ../core/[buffer, geometry, colors, resources]
 
-# Re-export core buffer types for convenience
 export buffer, geometry, colors
 
-type
-  ## Thread-safe reference to a Buffer for async operations
-  AsyncBuffer* = ref object
-    buffer: Buffer
-    lock: Atomic[bool] # Simple spinlock for thread safety
+type AsyncBufferMetrics* = object ## Performance monitoring
+  activeBuffers*: int
+  totalCreated*: int
+  poolHits*: int
+  avgLockWaitTime*: float
 
-  ## Shared buffer pool for efficient memory management
-  AsyncBufferPool* = ref object
+var globalAsyncBufferMetrics* {.threadvar.}: AsyncBufferMetrics
+
+# ============================================================================
+# Metrics and tracking functions (defined early for use in other functions)
+# ============================================================================
+
+proc trackAsyncBufferCreation*() =
+  globalAsyncBufferMetrics.totalCreated.inc()
+  globalAsyncBufferMetrics.activeBuffers.inc()
+
+proc trackAsyncBufferDestroy*() =
+  globalAsyncBufferMetrics.activeBuffers.dec()
+
+proc getAsyncBufferMetrics*(): AsyncBufferMetrics =
+  globalAsyncBufferMetrics
+
+type
+  AsyncBuffer* = ref object ## Thread-safe reference to a Buffer for async operations
+    buffer: Buffer
+    lock: Lock # Proper lock instead of spinlock
+    resourceId: ResourceId
+
+  AsyncBufferPool* = ref object ## Shared buffer pool for efficient memory management
     buffers: seq[AsyncBuffer]
     maxSize: int
+    poolLock: Lock
+
+# Forward declarations
+proc destroyAsync*(asyncBuffer: AsyncBuffer)
 
 # ============================================================================
 # AsyncBuffer Creation and Management
@@ -31,17 +55,56 @@ proc newAsyncBuffer*(area: Rect): AsyncBuffer =
   ## Create a new async-safe buffer with the specified area
   result = AsyncBuffer()
   result.buffer = newBuffer(area)
-  result.lock.store(false)
+  initLock(result.lock)
+
+  # Register with resource manager
+  let rm = getGlobalResourceManager()
+  let asyncBuf = result # Capture specific reference
+  result.resourceId = rm.registerResource(
+    RsBuffer,
+    &"AsyncBuffer({area.width}x{area.height})",
+    proc() =
+      try:
+        deinitLock(asyncBuf.lock)
+      except:
+        discard,
+  )
 
 proc newAsyncBuffer*(width, height: int): AsyncBuffer {.inline.} =
   ## Create a new async-safe buffer with specified dimensions
   newAsyncBuffer(rect(0, 0, width, height))
 
+proc newAsyncBufferNoRM*(area: Rect): AsyncBuffer =
+  ## Create a new async-safe buffer without resource manager registration
+  ## Used in async contexts to avoid GC safety issues
+  result = AsyncBuffer()
+  result.buffer = newBuffer(area)
+  initLock(result.lock)
+  result.resourceId = ResourceId(0) # No resource tracking
+
+proc newAsyncBufferNoRM*(width, height: int): AsyncBuffer {.inline.} =
+  ## Create a new async-safe buffer with specified dimensions without resource manager
+  newAsyncBufferNoRM(rect(0, 0, width, height))
+
 proc clone*(asyncBuffer: AsyncBuffer): AsyncBuffer =
   ## Create a deep copy of an async buffer
   result = AsyncBuffer()
-  result.buffer = asyncBuffer.buffer # Buffer is copied by value
-  result.lock.store(false)
+  withLock(asyncBuffer.lock):
+    result.buffer = asyncBuffer.buffer # Buffer is copied by value
+  initLock(result.lock)
+
+  # Register the cloned buffer
+  let rm = getGlobalResourceManager()
+  let clonedBuf = result # Capture specific reference
+  result.resourceId = rm.registerResource(
+    RsBuffer,
+    &"AsyncBuffer-Clone({result.buffer.area.width}x{result.buffer.area.height})",
+    proc() =
+      try:
+        deinitLock(clonedBuf.lock)
+      except:
+        discard,
+  )
 
 # ============================================================================
 # Thread-Safe Access Methods
@@ -49,19 +112,27 @@ proc clone*(asyncBuffer: AsyncBuffer): AsyncBuffer =
 
 template withBuffer*(asyncBuffer: AsyncBuffer, operation: untyped): untyped =
   ## Thread-safe template for accessing the internal buffer
-  ## Uses a simple spinlock to ensure exclusive access
-  while asyncBuffer.lock.exchange(true):
-    # Spin wait - in practice, this should be very brief
-    discard
+  ## Uses proper locks instead of spinlock for better performance
+  withLock(asyncBuffer.lock):
+    # Allow access to 'buffer' variable within the template
+    template buffer(): untyped =
+      asyncBuffer.buffer
 
-  try:
+    # Update resource access time
+    let rm = getGlobalResourceManager()
+    rm.touchResource(asyncBuffer.resourceId)
+
+    operation
+
+template withBufferAsync*(asyncBuffer: AsyncBuffer, operation: untyped): untyped =
+  ## Thread-safe template for accessing the internal buffer in async context
+  ## Skips resource tracking to avoid GC safety issues
+  withLock(asyncBuffer.lock):
     # Allow access to 'buffer' variable within the template
     template buffer(): untyped =
       asyncBuffer.buffer
 
     operation
-  finally:
-    asyncBuffer.lock.store(false)
 
 proc getArea*(asyncBuffer: AsyncBuffer): Rect =
   ## Get buffer area (thread-safe)
@@ -79,7 +150,7 @@ proc getSize*(asyncBuffer: AsyncBuffer): Size =
 
 proc clearAsync*(asyncBuffer: AsyncBuffer, cell: Cell = cell()) {.async.} =
   ## Clear buffer asynchronously
-  asyncBuffer.withBuffer:
+  asyncBuffer.withBufferAsync:
     buffer.clear(cell)
 
   # Yield to allow other async operations
@@ -89,7 +160,7 @@ proc setStringAsync*(
     asyncBuffer: AsyncBuffer, x, y: int, text: string, style: Style = defaultStyle()
 ) {.async.} =
   ## Set string asynchronously
-  asyncBuffer.withBuffer:
+  asyncBuffer.withBufferAsync:
     buffer.setString(x, y, text, style)
 
   # Yield to allow other async operations
@@ -103,7 +174,7 @@ proc setStringAsync*(
 
 proc setCellAsync*(asyncBuffer: AsyncBuffer, x, y: int, cell: Cell) {.async.} =
   ## Set cell asynchronously
-  asyncBuffer.withBuffer:
+  asyncBuffer.withBufferAsync:
     buffer[x, y] = cell
 
   await sleepAsync(0.milliseconds)
@@ -114,14 +185,14 @@ proc setCellAsync*(asyncBuffer: AsyncBuffer, pos: Position, cell: Cell) {.async.
 
 proc fillAsync*(asyncBuffer: AsyncBuffer, area: Rect, fillCell: Cell) {.async.} =
   ## Fill area asynchronously
-  asyncBuffer.withBuffer:
+  asyncBuffer.withBufferAsync:
     buffer.fill(area, fillCell)
 
   await sleepAsync(0.milliseconds)
 
 proc resizeAsync*(asyncBuffer: AsyncBuffer, newArea: Rect) {.async.} =
   ## Resize buffer asynchronously
-  asyncBuffer.withBuffer:
+  asyncBuffer.withBufferAsync:
     buffer.resize(newArea)
 
   await sleepAsync(0.milliseconds)
@@ -166,18 +237,28 @@ proc toBuffer*(asyncBuffer: AsyncBuffer): Buffer =
   asyncBuffer.withBuffer:
     result = buffer
 
+proc toBufferAsync*(asyncBuffer: AsyncBuffer): Buffer =
+  ## Convert AsyncBuffer to regular Buffer (creates copy) - async-safe version
+  asyncBuffer.withBufferAsync:
+    result = buffer
+
 proc updateFromBuffer*(asyncBuffer: AsyncBuffer, sourceBuffer: Buffer) =
   ## Update AsyncBuffer from a regular Buffer
   asyncBuffer.withBuffer:
+    buffer = sourceBuffer
+
+proc updateFromBufferAsync*(asyncBuffer: AsyncBuffer, sourceBuffer: Buffer) =
+  ## Update AsyncBuffer from a regular Buffer - async-safe version
+  asyncBuffer.withBufferAsync:
     buffer = sourceBuffer
 
 proc mergeAsync*(
     dest: AsyncBuffer, src: AsyncBuffer, destPos: Position = pos(0, 0)
 ) {.async.} =
   ## Merge one AsyncBuffer into another asynchronously
-  let srcBuffer = src.toBuffer()
+  let srcBuffer = src.toBufferAsync()
 
-  dest.withBuffer:
+  dest.withBufferAsync:
     buffer.merge(srcBuffer, destPos)
 
   await sleepAsync(0.milliseconds)
@@ -186,35 +267,39 @@ proc mergeAsync*(
 # AsyncBuffer Pool for Performance
 # ============================================================================
 
-proc newAsyncBufferPool*(maxSize: int = 10): AsyncBufferPool =
-  ## Create a new async buffer pool for efficient memory management
-  AsyncBufferPool(buffers: @[], maxSize: maxSize)
-
 proc getBuffer*(pool: AsyncBufferPool, area: Rect): AsyncBuffer =
   ## Get a buffer from the pool or create new one
-  if pool.buffers.len > 0:
-    result = pool.buffers.pop()
-    result.withBuffer:
-      if buffer.area != area:
-        buffer.resize(area)
-      else:
-        buffer.clear()
-  else:
-    result = newAsyncBuffer(area)
+  withLock(pool.poolLock):
+    if pool.buffers.len > 0:
+      result = pool.buffers.pop()
+      trackAsyncBufferCreation() # Count as reuse
+      result.withBuffer:
+        if buffer.area != area:
+          buffer.resize(area)
+        else:
+          buffer.clear()
+    else:
+      result = newAsyncBuffer(area)
+      trackAsyncBufferCreation()
 
 proc returnBuffer*(pool: AsyncBufferPool, asyncBuffer: AsyncBuffer) =
   ## Return a buffer to the pool
-  if pool.buffers.len < pool.maxSize:
-    asyncBuffer.clear()
-    pool.buffers.add(asyncBuffer)
+  withLock(pool.poolLock):
+    if pool.buffers.len < pool.maxSize:
+      asyncBuffer.clear() # AsyncBuffer has its own clear method
+      pool.buffers.add(asyncBuffer)
+    else:
+      # Pool is full, destroy the buffer
+      asyncBuffer.destroyAsync()
+      trackAsyncBufferDestroy()
 
 # ============================================================================
-# Async-Safe Rendering Utilities  
+# Async-Safe Rendering Utilities
 # ============================================================================
 
 proc toStringsAsync*(asyncBuffer: AsyncBuffer): Future[seq[string]] {.async.} =
   ## Convert buffer to strings asynchronously
-  asyncBuffer.withBuffer:
+  asyncBuffer.withBufferAsync:
     result = buffer.toStrings()
 
   await sleepAsync(0.milliseconds)
@@ -223,8 +308,8 @@ proc diffAsync*(
     old, new: AsyncBuffer
 ): Future[seq[tuple[pos: Position, cell: Cell]]] {.async.} =
   ## Calculate differences between two async buffers
-  let oldBuffer = old.toBuffer()
-  let newBuffer = new.toBuffer()
+  let oldBuffer = old.toBufferAsync()
+  let newBuffer = new.toBufferAsync()
 
   result = diff(oldBuffer, newBuffer)
   await sleepAsync(0.milliseconds)
@@ -238,10 +323,48 @@ proc `$`*(asyncBuffer: AsyncBuffer): string =
   asyncBuffer.withBuffer:
     result = "AsyncBuffer(" & $buffer.area & ")"
 
-proc isLocked*(asyncBuffer: AsyncBuffer): bool =
-  ## Check if buffer is currently locked
-  asyncBuffer.lock.load()
+proc destroyAsync*(asyncBuffer: AsyncBuffer) =
+  ## Properly destroy an async buffer and clean up resources
+  try:
+    let rm = getGlobalResourceManager()
+    rm.unregisterResource(asyncBuffer.resourceId)
+  except:
+    discard # Skip resource cleanup if manager not available
 
-proc stats*(asyncBuffer: AsyncBuffer): tuple[area: Rect, locked: bool] =
+  try:
+    deinitLock(asyncBuffer.lock)
+  except:
+    discard # Best effort cleanup
+
+proc stats*(asyncBuffer: AsyncBuffer): tuple[area: Rect, resourceId: ResourceId] =
   ## Get buffer statistics
-  (area: asyncBuffer.getArea(), locked: asyncBuffer.isLocked())
+  (area: asyncBuffer.getArea(), resourceId: asyncBuffer.resourceId)
+
+# ============================================================================
+# Resource Management Integration
+# ============================================================================
+
+proc newAsyncBufferPool*(maxSize: int = 10): AsyncBufferPool =
+  ## Create a new async buffer pool for efficient memory management
+  result = AsyncBufferPool(buffers: @[], maxSize: maxSize)
+  initLock(result.poolLock)
+
+proc destroyAsyncBufferPool*(pool: AsyncBufferPool) =
+  ## Properly destroy a buffer pool
+  withLock(pool.poolLock):
+    for buffer in pool.buffers:
+      buffer.destroyAsync()
+    pool.buffers.setLen(0)
+
+  try:
+    deinitLock(pool.poolLock)
+  except:
+    discard
+
+template withAsyncBuffer*(area: Rect, name: string, body: untyped): untyped =
+  ## Template for automatic async buffer management
+  let asyncBuffer {.inject.} = newAsyncBuffer(area)
+  try:
+    body
+  finally:
+    asyncBuffer.destroyAsync()
