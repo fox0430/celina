@@ -56,7 +56,8 @@ when hasAsyncSupport and hasChronos:
   import pkg/chronos
 
   import celina/async/async_app as asyncApp
-  import celina/async/[async_terminal, async_events, async_io, async_buffer, async_windows]
+  import
+    celina/async/[async_terminal, async_events, async_io, async_buffer, async_windows]
 
   export chronos
   export async_app, async_terminal, async_events, async_io, async_buffer, async_windows
