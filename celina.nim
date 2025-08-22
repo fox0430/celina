@@ -31,10 +31,12 @@
 
 import std/[options, unicode]
 
-import celina/core/[geometry, colors, buffer, events, terminal, layout]
+import celina/core/[geometry, colors, buffer, events, terminal, layout, errors]
 import celina/widgets/[text, base, windows]
 
-export geometry, colors, buffer, events, layout, terminal, windows, text, base, unicode
+export
+  geometry, colors, buffer, events, layout, terminal, windows, text, base, unicode,
+  errors
 
 # Async backend configuration. `-d:none|chronos`
 const asyncBackend* {.strdefine.} = "none"
