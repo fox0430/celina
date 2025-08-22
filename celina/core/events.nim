@@ -4,6 +4,7 @@
 ## including escape sequences and arrow keys for POSIX systems.
 
 import std/[os, posix, options, strutils]
+import errors
 
 # Define SIGWINCH if not available
 when not declared(SIGWINCH):
@@ -244,9 +245,16 @@ proc parseMouseEventSGR(): Event =
 # Advanced key reading with escape sequence support
 proc readKey*(): Event =
   ## Read a key event (blocking mode)
-  var ch: char
+  ## Raises IOError if unable to read from stdin
   try:
-    if stdin.readBuffer(addr ch, 1) == 1:
+    var ch: char
+    let bytesRead = tryRecover(
+      proc(): int =
+        stdin.readBuffer(addr ch, 1),
+      fallback = 0,
+    )
+
+    if bytesRead == 1:
       case ch
       of '\r', '\n':
         return Event(kind: Key, key: KeyEvent(code: Enter, char: ch))
@@ -436,8 +444,11 @@ proc pollKey*(): Event =
 # Non-blocking event reading
 proc readKeyInput*(): Option[Event] =
   ## Read a single key input event (non-blocking)
-  ## Returns none(Event) if no input is available
+  ## Returns none(Event) if no input is available or on error
   let flags = fcntl(STDIN_FILENO, F_GETFL, 0)
+  if flags == -1:
+    return none(Event)
+
   if fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK) == -1:
     return none(Event)
 
