@@ -343,8 +343,8 @@ proc renderAsync*(
         windowBuffer.merge(window.buffer, contentPos)
 
       # Convert to AsyncBuffer and merge
-      let asyncWindowBuffer = newAsyncBuffer(window.area)
-      asyncWindowBuffer.updateFromBuffer(windowBuffer)
+      let asyncWindowBuffer = newAsyncBufferNoRM(window.area)
+      asyncWindowBuffer.updateFromBufferAsync(windowBuffer)
 
       await destBuffer.mergeAsync(asyncWindowBuffer, pos(window.area.x, window.area.y))
 

@@ -5,6 +5,8 @@
 import std/[unittest, strutils, tables, options]
 import ../celina/core/[errors, terminal]
 
+{.push warning[UnreachableCode]: off.}
+
 suite "Error Handling Tests":
   test "TerminalError creation":
     let err = newTerminalError("Test error", ErrTerminalConfig, "test context")

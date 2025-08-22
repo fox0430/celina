@@ -186,8 +186,8 @@ suite "App Window Integration Tests":
     let window2 = newWindow(rect(20, 20, 25, 12), "Window 2")
     let window3 = newWindow(rect(5, 5, 20, 10), "Window 3")
 
-    let id1 = app.addWindow(window1)
-    let id2 = app.addWindow(window2)
+    let _ = app.addWindow(window1)
+    let _ = app.addWindow(window2)
     let id3 = app.addWindow(window3)
 
     check app.getWindowCount() == 3

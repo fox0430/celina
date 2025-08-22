@@ -234,6 +234,8 @@ proc tryRecover*[T](operation: proc(): T, fallback: T, logError = true): T =
     when defined(celinaDebug):
       if logError:
         stderr.writeLine("Error recovered: ", e.msg)
+    else:
+      discard e
     return fallback
 
 proc retryOperation*[T](operation: proc(): T, maxAttempts = 3, delayMs = 100): T =
