@@ -1,6 +1,6 @@
 import std/unittest
 
-import ../src/core/events
+import ../celina/core/events
 
 suite "Mouse event tests":
   test "MouseEvent creation":

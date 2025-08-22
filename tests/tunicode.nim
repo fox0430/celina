@@ -2,8 +2,8 @@
 
 import std/[unittest, unicode, strutils]
 
-import ../src/core/buffer
-import ../src/core/colors
+import ../celina/core/buffer
+import ../celina/core/colors
 
 suite "Unicode Support Tests":
   suite "Character Width Detection":

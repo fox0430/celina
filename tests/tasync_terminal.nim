@@ -4,10 +4,10 @@ import std/unittest
 
 import pkg/chronos
 
-import ../src/async/async_buffer
-import ../src/core/[geometry, colors, buffer]
+import ../celina/async/async_buffer
+import ../celina/core/[geometry, colors, buffer]
 
-import ../src/async/async_terminal {.all.}
+import ../celina/async/async_terminal {.all.}
 
 # Test helpers
 proc createTestBuffer(width, height: int, fillChar: string = " "): Buffer =

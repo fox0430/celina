@@ -2,10 +2,10 @@
 
 import std/[unittest]
 
-import ../src/core/terminal
-import ../src/core/geometry
-import ../src/core/colors
-import ../src/core/buffer
+import ../celina/core/terminal
+import ../celina/core/geometry
+import ../celina/core/colors
+import ../celina/core/buffer
 
 suite "Terminal Module Tests":
   suite "Terminal Creation":

@@ -2,7 +2,7 @@
 
 import std/[unittest, strformat]
 
-import ../src/core/geometry
+import ../celina/core/geometry
 
 suite "Geometry Module Tests":
   suite "Position Tests":

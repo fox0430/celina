@@ -4,9 +4,9 @@ import std/[unittest, options]
 
 import pkg/chronos
 
-import ../src/async/[async_windows, async_buffer]
-import ../src/core/[geometry, colors, events, buffer]
-import ../src/widgets/windows
+import ../celina/async/[async_windows, async_buffer]
+import ../celina/core/[geometry, colors, events, buffer]
+import ../celina/widgets/windows
 
 suite "AsyncWindows Core Tests":
   test "AsyncWindowManager creation":

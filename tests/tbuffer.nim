@@ -2,9 +2,9 @@
 
 import std/[unittest, strutils]
 
-import ../src/core/buffer
-import ../src/core/geometry
-import ../src/core/colors
+import ../celina/core/buffer
+import ../celina/core/geometry
+import ../celina/core/colors
 
 suite "Buffer Module Tests":
   suite "Cell Operations":

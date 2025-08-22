@@ -2,7 +2,7 @@
 
 import std/[unittest, strutils, options]
 
-import ../src/celina
+import ../celina
 
 suite "Celina Main Module Tests":
   suite "Basic API Tests":

@@ -18,6 +18,6 @@ jobs:
         uses: arnetheduck/nph-action@v1
         with:
           version: latest
-          options: "src/ tests/ examples/ celina.nimble"
+          options: "celina/ tests/ examples/ celina.nim celina.nimble"
           fail: true
           suggest: true
