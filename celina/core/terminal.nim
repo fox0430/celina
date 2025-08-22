@@ -1,9 +1,9 @@
-## Terminal interface for Celina CLI library
+## Terminal interface
 ##
 ## This module provides terminal control and rendering capabilities
 ## using ANSI escape sequences for POSIX systems (Linux, macOS, etc.).
 
-import std/[strformat, termios, posix, os]
+import std/[strformat, termios, posix]
 import geometry, colors, buffer, errors
 
 export errors.TerminalError

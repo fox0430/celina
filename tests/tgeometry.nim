@@ -1,6 +1,6 @@
-# Test suite for Geometry module
+# Test suite for geometry module
 
-import std/[unittest, strformat]
+import std/unittest
 
 import ../celina/core/geometry
 
@@ -405,12 +405,11 @@ suite "Geometry Module Tests":
       check r.area() == 150000000000
 
     test "Position arithmetic edge cases":
-      let p1 = pos(0, 0)
-      let p2 = pos(-10, -20)
-      let p3 = pos(1000000, 2000000)
+      let p1 = pos(-10, -20)
+      let p2 = pos(1000000, 2000000)
 
-      let sum = p2 + p3
-      let diff = p3 - p2
+      let sum = p1 + p2
+      let diff = p2 - p1
 
       check sum.x == 999990
       check sum.y == 1999980

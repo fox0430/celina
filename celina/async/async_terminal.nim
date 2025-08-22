@@ -257,7 +257,7 @@ proc drawAsync*(
     terminal: AsyncTerminal, asyncBuffer: async_buffer.AsyncBuffer, force: bool = false
 ) {.async.} =
   ## Draw an AsyncBuffer to the terminal asynchronously
-  let buffer = asyncBuffer.toBuffer()
+  let buffer = asyncBuffer.toBufferAsync()
   await terminal.drawAsync(buffer, force)
 
 # Terminal state queries
