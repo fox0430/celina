@@ -3,48 +3,72 @@
 ## This module provides terminal control and rendering capabilities
 ## using ANSI escape sequences for POSIX systems (Linux, macOS, etc.).
 
-import std/[strformat, termios, posix]
-import geometry, colors, buffer
+import std/[strformat, termios, posix, os]
+import geometry, colors, buffer, errors
 
-type
-  Terminal* = ref object ## Terminal interface for screen management
-    size*: Size
-    alternateScreen*: bool
-    rawMode*: bool
-    mouseEnabled*: bool
-    lastBuffer*: Buffer
+export errors.TerminalError
 
-  TerminalError* = object of CatchableError
+type Terminal* = ref object ## Terminal interface for screen management
+  size*: Size
+  alternateScreen*: bool
+  rawMode*: bool
+  mouseEnabled*: bool
+  lastBuffer*: Buffer
+  rawModeEnabled: bool # Track raw mode state internally
 
 # Raw mode control (for key input)
 var originalTermios: Termios
 
 proc getTerminalSize*(): Size =
-  ## Get current terminal size
+  ## Get current terminal size with error handling
+  ## Raises TerminalError if unable to get size from system
   var w: IOctl_WinSize
-  if ioctl(STDOUT_FILENO, TIOCGWINSZ, addr w) == 0:
-    return size(w.ws_col.int, w.ws_row.int)
-  else:
-    return size(80, 24) # Fallback
+  discard checkSystemCall(
+    ioctl(STDOUT_FILENO, TIOCGWINSZ, addr w), "Failed to get terminal size"
+  )
+  return size(w.ws_col.int, w.ws_row.int)
+
+proc getTerminalSizeOrDefault*(): Size =
+  ## Get terminal size with fallback to default 80x24
+  ## Never raises an exception
+  try:
+    return getTerminalSize()
+  except CatchableError:
+    return size(80, 24) # Fallback size
 
 proc updateSize*(terminal: Terminal) =
   ## Update terminal size from current terminal
-  terminal.size = getTerminalSize()
+  ## Raises TerminalError if unable to get size
+  try:
+    terminal.size = getTerminalSize()
+  except CatchableError as e:
+    raise newTerminalError("Failed to update terminal size", inner = e)
 
 # Terminal creation and cleanup
 proc newTerminal*(): Terminal =
   ## Create a new Terminal instance
+  ## Uses default size if unable to get actual terminal size
   result = Terminal(
     size: size(80, 24), # Default size
     alternateScreen: false,
     rawMode: false,
     mouseEnabled: false,
+    rawModeEnabled: false,
   )
-  result.updateSize()
+  # Try to get actual size, but don't fail if we can't
+  result.size = getTerminalSizeOrDefault()
 
 proc enableRawMode*(terminal: Terminal) =
   ## Enable raw mode for direct key input
-  if tcgetattr(STDIN_FILENO, addr originalTermios) == 0:
+  ## Raises TerminalError if unable to configure terminal
+  if terminal.rawModeEnabled:
+    return # Already enabled
+
+  try:
+    checkSystemCallVoid(
+      tcgetattr(STDIN_FILENO, addr originalTermios), "Failed to get terminal attributes"
+    )
+
     var raw = originalTermios
     raw.c_lflag = raw.c_lflag and not (ECHO or ICANON or ISIG or IEXTEN)
     raw.c_iflag = raw.c_iflag and not (IXON or ICRNL or BRKINT or INPCK or ISTRIP)
@@ -53,28 +77,47 @@ proc enableRawMode*(terminal: Terminal) =
     raw.c_cc[VMIN] = 1.char
     raw.c_cc[VTIME] = 0.char
 
-    if tcsetattr(STDIN_FILENO, TCSAFLUSH, addr raw) == 0:
-      terminal.rawMode = true
+    checkSystemCallVoid(
+      tcsetattr(STDIN_FILENO, TCSAFLUSH, addr raw), "Failed to set raw mode"
+    )
+    terminal.rawMode = true
+    terminal.rawModeEnabled = true
+  except CatchableError as e:
+    raise newTerminalError("Failed to enable raw mode", inner = e)
 
 proc disableRawMode*(terminal: Terminal) =
-  ## Disable raw mode
-  if terminal.rawMode:
-    discard tcsetattr(STDIN_FILENO, TCSAFLUSH, addr originalTermios)
+  ## Disable raw mode, restoring original terminal settings
+  ## Best effort - doesn't raise on error to ensure cleanup
+  if not terminal.rawModeEnabled:
+    return # Not enabled
+
+  # Best effort restoration - log but don't raise
+  if tcsetattr(STDIN_FILENO, TCSAFLUSH, addr originalTermios) == -1:
+    when defined(celinaDebug):
+      stderr.writeLine("Warning: Failed to restore terminal settings")
   terminal.rawMode = false
+  terminal.rawModeEnabled = false
 
 # Alternate screen control
 proc enableAlternateScreen*(terminal: Terminal) =
   ## Switch to alternate screen buffer
+  ## Raises IOError if unable to write to terminal
   if not terminal.alternateScreen:
-    stdout.write("\e[?1049h") # Enable alternate screen
-    stdout.flushFile()
+    tryIO:
+      stdout.write("\e[?1049h") # Enable alternate screen
+      stdout.flushFile()
     terminal.alternateScreen = true
 
 proc disableAlternateScreen*(terminal: Terminal) =
   ## Switch back to main screen buffer
+  ## Best effort - doesn't raise on error to ensure cleanup
   if terminal.alternateScreen:
-    stdout.write("\e[?1049l") # Disable alternate screen
-    stdout.flushFile()
+    try:
+      stdout.write("\e[?1049l") # Disable alternate screen
+      stdout.flushFile()
+    except CatchableError:
+      when defined(celinaDebug):
+        stderr.writeLine("Warning: Failed to disable alternate screen")
     terminal.alternateScreen = false
 
 # Mouse control
@@ -126,15 +169,24 @@ proc setCursorPos*(pos: Position) =
 # Screen control
 proc clearScreen*() =
   ## Clear the entire screen
-  stdout.write("\e[2J")
+  ## Raises IOError if unable to write to terminal
+  tryIO:
+    stdout.write("\e[2J")
+    stdout.flushFile()
 
 proc clearLine*() =
   ## Clear the current line
-  stdout.write("\e[2K")
+  ## Raises IOError if unable to write to terminal
+  tryIO:
+    stdout.write("\e[2K")
+    stdout.flushFile()
 
 proc clearToEndOfLine*() =
   ## Clear from cursor to end of line
-  stdout.write("\e[0K")
+  ## Raises IOError if unable to write to terminal
+  tryIO:
+    stdout.write("\e[0K")
+    stdout.flushFile()
 
 proc clearToStartOfLine*() =
   ## Clear from start of line to cursor
@@ -172,10 +224,10 @@ proc render*(terminal: Terminal, buffer: Buffer) =
     # Update last buffer
     terminal.lastBuffer = buffer
     stdout.flushFile()
-  except IOError as e:
-    raise newException(TerminalError, "Failed to render buffer: " & e.msg)
+  except CelinaIOError as e:
+    raise newTerminalError("Failed to render buffer", inner = e)
   except CatchableError as e:
-    raise newException(TerminalError, "Rendering error: " & e.msg)
+    raise newTerminalError("Rendering error", inner = e)
 
 proc renderFull*(terminal: Terminal, buffer: Buffer) =
   ## Force a full render of the buffer (useful for initial draw)
@@ -190,10 +242,10 @@ proc renderFull*(terminal: Terminal, buffer: Buffer) =
 
     terminal.lastBuffer = buffer
     stdout.flushFile()
-  except IOError as e:
-    raise newException(TerminalError, "Failed to render full buffer: " & e.msg)
+  except CelinaIOError as e:
+    raise newTerminalError("Failed to render full buffer", inner = e)
   except CatchableError as e:
-    raise newException(TerminalError, "Full rendering error: " & e.msg)
+    raise newTerminalError("Full rendering error", inner = e)
 
 # Terminal setup and cleanup
 proc setup*(terminal: Terminal) =
@@ -206,12 +258,21 @@ proc setup*(terminal: Terminal) =
 
 proc setupWithMouse*(terminal: Terminal) =
   ## Setup terminal for CLI mode with mouse support
-  terminal.setup()
-  terminal.enableMouse()
+  ## Raises TerminalError if setup fails
+  try:
+    terminal.setup()
+    terminal.enableMouse()
+  except CatchableError as e:
+    raise newTerminalError("Failed to setup terminal with mouse", inner = e)
 
 proc cleanup*(terminal: Terminal) =
-  ## Cleanup and restore terminal
-  showCursor()
+  ## Cleanup terminal, restoring original settings
+  ## Best effort - tries to restore everything even if some operations fail
+  try:
+    showCursor()
+  except CatchableError:
+    discard
+
   terminal.disableMouse()
   terminal.disableRawMode()
   terminal.disableAlternateScreen()
@@ -231,11 +292,8 @@ proc draw*(terminal: Terminal, buffer: Buffer, force: bool = false) =
       terminal.renderFull(buffer)
     else:
       terminal.render(buffer)
-  except TerminalError:
-    # Re-raise terminal errors
-    raise
   except CatchableError as e:
-    raise newException(TerminalError, "Draw operation failed: " & e.msg)
+    raise newTerminalError("Draw operation failed", inner = e)
 
 # Terminal state queries
 proc isRawMode*(terminal: Terminal): bool =
@@ -269,8 +327,12 @@ proc withTerminal*[T](terminal: Terminal, body: proc(): T): T =
 
 template withTerminal*(terminal: Terminal, body: untyped): untyped =
   ## Template version for convenient usage
-  terminal.setup()
+  ## Ensures cleanup even if setup or body fails
   try:
-    body
-  finally:
-    terminal.cleanup()
+    terminal.setup()
+    try:
+      body
+    finally:
+      terminal.cleanup()
+  except CatchableError as e:
+    raise newTerminalError("withTerminal operation failed", inner = e)
