@@ -2,7 +2,7 @@ nimcache/
 nimblecache/
 htmldocs/
 
-src/celina
+celina.out
 
 tests/*
 !tests/*.*

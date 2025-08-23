@@ -33,7 +33,7 @@ suite "Terminal Module Tests":
         # Common terminal sizes should be reasonable
         check termSize.width >= 20
         check termSize.height >= 5
-      except SystemCallError:
+      except TerminalError:
         # CI environments may not have a real terminal
         skip()
 
@@ -197,7 +197,7 @@ suite "Terminal Module Tests":
         # Should work on POSIX platforms (Linux, macOS, etc.)
         check size.width > 0
         check size.height > 0
-      except SystemCallError:
+      except TerminalError:
         # CI environments may not have a real terminal, use fallback
         size = getTerminalSizeOrDefault()
         check size.width == 80 # Default fallback size

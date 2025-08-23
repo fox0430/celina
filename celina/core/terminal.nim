@@ -3,8 +3,8 @@
 ## This module provides terminal control and rendering capabilities
 ## using ANSI escape sequences for POSIX systems (Linux, macOS, etc.).
 
-import std/[strformat, termios, posix]
-import geometry, colors, buffer, errors
+import std/[termios, posix]
+import geometry, colors, buffer, errors, terminal_common
 
 export errors.TerminalError
 
@@ -22,19 +22,15 @@ var originalTermios: Termios
 proc getTerminalSize*(): Size =
   ## Get current terminal size with error handling
   ## Raises TerminalError if unable to get size from system
-  var w: IOctl_WinSize
-  discard checkSystemCall(
-    ioctl(STDOUT_FILENO, TIOCGWINSZ, addr w), "Failed to get terminal size"
-  )
-  return size(w.ws_col.int, w.ws_row.int)
+  let (width, height, success) = getTerminalSizeFromSystem()
+  if not success:
+    raise newTerminalError("Failed to get terminal size")
+  return size(width, height)
 
 proc getTerminalSizeOrDefault*(): Size =
   ## Get terminal size with fallback to default 80x24
   ## Never raises an exception
-  try:
-    return getTerminalSize()
-  except CatchableError:
-    return size(80, 24) # Fallback size
+  return getTerminalSizeWithFallback(80, 24)
 
 proc updateSize*(terminal: Terminal) =
   ## Update terminal size from current terminal
@@ -70,12 +66,7 @@ proc enableRawMode*(terminal: Terminal) =
     )
 
     var raw = originalTermios
-    raw.c_lflag = raw.c_lflag and not (ECHO or ICANON or ISIG or IEXTEN)
-    raw.c_iflag = raw.c_iflag and not (IXON or ICRNL or BRKINT or INPCK or ISTRIP)
-    raw.c_cflag = raw.c_cflag or CS8
-    raw.c_oflag = raw.c_oflag and not OPOST
-    raw.c_cc[VMIN] = 1.char
-    raw.c_cc[VTIME] = 0.char
+    applyTerminalConfig(raw, getRawModeConfig())
 
     checkSystemCallVoid(
       tcsetattr(STDIN_FILENO, TCSAFLUSH, addr raw), "Failed to set raw mode"
@@ -104,7 +95,7 @@ proc enableAlternateScreen*(terminal: Terminal) =
   ## Raises IOError if unable to write to terminal
   if not terminal.alternateScreen:
     tryIO:
-      stdout.write("\e[?1049h") # Enable alternate screen
+      stdout.write(AlternateScreenEnter)
       stdout.flushFile()
     terminal.alternateScreen = true
 
@@ -113,7 +104,7 @@ proc disableAlternateScreen*(terminal: Terminal) =
   ## Best effort - doesn't raise on error to ensure cleanup
   if terminal.alternateScreen:
     try:
-      stdout.write("\e[?1049l") # Disable alternate screen
+      stdout.write(AlternateScreenExit)
       stdout.flushFile()
     except CatchableError:
       when defined(celinaDebug):
@@ -124,73 +115,59 @@ proc disableAlternateScreen*(terminal: Terminal) =
 proc enableMouse*(terminal: Terminal) =
   ## Enable mouse reporting
   if not terminal.mouseEnabled:
-    # Enable X10 mouse reporting
-    stdout.write("\e[?9h")
-    # Enable mouse button tracking
-    stdout.write("\e[?1000h")
-    # Enable mouse motion tracking
-    stdout.write("\e[?1002h")
-    # Enable all mouse events including focus
-    stdout.write("\e[?1003h")
-    # Enable SGR extended mouse mode
-    stdout.write("\e[?1006h")
+    stdout.write(enableMouseMode(MouseSGR))
     stdout.flushFile()
     terminal.mouseEnabled = true
 
 proc disableMouse*(terminal: Terminal) =
   ## Disable mouse reporting
   if terminal.mouseEnabled:
-    # Disable all mouse modes in reverse order
-    stdout.write("\e[?1006l") # Disable SGR extended mode
-    stdout.write("\e[?1003l") # Disable all mouse events
-    stdout.write("\e[?1002l") # Disable mouse motion tracking
-    stdout.write("\e[?1000l") # Disable mouse button tracking
-    stdout.write("\e[?9l") # Disable X10 mouse reporting
+    stdout.write(disableMouseMode(MouseSGR))
     stdout.flushFile()
     terminal.mouseEnabled = false
 
 # Cursor control
 proc hideCursor*() =
   ## Hide the cursor
-  stdout.write("\e[?25l")
+  stdout.write(HideCursorSeq)
 
 proc showCursor*() =
   ## Show the cursor
-  stdout.write("\e[?25h")
+  stdout.write(ShowCursorSeq)
 
 proc setCursorPos*(x, y: int) =
   ## Set cursor position (1-based coordinates)
-  stdout.write(&"\e[{y + 1};{x + 1}H")
+  stdout.write(makeCursorPositionSeq(x, y))
 
 proc setCursorPos*(pos: Position) =
   ## Set cursor position
-  setCursorPos(pos.x, pos.y)
+  stdout.write(makeCursorPositionSeq(pos))
 
 # Screen control
 proc clearScreen*() =
   ## Clear the entire screen
   ## Raises IOError if unable to write to terminal
   tryIO:
-    stdout.write("\e[2J")
+    stdout.write(ClearScreenSeq)
     stdout.flushFile()
 
 proc clearLine*() =
   ## Clear the current line
   ## Raises IOError if unable to write to terminal
   tryIO:
-    stdout.write("\e[2K")
+    stdout.write(ClearLineSeq)
     stdout.flushFile()
 
 proc clearToEndOfLine*() =
   ## Clear from cursor to end of line
   ## Raises IOError if unable to write to terminal
   tryIO:
-    stdout.write("\e[0K")
+    stdout.write(ClearToEndOfLineSeq)
     stdout.flushFile()
 
 proc clearToStartOfLine*() =
   ## Clear from start of line to cursor
-  stdout.write("\e[1K")
+  stdout.write(ClearToStartOfLineSeq)
 
 # Buffer rendering
 proc renderCell*(cell: Cell, x, y: int) =
@@ -209,21 +186,14 @@ proc renderCell*(cell: Cell, x, y: int) =
 proc render*(terminal: Terminal, buffer: Buffer) =
   ## Render a buffer to the terminal using differential updates
   try:
-    if terminal.lastBuffer.area != buffer.area:
-      # Size changed, full redraw needed
-      clearScreen()
-      terminal.lastBuffer = newBuffer(buffer.area)
+    let output = buildDifferentialOutput(terminal.lastBuffer, buffer)
 
-    # Calculate differences and render only changed cells
-    let changes = terminal.lastBuffer.diff(buffer)
-
-    for change in changes:
-      let absolutePos = pos(buffer.area.x + change.pos.x, buffer.area.y + change.pos.y)
-      renderCell(change.cell, absolutePos.x, absolutePos.y)
+    if output.len > 0:
+      stdout.write(output)
+      stdout.flushFile()
 
     # Update last buffer
     terminal.lastBuffer = buffer
-    stdout.flushFile()
   except CelinaIOError as e:
     raise newTerminalError("Failed to render buffer", inner = e)
   except CatchableError as e:
@@ -232,16 +202,11 @@ proc render*(terminal: Terminal, buffer: Buffer) =
 proc renderFull*(terminal: Terminal, buffer: Buffer) =
   ## Force a full render of the buffer (useful for initial draw)
   try:
-    clearScreen()
-
-    for y in 0 ..< buffer.area.height:
-      for x in 0 ..< buffer.area.width:
-        let cell = buffer[x, y]
-        if not cell.isEmpty or cell.style != defaultStyle():
-          renderCell(cell, buffer.area.x + x, buffer.area.y + y)
+    let output = buildFullRenderOutput(buffer)
+    stdout.write(output)
+    stdout.flushFile()
 
     terminal.lastBuffer = buffer
-    stdout.flushFile()
   except CelinaIOError as e:
     raise newTerminalError("Failed to render full buffer", inner = e)
   except CatchableError as e:
