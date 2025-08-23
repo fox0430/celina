@@ -22,6 +22,7 @@ suite "Celina Main Module Tests":
         mouseCapture: true,
         rawMode: false,
         windowMode: true,
+        targetFps: 30,
       )
       let app = newApp(config)
       check not app.isNil
@@ -66,9 +67,11 @@ suite "Celina Main Module Tests":
         mouseCapture: false,
         rawMode: true,
         windowMode: false,
+        targetFps: 60,
       )
       check config.title == "Export Test"
       check config.alternateScreen == true
+      check config.targetFps == 60
 
   suite "Window Management API":
     test "app without window mode handles gracefully":
@@ -215,3 +218,74 @@ suite "Integration Tests":
 
       let handled = app.handleWindowEvent(Event(kind: EventKind.Unknown))
       check handled == false
+
+  suite "FPS Control API":
+    test "default FPS is 60":
+      let app = newApp()
+      check app.getTargetFps() == 60
+
+    test "FPS can be set and retrieved":
+      let app = newApp()
+      app.setTargetFps(30)
+      check app.getTargetFps() == 30
+      
+      app.setTargetFps(120)
+      check app.getTargetFps() == 120
+
+    test "FPS validation - valid range":
+      let app = newApp()
+      
+      # Test valid values
+      app.setTargetFps(1)
+      check app.getTargetFps() == 1
+      
+      app.setTargetFps(60)
+      check app.getTargetFps() == 60
+      
+      app.setTargetFps(120)
+      check app.getTargetFps() == 120
+
+    test "FPS validation - invalid range throws exception":
+      let app = newApp()
+      
+      # Test invalid values
+      expect(ValueError):
+        app.setTargetFps(0)
+      
+      expect(ValueError):
+        app.setTargetFps(-10)
+      
+      expect(ValueError):
+        app.setTargetFps(121)
+      
+      expect(ValueError):
+        app.setTargetFps(1000)
+
+    test "getCurrentFps returns non-negative value":
+      let app = newApp()
+      let fps = app.getCurrentFps()
+      check fps >= 0.0
+
+    test "AppConfig accepts targetFps":
+      let config = AppConfig(
+        title: "FPS Test",
+        targetFps: 45,
+      )
+      let app = newApp(config)
+      check app.getTargetFps() == 45
+
+    test "frame timeout calculation":
+      let app = newApp()
+      
+      # Test different FPS values and their expected timeouts
+      app.setTargetFps(60)
+      # 1000ms / 60fps = 16.67ms ≈ 16ms (integer division)
+      check app.getTargetFps() == 60
+      
+      app.setTargetFps(30)
+      # 1000ms / 30fps = 33.33ms ≈ 33ms
+      check app.getTargetFps() == 30
+      
+      app.setTargetFps(120)
+      # 1000ms / 120fps = 8.33ms ≈ 8ms
+      check app.getTargetFps() == 120
