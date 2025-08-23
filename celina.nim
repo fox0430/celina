@@ -129,7 +129,7 @@ proc newApp*(
     eventHandler: nil,
     renderHandler: nil,
     windowMode: config.windowMode,
-    targetFps: config.targetFps,
+    targetFps: if config.targetFps > 0: config.targetFps else: 60,
     frameCounter: 0,
     lastFpsTime: epochTime(),
   )
