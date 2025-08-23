@@ -123,8 +123,9 @@ proc draw256ColorComparison(buf: var Buffer, x, y: int) =
 
   # Draw true color grayscale
   buf.setString(x, y + 3, "True color grayscale:", Style(fg: color(BrightWhite)))
-  for i in 0 .. 23:
-    let value = (i.float / 23.0 * 255.0).uint8
+  let width = min(buf.area.width - x - 20, 128) # Use up to 128 steps or available width
+  for i in 0 ..< width:
+    let value = (i.float / (width - 1).float * 255.0).uint8
     let gray = rgb(value, value, value)
     buf.setString(x + 20 + i, y + 3, " ", Style(bg: gray))
 
