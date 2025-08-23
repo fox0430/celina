@@ -286,3 +286,13 @@ suite "Integration Tests":
       app.setTargetFps(120)
       # 1000ms / 120fps = 8.33ms ≈ 8ms
       check app.getTargetFps() == 120
+
+    test "default FPS is applied when not specified in config":
+      # Test that config without targetFps uses default 60 FPS
+      let configWithoutFps = AppConfig(title: "No FPS Test")
+      let app1 = newApp(configWithoutFps)
+      check app1.getTargetFps() == 60  # Should use default
+
+      # Test that newApp() without config uses default
+      let app2 = newApp()
+      check app2.getTargetFps() == 60  # Should use default
