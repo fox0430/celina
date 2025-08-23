@@ -4,14 +4,16 @@ on:
   pull_request:
     paths:
       - '.github/workflows/test.yaml'
+      - 'celina.nim'
       - 'celina.nimble'
-      - 'src/**'
+      - 'celina/**'
       - 'tests/**'
   push:
     paths:
       - '.github/workflows/test.yaml'
+      - 'celina.nim'
       - 'celina.nimble'
-      - 'src/**'
+      - 'celina/**'
       - 'tests/**'
     branches:
       - main
