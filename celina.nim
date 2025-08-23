@@ -29,7 +29,7 @@
 ##   waitFor main()
 ## ```
 
-import std/[options, unicode]
+import std/[options, unicode, times]
 
 import
   celina/core/[geometry, colors, buffer, events, terminal, layout, errors, resources]
@@ -85,6 +85,9 @@ type
     eventHandler: proc(event: Event): bool
     renderHandler: proc(buffer: var Buffer)
     windowMode: bool ## Whether to use window management
+    targetFps: int ## Current target FPS
+    frameCounter: int ## Frame counter for FPS calculation
+    lastFpsTime: float ## Last time FPS was calculated
 
   ## Application configuration options
   AppConfig* = object
@@ -93,6 +96,7 @@ type
     mouseCapture*: bool
     rawMode*: bool
     windowMode*: bool ## Enable window management
+    targetFps*: int ## Target FPS for rendering (default: 60)
 
 # ============================================================================
 # App Creation and Configuration
@@ -105,6 +109,7 @@ proc newApp*(
       mouseCapture: false,
       rawMode: true,
       windowMode: false,
+      targetFps: 60,
     )
 ): App =
   ## Create a new CLI application with the specified configuration
@@ -124,6 +129,9 @@ proc newApp*(
     eventHandler: nil,
     renderHandler: nil,
     windowMode: config.windowMode,
+    targetFps: config.targetFps,
+    frameCounter: 0,
+    lastFpsTime: epochTime(),
   )
 
   # Initialize buffer based on terminal size
@@ -245,8 +253,11 @@ proc tick(app: App): bool =
         if not app.eventHandler(resizeEvent):
           return false
 
-    # Event polling with timeout (16ms = ~60 FPS)
-    if events.pollEvents(16):
+    # Calculate frame timeout based on target FPS
+    let frameTimeoutMs = 1000 div app.targetFps
+
+    # Event polling with dynamic timeout based on FPS
+    if events.pollEvents(frameTimeoutMs):
       # Events are available - process them in batch
       var eventCount = 0
       const maxEventsPerTick = 5 # Limit events per frame for smooth rendering
@@ -274,6 +285,9 @@ proc tick(app: App): bool =
     # Always render - either after processing events or on timeout
     app.render
 
+    # Update frame counter for FPS calculation
+    app.frameCounter.inc()
+
     return not app.shouldQuit
   except TerminalError:
     # Terminal errors should propagate up
@@ -291,6 +305,7 @@ proc run*(
       mouseCapture: false,
       rawMode: true,
       windowMode: false,
+      targetFps: 60,
     ),
 ) =
   ## Run the application main loop
@@ -350,6 +365,29 @@ proc run*(
 proc quit*(app: App) =
   ## Signal the application to quit gracefully
   app.shouldQuit = true
+
+proc setTargetFps*(app: App, fps: int) =
+  ## Set the target FPS for the application
+  ## FPS must be between 1 and 120
+  if fps >= 1 and fps <= 120:
+    app.targetFps = fps
+  else:
+    raise newException(ValueError, "FPS must be between 1 and 120")
+
+proc getTargetFps*(app: App): int =
+  ## Get the current target FPS
+  app.targetFps
+
+proc getCurrentFps*(app: App): float =
+  ## Get the current actual FPS based on frame counter
+  let currentTime = epochTime()
+  let elapsed = currentTime - app.lastFpsTime
+  if elapsed >= 1.0: # Update FPS every second
+    let fps = app.frameCounter.float / elapsed
+    app.lastFpsTime = currentTime
+    app.frameCounter = 0
+    return fps
+  return 0.0 # Not enough time elapsed for accurate measurement
 
 # ============================================================================
 # Window Management Integration
@@ -434,6 +472,7 @@ proc quickRun*(
       mouseCapture: false,
       rawMode: true,
       windowMode: false,
+      targetFps: 60,
     ),
 ) =
   ## Quick way to run a simple CLI application
