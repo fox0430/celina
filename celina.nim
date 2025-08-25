@@ -40,10 +40,6 @@ export
   geometry, colors, buffer, events, layout, terminal, windows, text, base, unicode,
   errors, resources, async_backend, hasAsyncSupport, hasChronos, hasAsyncDispatch
 
-when hasAsyncSupport:
-  when hasChronos:
-    import std/times
-
 # ============================================================================
 # Synchronous API
 # ============================================================================
