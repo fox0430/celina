@@ -24,6 +24,10 @@ jobs:
         nim-version: 'stable'
         repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Install deps
+      run: |
+        nimble install --depsOnly
+
     - name: Gen docs
       run: |
         nim doc --project --index:on --outdir:./htmldocs -d:asyncBackend=asyncdispatch ./celina.nim
