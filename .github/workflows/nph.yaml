@@ -4,8 +4,9 @@ on:
   pull_request:
     paths:
       - '.github/workflows/nph.yaml'
+      - 'celina.nim'
       - 'celina.nimble'
-      - 'src/**'
+      - 'celina/**'
       - 'tests/**'
       - 'examples/**'
 
