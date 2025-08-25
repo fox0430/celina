@@ -5,11 +5,9 @@
 
 import std/[sequtils, options, atomics]
 
-import pkg/chronos
-
+import async_backend, async_buffer
 import ../core/[geometry, buffer, colors, events]
 import ../widgets/windows
-import async_buffer
 
 export
   WindowId, Window, WindowState, WindowBorder, BorderChars, EventPhase, WindowEvent,
@@ -72,7 +70,7 @@ proc destroyAsyncWindowManager*(awm: AsyncWindowManager) {.async.} =
     awm.focusedWindow = none(WindowId)
 
   # Yield to allow cleanup to complete
-  await sleepAsync(chronos.milliseconds(0))
+  await sleepMs(0)
 
 # ============================================================================
 # Async Window Operations
@@ -80,12 +78,12 @@ proc destroyAsyncWindowManager*(awm: AsyncWindowManager) {.async.} =
 
 proc getWindowAsync*(
     awm: AsyncWindowManager, windowId: WindowId
-): Future[Option[Window]] {.async, gcsafe.} =
+): Future[Option[Window]] {.async.} =
   ## Get a window by ID asynchronously
   if awm.isNil:
     return none(Window)
 
-  await sleepAsync(chronos.milliseconds(0)) # Yield to other tasks
+  await sleepMs(0) # Yield to other tasks
 
   awm.withLock:
     for window in awm.windows:
@@ -95,7 +93,7 @@ proc getWindowAsync*(
 
 proc addWindowAsync*(
     awm: AsyncWindowManager, window: Window
-): Future[WindowId] {.async, gcsafe.} =
+): Future[WindowId] {.async.} =
   ## Add a window to the manager and return its ID asynchronously
   if awm.isNil or window.isNil:
     raise newException(AsyncWindowError, "AsyncWindowManager or Window is nil")
@@ -111,14 +109,14 @@ proc addWindowAsync*(
       awm.focusedWindow = some(window.id)
       window.focused = true
 
-  await sleepAsync(chronos.milliseconds(0))
+  await sleepMs(0)
   return window.id
 
 proc removeWindowAsync*(
     awm: AsyncWindowManager, windowId: WindowId
-): Future[bool] {.async, gcsafe.} =
+): Future[bool] {.async.} =
   ## Remove a window from the manager asynchronously
-  await sleepAsync(chronos.milliseconds(0))
+  await sleepMs(0)
 
   awm.withLock:
     var windowToRemove: Option[Window] = none(Window)
@@ -151,12 +149,12 @@ proc removeWindowAsync*(
 
 proc focusWindowAsync*(
     awm: AsyncWindowManager, windowId: WindowId
-): Future[bool] {.async, gcsafe.} =
+): Future[bool] {.async.} =
   ## Focus a specific window asynchronously
   if awm.isNil:
     return false
 
-  await sleepAsync(chronos.milliseconds(0))
+  await sleepMs(0)
 
   awm.withLock:
     # Unfocus all windows
@@ -177,14 +175,12 @@ proc focusWindowAsync*(
         result = true
         break
 
-proc getFocusedWindowAsync*(
-    awm: AsyncWindowManager
-): Future[Option[Window]] {.async, gcsafe.} =
+proc getFocusedWindowAsync*(awm: AsyncWindowManager): Future[Option[Window]] {.async.} =
   ## Get the currently focused window asynchronously
   if awm.isNil:
     return none(Window)
 
-  await sleepAsync(chronos.milliseconds(0))
+  await sleepMs(0)
 
   awm.withLock:
     if awm.focusedWindow.isSome():
@@ -194,14 +190,12 @@ proc getFocusedWindowAsync*(
           result = some(window)
           break
 
-proc getVisibleWindowsAsync*(
-    awm: AsyncWindowManager
-): Future[seq[Window]] {.async, gcsafe.} =
+proc getVisibleWindowsAsync*(awm: AsyncWindowManager): Future[seq[Window]] {.async.} =
   ## Get all visible windows sorted by Z-index asynchronously
   if awm.isNil:
     return @[]
 
-  await sleepAsync(chronos.milliseconds(0))
+  await sleepMs(0)
 
   awm.withLock:
     for window in awm.windows:
@@ -210,7 +204,7 @@ proc getVisibleWindowsAsync*(
 
 proc findWindowAtAsync*(
     awm: AsyncWindowManager, pos: Position
-): Future[Option[Window]] {.async, gcsafe.} =
+): Future[Option[Window]] {.async.} =
   ## Find the topmost window at the given position asynchronously
   let visibleWindows = await awm.getVisibleWindowsAsync()
 
@@ -321,7 +315,7 @@ proc drawAsyncWindowBorder(window: Window, destBuffer: var Buffer) =
 
 proc renderAsync*(
     awm: AsyncWindowManager, destBuffer: async_buffer.AsyncBuffer
-): Future[void] {.async, gcsafe.} =
+): Future[void] {.async.} =
   ## Render all windows to the destination buffer asynchronously
   let visibleWindows = await awm.getVisibleWindowsAsync()
 
@@ -349,7 +343,7 @@ proc renderAsync*(
       await destBuffer.mergeAsync(asyncWindowBuffer, pos(window.area.x, window.area.y))
 
   # Yield to allow other async operations
-  await sleepAsync(chronos.milliseconds(0))
+  await sleepMs(0)
 
 proc renderSync*(awm: AsyncWindowManager, destBuffer: var Buffer) =
   ## Synchronous render for compatibility with existing sync code
@@ -379,15 +373,15 @@ proc renderSync*(awm: AsyncWindowManager, destBuffer: var Buffer) =
 
 proc bringToFrontAsync*(
     awm: AsyncWindowManager, windowId: WindowId
-): Future[bool] {.async, gcsafe.} =
+): Future[bool] {.async.} =
   ## Bring a window to the front asynchronously
   return await awm.focusWindowAsync(windowId)
 
 proc sendToBackAsync*(
     awm: AsyncWindowManager, windowId: WindowId
-): Future[bool] {.async, gcsafe.} =
+): Future[bool] {.async.} =
   ## Send a window to the back asynchronously
-  await sleepAsync(chronos.milliseconds(0))
+  await sleepMs(0)
 
   awm.withLock:
     let windowOpt = getWindowHelper(awm, windowId)
@@ -402,9 +396,9 @@ proc sendToBackAsync*(
 
 proc resizeWindowAsync*(
     awm: AsyncWindowManager, windowId: WindowId, newSize: Size
-): Future[bool] {.async, gcsafe.} =
+): Future[bool] {.async.} =
   ## Resize a window asynchronously
-  await sleepAsync(chronos.milliseconds(0))
+  await sleepMs(0)
 
   awm.withLock:
     let windowOpt = getWindowHelper(awm, windowId)
@@ -421,9 +415,9 @@ proc resizeWindowAsync*(
 
 proc moveWindowAsync*(
     awm: AsyncWindowManager, windowId: WindowId, newPos: Position
-): Future[bool] {.async, gcsafe.} =
+): Future[bool] {.async.} =
   ## Move a window to a new position asynchronously
-  await sleepAsync(chronos.milliseconds(0))
+  await sleepMs(0)
 
   awm.withLock:
     let windowOpt = getWindowHelper(awm, windowId)

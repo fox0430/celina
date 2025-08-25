@@ -13,8 +13,8 @@ import std/[os, strformat, times, strutils, algorithm, options, sequtils]
 
 import pkg/celina
 
-when not defined(asyncBackend) or asyncBackend != "chronos":
-  {.fatal: "This example require `-d:asyncBackend=chronos`".}
+when not hasAsyncSupport and not hasAsyncDispatch and not hasChronos:
+  {.fatal: "This example require `-d:asyncBackend=asyncdispatch|chronos`".}
 
 type
   # Performance optimization flags
@@ -96,7 +96,7 @@ proc loadDirectoryAsync(
   fm.updateFlags.status = true
 
   # Yield to allow UI update
-  await sleepAsync(chronos.milliseconds(1))
+  await sleepMs(1)
 
   try:
     result = @[]
@@ -155,7 +155,7 @@ proc loadDirectoryAsync(
     fm.isLoading = false
 
   # Small delay to show loading state
-  await sleepAsync(chronos.milliseconds(50))
+  await sleepMs(50)
 
 proc updateDirectoryWindowAsync(fm: FileManagerApp): Future[void] {.async.} =
   ## Update the directory listing window

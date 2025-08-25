@@ -1,13 +1,11 @@
 ## Async event handling
 ##
 ## This module provides asynchronous event handling for keyboard input,
-## mouse events, and other terminal events using Chronos async framework.
+## mouse events, and other terminal events using either Chronos or std/asyncdispatch.
 
 import std/[posix, options]
 
-import pkg/chronos
-
-import async_io
+import async_backend, async_io
 import ../core/events
 
 # Define SIGWINCH if not available
@@ -124,7 +122,7 @@ proc readKeyAsync*(): Future[Event] {.async.} =
       return Event(kind: Quit)
     else:
       return Event(kind: Key, key: KeyEvent(code: Char, char: ch))
-  except AsyncError as e:
+  except Exception as e:
     raise newException(AsyncEventError, "Async key reading failed: " & e.msg)
   except CatchableError:
     return Event(kind: Unknown)
@@ -143,7 +141,7 @@ proc pollKeyAsync*(): Future[Option[Event]] {.async.} =
   ## Poll for a key event asynchronously (non-blocking)
   try:
     # Check if input is available first
-    let hasInput = await hasInputAsync(chronos.milliseconds(1))
+    let hasInput = await hasInputAsync(1)
     if not hasInput:
       return none(Event)
 
@@ -153,7 +151,7 @@ proc pollKeyAsync*(): Future[Option[Event]] {.async.} =
       return some(event)
     else:
       return none(Event)
-  except AsyncError as e:
+  except Exception as e:
     raise newException(AsyncEventError, "Async key polling failed: " & e.msg)
   except CatchableError:
     return none(Event)
@@ -171,8 +169,8 @@ proc pollEventsAsync*(timeoutMs: int): Future[bool] {.async.} =
   ## Poll for available events asynchronously with a timeout
   ## Returns true if events are available, false if timeout occurred
   try:
-    return await hasInputAsync(chronos.milliseconds(timeoutMs))
-  except AsyncError as e:
+    return await hasInputAsync(timeoutMs)
+  except Exception as e:
     raise newException(AsyncEventError, "Async event polling failed: " & e.msg)
   except CatchableError:
     return false
@@ -185,13 +183,13 @@ proc waitForKeyAsync*(): Future[Event] {.async.} =
       let event = await readKeyAsync()
       if event.kind != Unknown:
         return event
-    except AsyncError as e:
+    except Exception as e:
       raise newException(AsyncEventError, "Async key waiting failed: " & e.msg)
     except CatchableError:
       discard
 
     # Small async sleep to prevent busy waiting
-    await sleepAsync(chronos.milliseconds(10))
+    await sleepMs(10)
 
 proc waitForAnyKeyAsync*(): Future[bool] {.async.} =
   ## Wait for any key press asynchronously, return true if not quit
@@ -213,7 +211,7 @@ proc waitForMultipleEventsAsync*(): Future[Event] {.async.} =
       return keyEventOpt.get()
 
     # Small sleep to prevent busy waiting
-    await sleepAsync(chronos.milliseconds(16)) # ~60 FPS
+    await sleepMs(16) # ~60 FPS
 
 # Async event stream
 type AsyncEventStream* = ref object
@@ -238,7 +236,7 @@ proc startAsync*(stream: AsyncEventStream) {.async.} =
         let shouldContinue = await stream.eventCallback(event)
         if not shouldContinue:
           stream.running = false
-    except:
+    except CatchableError:
       # Any errors should stop the stream for now
       stream.running = false
 

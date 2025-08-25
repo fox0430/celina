@@ -34,42 +34,11 @@ import std/[options, unicode, times]
 import
   celina/core/[geometry, colors, buffer, events, terminal, layout, errors, resources]
 import celina/widgets/[text, base, windows]
+import celina/async/async_backend
 
 export
   geometry, colors, buffer, events, layout, terminal, windows, text, base, unicode,
-  errors, resources
-
-# Async backend configuration. `-d:none|chronos`
-const asyncBackend* {.strdefine.} = "none"
-
-when asyncBackend == "none":
-  const
-    hasAsyncSupport* = false
-    hasChronos* = false
-elif asyncBackend == "chronos":
-  const
-    hasAsyncSupport* = true
-    hasChronos* = true
-else:
-  {.fatal: "Unknown asyncBackend. `-d:none|asyncBackend`".}
-
-when hasAsyncSupport and hasChronos:
-  import std/times
-
-  import pkg/chronos
-
-  import celina/async/async_app as asyncApp
-  import
-    celina/async/[async_terminal, async_events, async_io, async_buffer, async_windows]
-
-  export chronos
-  export async_app, async_terminal, async_events, async_io, async_buffer, async_windows
-
-  type AsyncPerfMonitor* = ref object
-    frameCount: int
-    eventCount: int
-    startTime: float
-    lastUpdate: float
+  errors, resources, async_backend, hasAsyncSupport, hasChronos, hasAsyncDispatch
 
 # ============================================================================
 # Synchronous API
@@ -504,6 +473,12 @@ proc quickRun*(
 # ============================================================================
 
 when hasAsyncSupport and hasChronos:
+  type AsyncPerfMonitor* = ref object
+    frameCount: int
+    eventCount: int
+    startTime: float
+    lastUpdate: float
+
   # Utility function to convert async to sync
   proc asyncToSync*[T](asyncProc: Future[T]): T =
     ## Convert async procedure to synchronous (blocks until complete)
