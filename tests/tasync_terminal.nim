@@ -1,11 +1,12 @@
 # Tests for async_terminal module
 
-import std/unittest
+import std/[unittest, strutils]
 
 import ../celina/async/[async_backend, async_buffer]
 import ../celina/core/[geometry, colors, buffer, errors]
 
 import ../celina/async/async_terminal {.all.}
+import ../celina/core/terminal_common
 
 # Test helpers
 proc createTestBuffer(width, height: int, fillChar: string = " "): Buffer =
@@ -390,3 +391,48 @@ suite "AsyncTerminal Boundary Conditions":
     # Accessing out-of-bounds should be safe
     let outOfBounds = buffer[100, 100]
     check outOfBounds.symbol == " " # Should return empty cell
+
+suite "AsyncTerminal Common Module Integration":
+  test "Terminal uses common ANSI sequences":
+    # Test that common sequences are accessible
+    check AlternateScreenEnter == "\e[?1049h"
+    check AlternateScreenExit == "\e[?1049l"
+    check HideCursorSeq == "\e[?25l"
+    check ShowCursorSeq == "\e[?25h"
+
+  test "Terminal size detection integration":
+    let (width, height, success) = getTerminalSizeFromSystem()
+    let asyncSize = getTerminalSizeAsync()
+
+    # Both should return reasonable values
+    check asyncSize.width > 0
+    check asyncSize.height > 0
+
+    if success:
+      # If system detection works, both should agree
+      check asyncSize.width == width
+      check asyncSize.height == height
+    else:
+      # Fallback should be used
+      check asyncSize.width >= 10
+      check asyncSize.height >= 5
+
+  test "Mouse mode integration":
+    let enableSeq = enableMouseMode(MouseSGR)
+    let disableSeq = disableMouseMode(MouseSGR)
+
+    check enableSeq.len > 0
+    check disableSeq.len > 0
+    check enableSeq != disableSeq
+
+  test "Render batch integration":
+    var buffer1 = newBuffer(5, 3)
+    var buffer2 = newBuffer(5, 3)
+
+    buffer2[1, 1] = cell("T", defaultStyle())
+    buffer2[2, 2] = cell("E", defaultStyle())
+
+    let output = buildDifferentialOutput(buffer1, buffer2)
+    check output.len > 0
+    check output.find("T") >= 0
+    check output.find("E") >= 0

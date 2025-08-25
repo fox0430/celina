@@ -1,6 +1,6 @@
 import
   tgeometry, tcolors, tunicode, tbuffer, tevent, tterminal, tlayout, twindows, tmouse,
-  tapp_windows, tcelina, terror_handling
+  tapp_windows, tcelina, terror_handling, tterminal_common
 
 import ../celina/async/async_backend
 
