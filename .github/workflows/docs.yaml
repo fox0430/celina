@@ -4,7 +4,8 @@ on:
   push:
     paths:
       - '.github/workflows/docs.yaml'
-      - 'src/**'
+      - 'celina.nim'
+      - 'celina/**'
     branches:
       - main
 
@@ -23,14 +24,9 @@ jobs:
         nim-version: 'stable'
         repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Install packages
-      run: |
-        nimble install chronos -y
-        nimble install --depsOnly
-
     - name: Gen docs
       run: |
-        nim doc --project --index:on --outdir:./htmldocs -d:asyncBackend=chronos ./celina.nim
+        nim doc --project --index:on --outdir:./htmldocs -d:asyncBackend=asyncdispatch ./celina.nim
 
     - uses: actions/upload-pages-artifact@v4
       with:
