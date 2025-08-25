@@ -274,21 +274,68 @@ proc calculateSimpleDiff*(
           result.add((pos: pos(x, y), cell: newCell))
 
 proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
-  ## Build optimized output string for differential rendering
-  let changes = oldBuffer.diff(newBuffer)
+  ## Build optimized output string for differential rendering with line-aware clearing
+  if oldBuffer.area != newBuffer.area:
+    # Different sizes, use simple approach
+    let changes = calculateSimpleDiff(oldBuffer, newBuffer)
+    result = ""
+    for change in changes:
+      result.add(makeCursorPositionSeq(change.pos.x, change.pos.y))
+      result.add(change.cell.symbol)
+    return result
 
-  if changes.len == 0:
-    return ""
+  result = ""
+  var lastStyle = defaultStyle()
 
-  # Generate and optimize render commands
-  var batch = generateRenderBatch(changes)
-  batch = optimizeRenderBatch(batch)
+  # Process line by line to handle partial line changes properly
+  for y in 0 ..< newBuffer.area.height:
+    var lineChanged = false
+    var firstChangeX = -1
+    var lastChangeX = -1
 
-  # Build final output
-  result = buildOutputString(batch)
+    # Find the range of changes in this line
+    for x in 0 ..< newBuffer.area.width:
+      if oldBuffer[x, y] != newBuffer[x, y]:
+        if not lineChanged:
+          lineChanged = true
+          firstChangeX = x
+        lastChangeX = x
+
+    if lineChanged:
+      # Position cursor at start of changed region
+      result.add(makeCursorPositionSeq(firstChangeX, y))
+
+      # Clear from first change to end of line to remove old content
+      result.add(ClearToEndOfLineSeq)
+
+      # Then write the new content from first change to end of meaningful content
+      var meaningfulEndX = lastChangeX
+
+      # Find the actual end of meaningful content (last non-space or styled cell)
+      for x in countdown(newBuffer.area.width - 1, firstChangeX):
+        let cell = newBuffer[x, y]
+        if not (cell.symbol == " " and cell.style == defaultStyle()):
+          meaningfulEndX = x
+          break
+
+      # Write the new content
+      for x in firstChangeX .. meaningfulEndX:
+        let cell = newBuffer[x, y]
+
+        # Handle style changes
+        if cell.style != lastStyle:
+          if lastStyle != defaultStyle():
+            result.add(resetSequence())
+          if cell.style != defaultStyle():
+            result.add(cell.style.toAnsiSequence())
+          lastStyle = cell.style
+
+        # Write the character
+        result.add(cell.symbol)
 
   # Always reset style at the end
-  result.add(resetSequence())
+  if lastStyle != defaultStyle():
+    result.add(resetSequence())
 
 proc buildFullRenderOutput*(buffer: Buffer): string =
   ## Build output string for full buffer render
@@ -313,7 +360,11 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
         break
 
     if not lineHasContent:
-      continue # Skip entirely empty lines
+      # For empty lines, still need to clear them if they had content before
+      # Add minimal clear sequence for the line
+      result.add(makeCursorPositionSeq(buffer.area.x, buffer.area.y + y))
+      result.add(ClearToEndOfLineSeq)
+      continue
 
     # Position cursor at start of line
     result.add(makeCursorPositionSeq(buffer.area.x, buffer.area.y + y))
