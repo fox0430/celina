@@ -5,8 +5,8 @@
 
 import pkg/celina
 
-when not defined(asyncBackend) or asyncBackend != "chronos":
-  {.fatal: "This example require `-d:asyncBackend=chronos`".}
+when not hasAsyncSupport and not hasAsyncDispatch and not hasChronos:
+  {.fatal: "This example require `-d:asyncBackend=asyncdispatch|chronos`".}
 
 proc main() {.async.} =
   # Configure the async app

@@ -2,7 +2,8 @@
 
 import std/[unittest, strutils, options]
 
-import ../celina
+import ../celina/async/async_backend
+import ../celina {.all.}
 
 suite "Celina Main Module Tests":
   suite "Basic API Tests":
@@ -27,21 +28,24 @@ suite "Celina Main Module Tests":
       check not app.isNil
 
   suite "Async Backend Detection":
-    test "asyncBackend constant exists":
-      check asyncBackend.len > 0
-      check asyncBackend in ["none", "chronos"]
-
     test "hasAsyncSupport reflects backend status":
-      when asyncBackend == "none":
-        check hasAsyncSupport == false
-      elif asyncBackend == "chronos":
-        check hasAsyncSupport == true
+      when async_backend.asyncBackend == "none":
+        check not hasAsyncSupport
+      elif async_backend.asyncBackend == "asyncdispatch":
+        check hasAsyncSupport
+      elif async_backend.asyncBackend == "chronos":
+        check hasAsyncSupport
 
     test "hasChronos reflects chronos backend":
-      when asyncBackend == "chronos":
-        check hasChronos == true
-      else:
-        check hasChronos == false
+      when async_backend.asyncBackend == "none":
+        check not hasAsyncDispatch
+        check not hasChronos
+      elif async_backend.asyncBackend == "asyncdispatch":
+        check hasAsyncDispatch
+        check not hasChronos
+      elif async_backend.asyncBackend == "chronos":
+        check not hasAsyncDispatch
+        check hasChronos
 
   suite "Type Exports":
     test "core types are available":
@@ -148,23 +152,8 @@ when hasAsyncSupport and hasChronos:
 
   suite "Backend Configuration":
     test "async backend is chronos when enabled":
-      check asyncBackend == "chronos"
-      check hasAsyncSupport == true
-      check hasChronos == true
-else:
-  suite "Sync-Only Mode Tests":
-    test "async backend is none":
-      check asyncBackend == "none"
-      check hasAsyncSupport == false
-      check hasChronos == false
-
-    test "no async types available":
-      # In sync-only mode, async types should not be available
-      # This is enforced at compile time
-      when declared(AsyncApp):
-        fail("AsyncApp should not be available without async backend")
-      else:
-        check true # Expected behavior
+      check hasAsyncSupport
+      check hasAsyncDispatch or hasChronos
 
 suite "Integration Tests":
   test "quickRun function signature":

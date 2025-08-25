@@ -1,11 +1,11 @@
-## Proper Async I/O implementation
+## Async I/O implementation
 ##
-## This module provides true non-blocking I/O using Chronos-compatible methods
-## for terminal input/output without blocking the async event loop.
+## This module provides non-blocking I/O for terminal input/output
+## that works with both Chronos and std/asyncdispatch.
 
 import std/[posix, selectors]
 
-import pkg/chronos
+import async_backend
 
 type
   AsyncIOError* = object of CatchableError
@@ -88,7 +88,7 @@ proc readNonBlocking*(reader: AsyncInputReader): string =
       copyMem(addr result[0], addr buffer[0], bytesRead)
     else:
       result = ""
-  except:
+  except CatchableError:
     result = ""
 
 proc readCharNonBlocking*(reader: AsyncInputReader): char =
@@ -127,9 +127,7 @@ proc cleanupAsyncIO*() =
     globalInputReader.closeAsyncInputReader()
     globalInputReader = nil
 
-proc hasInputAsync*(
-    timeout: chronos.Duration = chronos.milliseconds(1)
-): Future[bool] {.async, gcsafe.} =
+proc hasInputAsync*(timeoutMs: int = 1): Future[bool] {.async.} =
   ## Check if input is available asynchronously
   if globalInputReader.isNil:
     initAsyncIO()
@@ -138,10 +136,10 @@ proc hasInputAsync*(
   if globalInputReader.isNil:
     return false
 
-  let timeoutMs = int(timeout.milliseconds)
+  # timeoutMs already provided as parameter
 
   # Yield to other async tasks first
-  await sleepAsync(chronos.milliseconds(0))
+  await sleepMs(0)
 
   # Check for buffered data - ensure globalInputReader is not nil
   if not globalInputReader.isNil and globalInputReader.buffer.len > 0:
@@ -153,7 +151,7 @@ proc hasInputAsync*(
   else:
     return false
 
-proc readCharAsync*(): Future[char] {.async, gcsafe.} =
+proc readCharAsync*(): Future[char] {.async.} =
   ## Read a character asynchronously
   if globalInputReader.isNil:
     initAsyncIO()
@@ -163,7 +161,7 @@ proc readCharAsync*(): Future[char] {.async, gcsafe.} =
     return '\0'
 
   # Yield to other async tasks
-  await sleepAsync(chronos.milliseconds(0))
+  await sleepMs(0)
 
   # Try to read from buffer or stdin - ensure globalInputReader is not nil
   if not globalInputReader.isNil:
@@ -171,7 +169,7 @@ proc readCharAsync*(): Future[char] {.async, gcsafe.} =
   else:
     result = '\0'
 
-proc peekCharAsync*(): Future[char] {.async, gcsafe.} =
+proc peekCharAsync*(): Future[char] {.async.} =
   ## Peek at next character without consuming it
   if globalInputReader.isNil:
     initAsyncIO()
@@ -180,7 +178,7 @@ proc peekCharAsync*(): Future[char] {.async, gcsafe.} =
   if globalInputReader.isNil:
     return '\0'
 
-  await sleepAsync(chronos.milliseconds(0))
+  await sleepMs(0)
 
   # Ensure globalInputReader is not nil before accessing
   if not globalInputReader.isNil:
@@ -196,9 +194,7 @@ proc peekCharAsync*(): Future[char] {.async, gcsafe.} =
 
   return '\0'
 
-proc readStdinAsync*(
-    timeout: chronos.Duration = chronos.milliseconds(10)
-): Future[string] {.async, gcsafe.} =
+proc readStdinAsync*(timeoutMs: int = 10): Future[string] {.async.} =
   ## Read available stdin data asynchronously
   if globalInputReader.isNil:
     initAsyncIO()
@@ -207,8 +203,8 @@ proc readStdinAsync*(
   if globalInputReader.isNil:
     return ""
 
-  let timeoutMs = int(timeout.milliseconds)
-  await sleepAsync(chronos.milliseconds(0))
+  # timeoutMs already provided as parameter
+  await sleepMs(0)
 
   # Ensure globalInputReader is not nil before accessing
   if not globalInputReader.isNil and globalInputReader.hasDataAvailable(timeoutMs):
@@ -222,16 +218,16 @@ proc readStdinAsync*(
 
 proc writeStdoutAsync*(data: string): Future[int] {.async.} =
   ## Write data to stdout asynchronously
-  await sleepAsync(chronos.milliseconds(0)) # Yield to other tasks
+  await sleepMs(0) # Yield to other tasks
 
   try:
     result = posix.write(STDOUT_FILENO.cint, cstring(data), data.len.cint).int
-  except:
+  except CatchableError:
     result = 0
 
 proc flushStdoutAsync*(): Future[void] {.async.} =
   ## Flush stdout asynchronously
-  await sleepAsync(chronos.milliseconds(0))
+  await sleepMs(0)
   stdout.flushFile()
 
 # ============================================================================
@@ -287,10 +283,10 @@ proc testAsyncIO*(): Future[bool] {.async.} =
     await flushStdoutAsync()
 
     # Test input availability check
-    discard await hasInputAsync(chronos.milliseconds(10))
+    discard await hasInputAsync(10)
 
     return true
-  except:
+  except CatchableError:
     return false
 
 # ============================================================================

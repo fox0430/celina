@@ -1,19 +1,17 @@
 ## Async Application framework
 ##
 ## This module provides the main AsyncApp type and async event loop
-## implementation using Chronos async framework.
+## implementation using either Chronos or std/asyncdispatch.
 
 import std/[options, unicode, times, monotimes]
 
-import pkg/chronos
-
-import async_terminal, async_events, async_buffer, async_windows
+import async_backend, async_terminal, async_events, async_buffer, async_windows
 import ../core/[geometry, colors, buffer, events]
 import ../widgets/[text, base]
 
 export
-  geometry, colors, buffer, events, text, base, unicode, async_terminal, async_events,
-  async_buffer, async_windows
+  geometry, colors, buffer, events, text, base, unicode, async_backend, async_terminal,
+  async_events, async_buffer, async_windows
 
 type
   ## Main async application context for CLI applications
@@ -75,9 +73,9 @@ proc newAsyncApp*(
     lastFrameTime: getMonoTime(),
   )
 
-  # Initialize async buffer based on terminal size
+  # Initialize async buffer based on terminal size (GC-safe version)
   let termSize = result.terminal.getSize()
-  result.buffer = newAsyncBuffer(termSize.width, termSize.height)
+  result.buffer = newAsyncBufferNoRM(termSize.width, termSize.height)
 
   # Initialize async window manager if enabled
   if config.windowMode:
@@ -184,11 +182,11 @@ proc renderAsync(app: AsyncApp) {.async.} =
   if app.windowMode and not app.windowManager.isNil:
     await app.windowManager.renderAsync(app.buffer)
 
-  # Use async terminal rendering - convert AsyncBuffer to Buffer
-  let renderBuffer = app.buffer.toBuffer()
+  # Use async terminal rendering - convert AsyncBuffer to Buffer (GC-safe version)
+  let renderBuffer = app.buffer.toBufferAsync()
   await app.terminal.drawAsync(renderBuffer, force = false)
 
-proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async, gcsafe.} =
+proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
   ## Process one async application tick (events + render)
   ## Returns false if application should quit
   try:
@@ -245,8 +243,8 @@ proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async, gcsafe.} =
     # Frame timing control
     let frameTime = (getMonoTime() - now).inMilliseconds()
     if frameTime < targetFrameTime:
-      let sleepTime = targetFrameTime - frameTime
-      await sleepAsync(sleepTime.milliseconds)
+      let sleepTime = int(targetFrameTime - frameTime)
+      await sleepMs(sleepTime)
 
     app.frameCounter.inc()
     app.lastFrameTime = now

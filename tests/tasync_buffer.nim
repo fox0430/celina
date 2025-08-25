@@ -2,10 +2,14 @@
 
 import std/[unittest, strutils]
 
-import pkg/chronos
-
+import ../celina/async/async_backend
 import ../celina/async/async_buffer
 import ../celina/core/resources
+
+# AsyncDispatch compatibility
+when hasAsyncDispatch:
+  template allFutures*[T](futs: seq[Future[T]]): untyped =
+    all(futs)
 
 suite "AsyncBuffer Module Tests":
   suite "AsyncBuffer Creation":
@@ -138,7 +142,8 @@ suite "AsyncBuffer Module Tests":
       # Set some content first
       asyncBuffer.setString(0, 0, "test")
 
-      waitFor asyncBuffer.clearAsync()
+      let clearFuture = asyncBuffer.clearAsync(cell())
+      waitFor clearFuture
 
       for y in 0 ..< 3:
         for x in 0 ..< 5:
@@ -146,7 +151,8 @@ suite "AsyncBuffer Module Tests":
 
       # Test with custom cell
       let fillCell = cell("*")
-      waitFor asyncBuffer.clearAsync(fillCell)
+      let clearFuture2 = asyncBuffer.clearAsync(fillCell)
+      waitFor clearFuture2
 
       for y in 0 ..< 3:
         for x in 0 ..< 5:

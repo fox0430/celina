@@ -2,9 +2,7 @@
 
 import std/unittest
 
-import pkg/chronos
-
-import ../celina/async/async_buffer
+import ../celina/async/[async_backend, async_buffer]
 import ../celina/core/[geometry, colors, buffer, errors]
 
 import ../celina/async/async_terminal {.all.}

@@ -1,13 +1,11 @@
 ## Async Terminal I/O interface
 ##
 ## This module provides asynchronous terminal control and rendering capabilities
-## using Chronos async framework for non-blocking I/O operations.
+## using either Chronos or std/asyncdispatch for non-blocking I/O operations.
 
 import std/[strformat, termios, posix]
 
-import pkg/chronos
-
-import async_buffer
+import async_backend, async_buffer
 import ../core/[geometry, colors, buffer]
 
 type
