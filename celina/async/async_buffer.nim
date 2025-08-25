@@ -5,7 +5,7 @@
 
 import std/[locks, strformat]
 
-import pkg/chronos
+import async_backend
 
 import ../core/[buffer, geometry, colors, resources]
 
@@ -154,7 +154,7 @@ proc clearAsync*(asyncBuffer: AsyncBuffer, cell: Cell = cell()) {.async.} =
     buffer.clear(cell)
 
   # Yield to allow other async operations
-  await sleepAsync(0.milliseconds)
+  await sleepMs(0)
 
 proc setStringAsync*(
     asyncBuffer: AsyncBuffer, x, y: int, text: string, style: Style = defaultStyle()
@@ -164,7 +164,7 @@ proc setStringAsync*(
     buffer.setString(x, y, text, style)
 
   # Yield to allow other async operations
-  await sleepAsync(0.milliseconds)
+  await sleepMs(0)
 
 proc setStringAsync*(
     asyncBuffer: AsyncBuffer, pos: Position, text: string, style: Style = defaultStyle()
@@ -177,7 +177,7 @@ proc setCellAsync*(asyncBuffer: AsyncBuffer, x, y: int, cell: Cell) {.async.} =
   asyncBuffer.withBufferAsync:
     buffer[x, y] = cell
 
-  await sleepAsync(0.milliseconds)
+  await sleepMs(0)
 
 proc setCellAsync*(asyncBuffer: AsyncBuffer, pos: Position, cell: Cell) {.async.} =
   ## Set cell at position asynchronously
@@ -188,14 +188,14 @@ proc fillAsync*(asyncBuffer: AsyncBuffer, area: Rect, fillCell: Cell) {.async.} 
   asyncBuffer.withBufferAsync:
     buffer.fill(area, fillCell)
 
-  await sleepAsync(0.milliseconds)
+  await sleepMs(0)
 
 proc resizeAsync*(asyncBuffer: AsyncBuffer, newArea: Rect) {.async.} =
   ## Resize buffer asynchronously
   asyncBuffer.withBufferAsync:
     buffer.resize(newArea)
 
-  await sleepAsync(0.milliseconds)
+  await sleepMs(0)
 
 # ============================================================================
 # Synchronous Access (when needed)
@@ -261,7 +261,7 @@ proc mergeAsync*(
   dest.withBufferAsync:
     buffer.merge(srcBuffer, destPos)
 
-  await sleepAsync(0.milliseconds)
+  await sleepMs(0)
 
 # ============================================================================
 # AsyncBuffer Pool for Performance
@@ -302,7 +302,7 @@ proc toStringsAsync*(asyncBuffer: AsyncBuffer): Future[seq[string]] {.async.} =
   asyncBuffer.withBufferAsync:
     result = buffer.toStrings()
 
-  await sleepAsync(0.milliseconds)
+  await sleepMs(0)
 
 proc diffAsync*(
     old, new: AsyncBuffer
@@ -312,7 +312,7 @@ proc diffAsync*(
   let newBuffer = new.toBufferAsync()
 
   result = diff(oldBuffer, newBuffer)
-  await sleepAsync(0.milliseconds)
+  await sleepMs(0)
 
 # ============================================================================
 # Debugging and Utilities

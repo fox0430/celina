@@ -96,12 +96,13 @@ proc initGlobalResourceManager*() =
     if globalResourceManager.isNil:
       globalResourceManager = newResourceManager()
 
-proc getGlobalResourceManager*(): ResourceManager =
+proc getGlobalResourceManager*(): ResourceManager {.gcsafe.} =
   ## Get the global resource manager, initializing if needed
-  withLock(globalLock):
-    if globalResourceManager.isNil:
-      globalResourceManager = newResourceManager()
-    result = globalResourceManager
+  {.cast(gcsafe).}:
+    withLock(globalLock):
+      if globalResourceManager.isNil:
+        globalResourceManager = newResourceManager()
+      result = globalResourceManager
 
 proc generateId(rm: ResourceManager): ResourceId =
   ## Generate a unique resource ID (assumes lock is held)

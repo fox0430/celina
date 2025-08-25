@@ -2,9 +2,8 @@
 #
 import std/unittest
 
-import pkg/chronos
-
-import ../celina/async/async_io
+import ../celina/async/async_backend
+import ../celina/async/async_io {.all.}
 
 suite "Safe Real AsyncIO Tests":
   test "module imports successfully":
