@@ -32,7 +32,7 @@ jobs:
       run: |
         nim doc --project --index:on --outdir:./htmldocs -d:asyncBackend=chronos ./celina.nim
 
-    - uses: actions/upload-pages-artifact@v3
+    - uses: actions/upload-pages-artifact@v4
       with:
         path: ./htmldocs
 
