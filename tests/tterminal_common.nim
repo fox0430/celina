@@ -14,15 +14,160 @@ suite "Terminal Common Module Tests":
       check ClearLineSeq == "\e[2K"
       check HideCursorSeq == "\e[?25l"
       check ShowCursorSeq == "\e[?25h"
+      check SaveCursorSeq == "\e[s"
+      check RestoreCursorSeq == "\e[u"
 
     test "Cursor position sequences":
       check makeCursorPositionSeq(0, 0) == "\e[1;1H"
       check makeCursorPositionSeq(10, 5) == "\e[6;11H"
       check makeCursorPositionSeq(pos(20, 15)) == "\e[16;21H"
+      check makeCursorPositionSeq(pos(2, 3)) == "\e[4;3H"
+
+    test "Cursor movement sequences":
+      # Single step movements
+      check makeCursorMoveSeq("\e[A", 1) == "\e[A"
+      check makeCursorMoveSeq("\e[B", 1) == "\e[B"
+      check makeCursorMoveSeq("\e[C", 1) == "\e[C"
+      check makeCursorMoveSeq("\e[D", 1) == "\e[D"
+
+      # Multiple step movements
+      check makeCursorMoveSeq("\e[A", 3) == "\e[3A"
+      check makeCursorMoveSeq("\e[B", 5) == "\e[5B"
+      check makeCursorMoveSeq("\e[C", 2) == "\e[2C"
+      check makeCursorMoveSeq("\e[D", 4) == "\e[4D"
 
     test "Clear sequences":
       check ClearToEndOfLineSeq == "\e[0K"
       check ClearToStartOfLineSeq == "\e[1K"
+
+  suite "Cursor Support":
+    test "CursorState initialization":
+      var state = CursorState(x: -1, y: -1, visible: false, style: CursorStyle.Default)
+      check state.x == -1
+      check state.y == -1
+      check state.visible == false
+      check state.style == CursorStyle.Default
+      check state.lastStyle == CursorStyle.Default
+
+    test "Cursor style sequences":
+      check getCursorStyleSeq(CursorStyle.Default) == "\e[0 q"
+      check getCursorStyleSeq(CursorStyle.BlinkingBlock) == "\e[1 q"
+      check getCursorStyleSeq(CursorStyle.SteadyBlock) == "\e[2 q"
+      check getCursorStyleSeq(CursorStyle.BlinkingUnderline) == "\e[3 q"
+      check getCursorStyleSeq(CursorStyle.SteadyUnderline) == "\e[4 q"
+      check getCursorStyleSeq(CursorStyle.BlinkingBar) == "\e[5 q"
+      check getCursorStyleSeq(CursorStyle.SteadyBar) == "\e[6 q"
+
+    test "buildOutputWithCursor basic functionality":
+      var oldBuffer = newBuffer(rect(0, 0, 10, 5))
+      var newBuffer = newBuffer(rect(0, 0, 10, 5))
+      var lastCursorStyle = CursorStyle.Default
+
+      # Add some content
+      newBuffer[2, 2] = cell("A", defaultStyle())
+
+      # Test with visible cursor
+      let output = buildOutputWithCursor(
+        oldBuffer,
+        newBuffer,
+        cursorX = 3,
+        cursorY = 2,
+        cursorVisible = true,
+        cursorStyle = CursorStyle.Default,
+        lastCursorStyle = lastCursorStyle,
+      )
+
+      check ShowCursorSeq in output
+      check "\e[3;4H" in output # Cursor at (3,2) - 1-based indexing
+
+    test "buildOutputWithCursor with hidden cursor":
+      var oldBuffer = newBuffer(rect(0, 0, 10, 5))
+      var newBuffer = newBuffer(rect(0, 0, 10, 5))
+      var lastCursorStyle = CursorStyle.Default
+
+      let output = buildOutputWithCursor(
+        oldBuffer,
+        newBuffer,
+        cursorX = 3,
+        cursorY = 2,
+        cursorVisible = false,
+        cursorStyle = CursorStyle.Default,
+        lastCursorStyle = lastCursorStyle,
+      )
+
+      check HideCursorSeq in output
+
+    test "buildOutputWithCursor style change tracking":
+      var oldBuffer = newBuffer(rect(0, 0, 10, 5))
+      var newBuffer = newBuffer(rect(0, 0, 10, 5))
+      var lastCursorStyle = CursorStyle.Default
+
+      # First call with new style
+      let output1 = buildOutputWithCursor(
+        oldBuffer,
+        newBuffer,
+        cursorX = 0,
+        cursorY = 0,
+        cursorVisible = true,
+        cursorStyle = CursorStyle.BlinkingBar,
+        lastCursorStyle = lastCursorStyle,
+      )
+
+      check "\e[5 q" in output1 # Blinking bar style
+      check lastCursorStyle == CursorStyle.BlinkingBar
+
+      # Second call with same style - should not repeat
+      let output2 = buildOutputWithCursor(
+        oldBuffer,
+        newBuffer,
+        cursorX = 1,
+        cursorY = 1,
+        cursorVisible = true,
+        cursorStyle = CursorStyle.BlinkingBar,
+        lastCursorStyle = lastCursorStyle,
+      )
+
+      check "\e[5 q" notin output2 # Should not repeat style
+
+    test "buildOutputWithCursor with invalid cursor positions":
+      var oldBuffer = newBuffer(rect(0, 0, 10, 5))
+      var newBuffer = newBuffer(rect(0, 0, 10, 5))
+      var lastCursorStyle = CursorStyle.Default
+
+      # Test with negative cursor positions (should hide cursor)
+      let output = buildOutputWithCursor(
+        oldBuffer,
+        newBuffer,
+        cursorX = -1,
+        cursorY = -1,
+        cursorVisible = true, # Even if visible is true
+        cursorStyle = CursorStyle.Default,
+        lastCursorStyle = lastCursorStyle,
+      )
+
+      check HideCursorSeq in output
+      check ShowCursorSeq notin output
+
+    test "CursorState field updates":
+      var state = CursorState(x: 0, y: 0, visible: false, style: CursorStyle.Default)
+
+      # Test position update
+      state.x = 10
+      state.y = 5
+      check state.x == 10
+      check state.y == 5
+
+      # Test visibility toggle
+      state.visible = true
+      check state.visible == true
+
+      # Test style change
+      state.style = CursorStyle.BlinkingBar
+      check state.style == CursorStyle.BlinkingBar
+
+      # Test lastStyle management
+      state.lastStyle = state.style
+      check state.lastStyle == CursorStyle.BlinkingBar
 
   suite "Terminal Size Detection":
     test "getTerminalSizeFromSystem returns valid tuple":

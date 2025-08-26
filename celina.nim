@@ -32,13 +32,17 @@
 import std/[options, unicode, times]
 
 import
-  celina/core/[geometry, colors, buffer, events, terminal, layout, errors, resources]
+  celina/core/[
+    geometry, colors, buffer, events, terminal, layout, errors, resources,
+    terminal_common,
+  ]
 import celina/widgets/[text, base, windows]
 import celina/async/async_backend
 
 export
   geometry, colors, buffer, events, layout, terminal, windows, text, base, unicode,
-  errors, resources, async_backend, hasAsyncSupport, hasChronos, hasAsyncDispatch
+  errors, resources, async_backend, hasAsyncSupport, hasChronos, hasAsyncDispatch,
+  terminal_common
 
 # ============================================================================
 # Synchronous API
@@ -57,6 +61,7 @@ type
     targetFps: int ## Current target FPS
     frameCounter: int ## Frame counter for FPS calculation
     lastFpsTime: float ## Last time FPS was calculated
+    cursor: CursorState ## Cursor state management
 
   ## Application configuration options
   AppConfig* = object
@@ -101,6 +106,13 @@ proc newApp*(
     targetFps: if config.targetFps > 0: config.targetFps else: 60,
     frameCounter: 0,
     lastFpsTime: epochTime(),
+    cursor: CursorState(
+      x: -1, # -1 means not set
+      y: -1, # -1 means not set
+      visible: false, # Hidden by default
+      style: CursorStyle.Default,
+      lastStyle: CursorStyle.Default,
+    ),
   )
 
   # Initialize buffer based on terminal size
@@ -203,9 +215,17 @@ proc render(app: App) =
   if app.windowMode and not app.windowManager.isNil:
     app.windowManager.render(app.buffer)
 
-  # Use terminal's built-in rendering for efficiency
-  # The terminal.draw() method should handle diff calculation internally
-  app.terminal.draw(app.buffer, force = false)
+  # Use new single-write rendering with cursor support
+  # This prevents cursor flickering by including cursor positioning in the same output
+  app.terminal.drawWithCursor(
+    app.buffer,
+    app.cursor.x,
+    app.cursor.y,
+    app.cursor.visible,
+    app.cursor.style,
+    app.cursor.lastStyle,
+    force = false,
+  )
 
 proc tick(app: App): bool =
   ## Process one application tick (events + render)
@@ -346,6 +366,58 @@ proc setTargetFps*(app: App, fps: int) =
 proc getTargetFps*(app: App): int =
   ## Get the current target FPS
   app.targetFps
+
+# ============================================================================
+# Cursor Control API
+# ============================================================================
+
+proc setCursor*(app: App, x, y: int) =
+  ## Set cursor position for next render
+  ## Position will be applied after buffer rendering
+  app.cursor.x = x
+  app.cursor.y = y
+  app.cursor.visible = true
+
+proc setCursor*(app: App, pos: Position) =
+  ## Set cursor position using Position type
+  app.setCursor(pos.x, pos.y)
+
+proc setCursorPos*(app: App, x, y: int) =
+  ## Set cursor position without affecting visibility state
+  app.cursor.x = x
+  app.cursor.y = y
+
+proc showCursor*(app: App) =
+  ## Show cursor in next render
+  app.cursor.visible = true
+
+proc hideCursor*(app: App) =
+  ## Hide cursor in next render
+  app.cursor.visible = false
+
+proc setCursorStyle*(app: App, style: CursorStyle) =
+  ## Set cursor style for next render
+  app.cursor.style = style
+
+proc getCursorPos*(app: App): (int, int) =
+  ## Get current cursor position
+  (app.cursor.x, app.cursor.y)
+
+proc isCursorVisible*(app: App): bool =
+  ## Check if cursor is visible
+  app.cursor.visible
+
+proc getCursorStyle*(app: App): CursorStyle =
+  ## Get current cursor style
+  app.cursor.style
+
+proc resetCursor*(app: App) =
+  ## Reset cursor to default state (hidden, default style, position -1,-1)
+  app.cursor.x = -1
+  app.cursor.y = -1
+  app.cursor.visible = false
+  app.cursor.style = CursorStyle.Default
+  app.cursor.lastStyle = CursorStyle.Default
 
 proc getCurrentFps*(app: App): float =
   ## Get the current actual FPS based on frame counter

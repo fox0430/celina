@@ -28,6 +28,53 @@ suite "Celina Main Module Tests":
       let app = newApp(config)
       check not app.isNil
 
+  suite "Cursor Control API":
+    test "App cursor state initialization":
+      var app = newApp()
+      let (x, y) = app.getCursorPos()
+      check x == -1 # Not set initially
+      check y == -1
+      check app.isCursorVisible() == false # Hidden by default
+
+    test "setCursor with coordinates":
+      var app = newApp()
+      app.setCursor(10, 20)
+      let (x, y) = app.getCursorPos()
+      check x == 10
+      check y == 20
+      check app.isCursorVisible() == true # Should become visible
+
+    test "setCursor with Position":
+      var app = newApp()
+      let pos = Position(x: 15, y: 25)
+      app.setCursor(pos)
+      let (x, y) = app.getCursorPos()
+      check x == 15
+      check y == 25
+      check app.isCursorVisible() == true
+
+    test "cursor visibility control":
+      var app = newApp()
+
+      # Initially hidden
+      check app.isCursorVisible() == false
+
+      # Show cursor
+      app.showCursor()
+      check app.isCursorVisible() == true
+
+      # Hide cursor
+      app.hideCursor()
+      check app.isCursorVisible() == false
+
+    test "cursor style setting":
+      var app = newApp()
+
+      # Test different cursor styles (mainly ensures the API works without errors)
+      app.setCursorStyle(CursorStyle.BlinkingBlock)
+      app.setCursorStyle(CursorStyle.SteadyUnderline)
+      app.setCursorStyle(CursorStyle.BlinkingBar)
+
   suite "Async Backend Detection":
     test "hasAsyncSupport reflects backend status":
       when async_backend.asyncBackend == "none":
