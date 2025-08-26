@@ -143,6 +143,46 @@ proc setCursorPos*(pos: Position) =
   ## Set cursor position
   stdout.write(makeCursorPositionSeq(pos))
 
+proc saveCursor*() =
+  ## Save current cursor position
+  stdout.write(SaveCursorSeq)
+
+proc restoreCursor*() =
+  ## Restore previously saved cursor position
+  stdout.write(RestoreCursorSeq)
+
+proc moveCursorUp*(steps: int = 1) =
+  ## Move cursor up by specified steps
+  stdout.write(makeCursorMoveSeq(CursorUpSeq, steps))
+
+proc moveCursorDown*(steps: int = 1) =
+  ## Move cursor down by specified steps
+  stdout.write(makeCursorMoveSeq(CursorDownSeq, steps))
+
+proc moveCursorLeft*(steps: int = 1) =
+  ## Move cursor left by specified steps
+  stdout.write(makeCursorMoveSeq(CursorLeftSeq, steps))
+
+proc moveCursorRight*(steps: int = 1) =
+  ## Move cursor right by specified steps
+  stdout.write(makeCursorMoveSeq(CursorRightSeq, steps))
+
+proc moveCursor*(dx, dy: int) =
+  ## Move cursor relatively by dx, dy
+  if dy < 0:
+    moveCursorUp(-dy)
+  elif dy > 0:
+    moveCursorDown(dy)
+
+  if dx < 0:
+    moveCursorLeft(-dx)
+  elif dx > 0:
+    moveCursorRight(dx)
+
+proc setCursorStyle*(style: CursorStyle) =
+  ## Set cursor appearance style
+  stdout.write(getCursorStyleSeq(style))
+
 # Screen control
 proc clearScreen*() =
   ## Clear the entire screen
@@ -217,9 +257,13 @@ proc setup*(terminal: Terminal) =
   ## Setup terminal for CLI mode
   terminal.enableAlternateScreen()
   terminal.enableRawMode()
-  hideCursor()
   clearScreen()
   terminal.updateSize()
+
+proc setupWithHiddenCursor*(terminal: Terminal) =
+  ## Setup terminal for CLI mode with cursor hidden (backward compatibility)
+  terminal.setup()
+  hideCursor()
 
 proc setupWithMouse*(terminal: Terminal) =
   ## Setup terminal for CLI mode with mouse support
@@ -259,6 +303,31 @@ proc draw*(terminal: Terminal, buffer: Buffer, force: bool = false) =
       terminal.render(buffer)
   except CatchableError as e:
     raise newTerminalError("Draw operation failed", inner = e)
+
+proc drawWithCursor*(
+    terminal: Terminal,
+    buffer: Buffer,
+    cursorX, cursorY: int,
+    cursorVisible: bool,
+    cursorStyle: CursorStyle = CursorStyle.Default,
+    lastCursorStyle: var CursorStyle,
+    force: bool = false,
+) =
+  ## Draw buffer with cursor positioning in single write operation
+  ## This prevents cursor flickering by including cursor commands in the same output
+  try:
+    let output = buildOutputWithCursor(
+      terminal.lastBuffer, buffer, cursorX, cursorY, cursorVisible, cursorStyle,
+      lastCursorStyle, force,
+    )
+
+    if output.len > 0:
+      stdout.write(output)
+      stdout.flushFile()
+
+    terminal.lastBuffer = buffer
+  except CatchableError as e:
+    raise newTerminalError("Draw with cursor operation failed", inner = e)
 
 # Terminal state queries
 proc isRawMode*(terminal: Terminal): bool =
