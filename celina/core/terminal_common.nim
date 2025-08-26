@@ -22,6 +22,24 @@ type
     MouseAll # All events
     MouseSGR # SGR extended mode
 
+  CursorStyle* = enum
+    ## Cursor appearance styles
+    Default
+    BlinkingBlock
+    SteadyBlock
+    BlinkingUnderline
+    SteadyUnderline
+    BlinkingBar
+    SteadyBar
+
+  ## Cursor state management for terminal applications
+  CursorState* = object
+    x*: int ## Current cursor X position (-1 = not set)
+    y*: int ## Current cursor Y position (-1 = not set)
+    visible*: bool ## Whether cursor should be visible
+    style*: CursorStyle ## Current cursor style
+    lastStyle*: CursorStyle ## Last applied cursor style (to avoid redundant updates)
+
 const
   # Screen control sequences
   AlternateScreenEnter* = "\e[?1049h"
@@ -36,6 +54,21 @@ const
   ShowCursorSeq* = "\e[?25h"
   SaveCursorSeq* = "\e[s"
   RestoreCursorSeq* = "\e[u"
+
+  # Cursor movement sequences (relative)
+  CursorUpSeq* = "\e[A"
+  CursorDownSeq* = "\e[B"
+  CursorRightSeq* = "\e[C"
+  CursorLeftSeq* = "\e[D"
+
+  # Cursor style sequences (DECSCUSR - DEC Set Cursor Style)
+  CursorStyleDefault* = "\e[0 q" # Default cursor
+  CursorStyleBlinkingBlock* = "\e[1 q" # Blinking block
+  CursorStyleSteadyBlock* = "\e[2 q" # Steady block
+  CursorStyleBlinkingUnderline* = "\e[3 q" # Blinking underline
+  CursorStyleSteadyUnderline* = "\e[4 q" # Steady underline
+  CursorStyleBlinkingBar* = "\e[5 q" # Blinking vertical bar
+  CursorStyleSteadyBar* = "\e[6 q" # Steady vertical bar
 
   # Mouse mode sequences
   MouseSequences* = [
@@ -53,6 +86,24 @@ proc makeCursorPositionSeq*(x, y: int): string {.inline.} =
 proc makeCursorPositionSeq*(pos: Position): string {.inline.} =
   ## Generate ANSI sequence for cursor positioning
   makeCursorPositionSeq(pos.x, pos.y)
+
+proc makeCursorMoveSeq*(direction: string, steps: int): string {.inline.} =
+  ## Generate ANSI sequence for cursor movement with steps
+  if steps == 1:
+    direction
+  else:
+    &"\e[{steps}{direction[direction.len-1]}"
+
+proc getCursorStyleSeq*(style: CursorStyle): string =
+  ## Get ANSI sequence for cursor style
+  case style
+  of Default: CursorStyleDefault
+  of BlinkingBlock: CursorStyleBlinkingBlock
+  of SteadyBlock: CursorStyleSteadyBlock
+  of BlinkingUnderline: CursorStyleBlinkingUnderline
+  of SteadyUnderline: CursorStyleSteadyUnderline
+  of BlinkingBar: CursorStyleBlinkingBar
+  of SteadyBar: CursorStyleSteadyBar
 
 # ============================================================================
 # Terminal Configuration
@@ -484,6 +535,49 @@ proc calculateRenderMetrics*(
 proc isTerminalInteractive*(): bool =
   ## Check if we're running in an interactive terminal
   isatty(STDIN_FILENO) == 1 and isatty(STDOUT_FILENO) == 1
+
+# ============================================================================
+# Cursor-aware rendering functions
+# ============================================================================
+
+proc buildOutputWithCursor*(
+    oldBuffer, newBuffer: Buffer,
+    cursorX, cursorY: int,
+    cursorVisible: bool,
+    cursorStyle: CursorStyle = CursorStyle.Default,
+    lastCursorStyle: var CursorStyle,
+    force: bool = false,
+): string =
+  ## Build output string with cursor positioning included
+  ## This prevents cursor flickering by including cursor commands in the same output
+  # First, build the buffer diff output
+  if force or oldBuffer.area != newBuffer.area:
+    # Use full render for different sizes
+    for y in 0 ..< newBuffer.area.height:
+      for x in 0 ..< newBuffer.area.width:
+        let cell = newBuffer[x, y]
+        if cell.symbol != " " or cell.style.fg.kind != Default:
+          result.add(makeCursorPositionSeq(x, y))
+          let styleSeq = cell.style.toAnsiSequence()
+          if styleSeq.len > 0:
+            result.add(styleSeq)
+          result.add(cell.symbol)
+          if styleSeq.len > 0:
+            result.add(resetSequence())
+  else:
+    # Use differential rendering
+    result.add(buildDifferentialOutput(oldBuffer, newBuffer))
+
+  # Then append cursor commands to the same output string
+  if cursorVisible and cursorX >= 0 and cursorY >= 0:
+    # Only apply cursor style if it has changed to avoid interrupting blinking
+    if cursorStyle != lastCursorStyle:
+      result.add(getCursorStyleSeq(cursorStyle))
+      lastCursorStyle = cursorStyle
+    result.add(ShowCursorSeq)
+    result.add(makeCursorPositionSeq(cursorX, cursorY))
+  else:
+    result.add(HideCursorSeq)
 
 proc supportsAnsi*(): bool =
   ## Check if terminal supports ANSI escape sequences
