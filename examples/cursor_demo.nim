@@ -2,7 +2,7 @@
 
 import std/strformat
 
-import ../celina
+import pkg/celina
 
 const styles = [
   CursorStyle.Default, CursorStyle.BlinkingBlock, CursorStyle.SteadyBlock,
