@@ -2,7 +2,7 @@
 ##
 ## This test module verifies that the error handling system works correctly.
 
-import std/[unittest, strutils, os]
+import std/[unittest, os]
 import ../celina/core/[errors, terminal]
 
 {.push warning[UnreachableCode]: off.}
