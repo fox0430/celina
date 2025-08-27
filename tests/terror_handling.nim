@@ -1,132 +1,122 @@
-## Error handling tests for Celina TUI library
+## Error handling tests
 ##
 ## This test module verifies that the error handling system works correctly.
 
-import std/[unittest, strutils, tables, options]
+import std/[unittest, os]
 import ../celina/core/[errors, terminal]
 
 {.push warning[UnreachableCode]: off.}
 
 suite "Error Handling Tests":
   test "TerminalError creation":
-    let err = newTerminalError("Test error", ErrTerminalConfig, "test context")
-    check err.msg == "Test error"
-    check err.code == ErrTerminalConfig
-    check err.context == "test context"
-
-  test "SystemCallError creation":
-    let err = newSystemCallError("System call failed", 5, ErrSystemCall, "ioctl")
-    check err.errno == 5
-    check err.code == ErrSystemCall
-    check err.context == "ioctl"
-    # Should include errno in message
-    check err.msg.contains("errno: 5")
-
-  test "IOError creation":
-    let err = newIOError("I/O failed", ErrIOWrite, "stdout")
-    check err.msg == "I/O failed"
-    check err.code == ErrIOWrite
-    check err.context == "stdout"
-
-  test "ValidationError creation":
-    let err = newValidationError("Invalid input", "bad_value", ErrInvalidInput)
-    check err.invalidValue == "bad_value"
-    check err.code == ErrInvalidInput
-    check err.msg.contains("invalid value: 'bad_value'")
-
-  test "MemoryError creation":
-    let err = newMemoryError("Out of memory", 1024, ErrOutOfMemory)
-    check err.requestedSize == 1024
-    check err.code == ErrOutOfMemory
-    check err.msg.contains("1024 bytes")
-
-  test "Error chaining":
-    let innerErr = newException(IOError, "Inner error")
-    let outerErr = newTerminalError("Outer error")
-    let chainedErr = outerErr.chain(innerErr)
-
-    check chainedErr.innerError != nil
-    check chainedErr.innerError.msg == "Inner error"
-
-  test "Error context":
     let err = newTerminalError("Test error")
-    let contextErr = err.withContext("test operation")
+    check err.msg == "Test error"
+    check err is ref TerminalError
 
-    check contextErr.context == "test operation"
+  test "BufferError creation":
+    let err = newBufferError("Buffer overflow")
+    check err.msg == "Buffer overflow"
+    check err is ref BufferError
 
-    # Adding more context
-    let moreContextErr = contextErr.withContext("nested operation")
-    check moreContextErr.context == "test operation -> nested operation"
+  test "LayoutError creation":
+    let err = newLayoutError("Layout constraint failed")
+    check err.msg == "Layout constraint failed"
+    check err is ref LayoutError
 
-  test "Error formatting":
-    let err = newTerminalError("Test error", ErrTerminalConfig, "test context")
-    let formatted = formatError(err)
+  test "RenderError creation":
+    let err = newRenderError("Render operation failed")
+    check err.msg == "Render operation failed"
+    check err is ref RenderError
 
-    check formatted.contains("[ErrTerminalConfig]")
-    check formatted.contains("Test error")
-    check formatted.contains("Context: test context")
+  test "EventError creation":
+    let err = newEventError("Event handling failed")
+    check err.msg == "Event handling failed"
+    check err is ref EventError
 
-  test "Error statistics":
-    var stats = ErrorStats()
-    let err1 = newTerminalError("Error 1", ErrTerminalConfig)
-    let err2 = newIOError("Error 2", ErrIOWrite)
-    let err3 = newTerminalError("Error 3", ErrTerminalConfig)
+  test "OSError handling":
+    # Test that we properly handle OS errors (standard Nim approach)
+    expect(OSError):
+      raiseOSError(OSErrorCode(5), "System call failed")
 
-    stats.recordError(err1)
-    stats.recordError(err2)
-    stats.recordError(err3)
+  test "IOError handling":
+    # Test standard IOError handling
+    expect(IOError):
+      raise newException(IOError, "I/O operation failed")
 
-    check stats.totalErrors == 3
-    check stats.errorsByCode.getOrDefault(ErrTerminalConfig) == 2
-    check stats.errorsByCode.getOrDefault(ErrIOWrite) == 1
-    check stats.lastError.isSome
-    check stats.lastError.get.msg == "Error 3"
+  test "ValueError handling":
+    # Test standard ValueError handling
+    expect(ValueError):
+      raise newException(ValueError, "Invalid input value")
 
-  test "Error recovery":
-    var callCount = 0
-    let result = tryRecover(
-      proc(): int =
-        callCount.inc()
-        if callCount == 1:
-          raise newException(ValueError, "Test error")
-        return 42,
-      fallback = -1,
-      logError = false,
-    )
+  test "ResourceExhaustedError handling":
+    # Test standard resource exhaustion handling
+    expect(ResourceExhaustedError):
+      raise newException(ResourceExhaustedError, "Out of memory")
 
-    check result == -1 # Should return fallback on first call
-    check callCount == 1
+  test "Error context utility":
+    # Test simple error context addition
+    let baseMsg = "Operation failed"
+    let contextMsg = withContext(baseMsg, "terminal setup")
+    check contextMsg == "terminal setup: Operation failed"
 
-  test "Ensure macro":
-    expect ValidationError:
-      ensure(false, "Test validation")
-
-    # Should not raise
-    ensure(true, "Test validation")
-
-  test "Terminal size error handling":
-    # This test will only work if we can mock ioctl
-    # For now, just test that getTerminalSizeOrDefault doesn't crash
-    let size = getTerminalSizeOrDefault()
-    check size.width > 0
-    check size.height > 0
+    # Test empty context
+    let noContextMsg = withContext(baseMsg, "")
+    check noContextMsg == "Operation failed"
 
   test "withErrorContext template":
-    expect TerminalError:
-      try:
-        raise newException(ValueError, "Inner error")
-      except CatchableError as e:
-        raise newTerminalError("Test error", context = "test context", inner = e)
+    # Test error context wrapping
+    expect(TerminalError):
+      withErrorContext("terminal initialization"):
+        raise newTerminalError("Hardware failure")
 
-    try:
-      try:
-        raise newException(ValueError, "Inner error")
-      except CatchableError as e:
-        raise newTerminalError("Test error", context = "test context", inner = e)
-    except TerminalError as e:
-      check e.context.contains("test context")
-      check e.innerError != nil
-      check e.innerError.msg == "Inner error"
+  test "ensure template":
+    # Test validation helper
+    expect(ValueError):
+      ensure(false, "Condition must be true")
 
-when isMainModule:
-  echo "Running error handling tests..."
+    # Should not raise when condition is true
+    ensure(true, "This should not raise")
+
+  test "ensureNotNil template":
+    # Test nil checking helper with ref types
+    let validRef = new(int)
+    validRef[] = 42
+    let result = ensureNotNil(validRef, "Reference must not be nil")
+    check result[] == 42
+
+    # Test nil case
+    expect(ValueError):
+      let nilRef: ref int = nil
+      discard ensureNotNil(nilRef, "Should fail for nil reference")
+
+  test "tryRecover utility":
+    # Test error recovery
+    var attempts = 0
+    let result = tryRecover(
+      proc(): int =
+        attempts.inc()
+        if attempts == 1:
+          raise newException(ValueError, "First attempt fails")
+        return 42,
+      fallback = -1,
+    )
+
+    check result == -1 # Should return fallback on error
+    check attempts == 1
+
+  test "tryIO template":
+    # Test I/O error handling wrapper
+    expect(IOError):
+      tryIO:
+        raise newException(OSError, "System I/O error")
+
+  test "withResource template":
+    # Test resource management
+    var cleanupCalled = false
+
+    withResource("test resource", (cleanupCalled = true)):
+      check cleanupCalled == false # Should not be called yet
+
+    check cleanupCalled == true # Should be called after block
+
+{.pop.}

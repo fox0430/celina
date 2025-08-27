@@ -228,7 +228,7 @@ proc release*[T](guard: var ResourceGuard[T]) =
     except CatchableError as e:
       let rm = getGlobalResourceManager()
       rm.unregisterResource(guard.resourceId)
-      raise newTerminalError("Resource cleanup failed", inner = e)
+      raise newTerminalError("Resource cleanup failed: " & e.msg)
 
     let rm = getGlobalResourceManager()
     rm.unregisterResource(guard.resourceId)
@@ -241,7 +241,7 @@ proc isValid*[T](guard: ResourceGuard[T]): bool =
 proc get*[T](guard: ResourceGuard[T]): T =
   ## Get the underlying resource (updates last accessed time)
   if not guard.isValid:
-    raise newValidationError("Accessing invalid resource guard", "guard")
+    raise newException(ValueError, "Accessing invalid resource guard")
 
   let rm = getGlobalResourceManager()
   rm.touchResource(guard.resourceId)
