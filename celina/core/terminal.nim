@@ -38,7 +38,7 @@ proc updateSize*(terminal: Terminal) =
   try:
     terminal.size = getTerminalSize()
   except CatchableError as e:
-    raise newTerminalError("Failed to update terminal size", inner = e)
+    raise newTerminalError("Failed to update terminal size: " & e.msg)
 
 # Terminal creation and cleanup
 proc newTerminal*(): Terminal =
@@ -74,7 +74,7 @@ proc enableRawMode*(terminal: Terminal) =
     terminal.rawMode = true
     terminal.rawModeEnabled = true
   except CatchableError as e:
-    raise newTerminalError("Failed to enable raw mode", inner = e)
+    raise newTerminalError("Failed to enable raw mode: " & e.msg)
 
 proc disableRawMode*(terminal: Terminal) =
   ## Disable raw mode, restoring original terminal settings
@@ -234,10 +234,10 @@ proc render*(terminal: Terminal, buffer: Buffer) =
 
     # Update last buffer
     terminal.lastBuffer = buffer
-  except CelinaIOError as e:
-    raise newTerminalError("Failed to render buffer", inner = e)
+  except IOError as e:
+    raise newTerminalError("Failed to render buffer: " & e.msg)
   except CatchableError as e:
-    raise newTerminalError("Rendering error", inner = e)
+    raise newTerminalError("Rendering error: " & e.msg)
 
 proc renderFull*(terminal: Terminal, buffer: Buffer) =
   ## Force a full render of the buffer (useful for initial draw)
@@ -247,10 +247,10 @@ proc renderFull*(terminal: Terminal, buffer: Buffer) =
     stdout.flushFile()
 
     terminal.lastBuffer = buffer
-  except CelinaIOError as e:
-    raise newTerminalError("Failed to render full buffer", inner = e)
+  except IOError as e:
+    raise newTerminalError("Failed to render full buffer: " & e.msg)
   except CatchableError as e:
-    raise newTerminalError("Full rendering error", inner = e)
+    raise newTerminalError("Full rendering error: " & e.msg)
 
 # Terminal setup and cleanup
 proc setup*(terminal: Terminal) =
@@ -272,7 +272,7 @@ proc setupWithMouse*(terminal: Terminal) =
     terminal.setup()
     terminal.enableMouse()
   except CatchableError as e:
-    raise newTerminalError("Failed to setup terminal with mouse", inner = e)
+    raise newTerminalError("Failed to setup terminal with mouse: " & e.msg)
 
 proc cleanup*(terminal: Terminal) =
   ## Cleanup terminal, restoring original settings
@@ -302,7 +302,7 @@ proc draw*(terminal: Terminal, buffer: Buffer, force: bool = false) =
     else:
       terminal.render(buffer)
   except CatchableError as e:
-    raise newTerminalError("Draw operation failed", inner = e)
+    raise newTerminalError("Draw operation failed: " & e.msg)
 
 proc drawWithCursor*(
     terminal: Terminal,
@@ -327,7 +327,7 @@ proc drawWithCursor*(
 
     terminal.lastBuffer = buffer
   except CatchableError as e:
-    raise newTerminalError("Draw with cursor operation failed", inner = e)
+    raise newTerminalError("Draw with cursor operation failed: " & e.msg)
 
 # Terminal state queries
 proc isRawMode*(terminal: Terminal): bool =
@@ -369,4 +369,4 @@ template withTerminal*(terminal: Terminal, body: untyped): untyped =
     finally:
       terminal.cleanup()
   except CatchableError as e:
-    raise newTerminalError("withTerminal operation failed", inner = e)
+    raise newTerminalError("withTerminal operation failed: " & e.msg)
