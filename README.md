@@ -29,6 +29,7 @@ Check out the [`examples/`](examples/) directory for sample applications demonst
 
 - **[`hello_world.nim`](examples/hello_world.nim)**: Basic application displaying "Hello, World!" with simple event handling
 - **[`async_hello_world.nim`](examples/async_hello_world.nim)**: Asynchronous version using Chronos
+- **[`button_demo.nim`](examples/button_demo.nim)**: Interactive button widget, various styles, and click handling
 - **[`color_demo.nim`](examples/color_demo.nim)**: 24-bit RGB color support demonstration with gradients, palettes, and animations
 - **[`cursor_demo.nim`](examples/cursor_demo.nim)**: Terminal cursor control including position, visibility, and style management
 - **[`mouse_demo.nim`](examples/mouse_demo.nim)**: Mouse event handling including clicks, drag, wheel scroll, and movement detection
