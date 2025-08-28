@@ -325,68 +325,50 @@ proc calculateSimpleDiff*(
           result.add((pos: pos(x, y), cell: newCell))
 
 proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
-  ## Build optimized output string for differential rendering with line-aware clearing
+  ## Build output string using simple cell-by-cell differential rendering
+
   if oldBuffer.area != newBuffer.area:
     # Different sizes, use simple approach
     let changes = calculateSimpleDiff(oldBuffer, newBuffer)
-    result = ""
     for change in changes:
       result.add(makeCursorPositionSeq(change.pos.x, change.pos.y))
       result.add(change.cell.symbol)
     return result
 
-  result = ""
-  var lastStyle = defaultStyle()
+  var lastCursorPos = (-1, -1) # Track cursor position to minimize cursor moves
 
-  # Process line by line to handle partial line changes properly
+  # Simple cell-by-cell approach - write each changed cell individually
   for y in 0 ..< newBuffer.area.height:
-    var lineChanged = false
-    var firstChangeX = -1
-    var lastChangeX = -1
-
-    # Find the range of changes in this line
     for x in 0 ..< newBuffer.area.width:
-      if oldBuffer[x, y] != newBuffer[x, y]:
-        if not lineChanged:
-          lineChanged = true
-          firstChangeX = x
-        lastChangeX = x
+      let oldCell = oldBuffer[x, y]
+      let newCell = newBuffer[x, y]
 
-    if lineChanged:
-      # Position cursor at start of changed region
-      result.add(makeCursorPositionSeq(firstChangeX, y))
+      if oldCell != newCell:
+        when defined(celinaDebugDiff):
+          var logFile = open("celina_diff_debug.log", fmAppend)
+          logFile.writeLine(
+            &"Change at ({x},{y}): '{oldCell.symbol}'/{oldCell.style} -> '{newCell.symbol}'/{newCell.style}"
+          )
+          logFile.close()
 
-      # Clear from first change to end of line to remove old content
-      result.add(ClearToEndOfLineSeq)
+        # Only move cursor if we're not at the right position
+        if lastCursorPos != (x, y):
+          result.add(makeCursorPositionSeq(x, y))
+          lastCursorPos = (x, y)
 
-      # Then write the new content from first change to end of meaningful content
-      var meaningfulEndX = lastChangeX
+        # Apply style and write character
+        let styleSeq = newCell.style.toAnsiSequence()
+        if styleSeq.len > 0:
+          result.add(styleSeq)
 
-      # Find the actual end of meaningful content (last non-space or styled cell)
-      for x in countdown(newBuffer.area.width - 1, firstChangeX):
-        let cell = newBuffer[x, y]
-        if not (cell.symbol == " " and cell.style == defaultStyle()):
-          meaningfulEndX = x
-          break
+        result.add(newCell.symbol)
 
-      # Write the new content
-      for x in firstChangeX .. meaningfulEndX:
-        let cell = newBuffer[x, y]
+        # Reset style if it was applied
+        if styleSeq.len > 0:
+          result.add(resetSequence())
 
-        # Handle style changes
-        if cell.style != lastStyle:
-          if lastStyle != defaultStyle():
-            result.add(resetSequence())
-          if cell.style != defaultStyle():
-            result.add(cell.style.toAnsiSequence())
-          lastStyle = cell.style
-
-        # Write the character
-        result.add(cell.symbol)
-
-  # Always reset style at the end
-  if lastStyle != defaultStyle():
-    result.add(resetSequence())
+        # Update cursor position (we wrote one character)
+        lastCursorPos = (x + 1, y)
 
 proc buildFullRenderOutput*(buffer: Buffer): string =
   ## Build output string for full buffer render
