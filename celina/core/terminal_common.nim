@@ -344,13 +344,6 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
       let newCell = newBuffer[x, y]
 
       if oldCell != newCell:
-        when defined(celinaDebugDiff):
-          var logFile = open("celina_diff_debug.log", fmAppend)
-          logFile.writeLine(
-            &"Change at ({x},{y}): '{oldCell.symbol}'/{oldCell.style} -> '{newCell.symbol}'/{newCell.style}"
-          )
-          logFile.close()
-
         # Only move cursor if we're not at the right position
         if lastCursorPos != (x, y):
           result.add(makeCursorPositionSeq(x, y))
