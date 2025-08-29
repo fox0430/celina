@@ -103,7 +103,7 @@ suite "Events Module Tests":
       let keyEvent = KeyEvent(code: Char, char: 'h', modifiers: {})
       let event = Event(kind: Key, key: keyEvent)
 
-      check event.kind == Key
+      check event.kind == EventKind.Key
       check event.key.code == Char
       check event.key.char == 'h'
       check event.key.modifiers.len == 0
@@ -120,7 +120,7 @@ suite "Events Module Tests":
       let keyEvent = KeyEvent(code: Enter, char: '\r', modifiers: {})
       let event = Event(kind: Key, key: keyEvent)
 
-      check event.kind == Key
+      check event.kind == EventKind.Key
       check event.key.code == Enter
       check event.key.char == '\r'
 
@@ -128,7 +128,7 @@ suite "Events Module Tests":
       let keyEvent = KeyEvent(code: Escape, char: '\x1b', modifiers: {})
       let event = Event(kind: Key, key: keyEvent)
 
-      check event.kind == Key
+      check event.kind == EventKind.Key
       check event.key.code == Escape
       check event.key.char == '\x1b'
 
@@ -136,7 +136,7 @@ suite "Events Module Tests":
       let keyEvent = KeyEvent(code: Tab, char: '\t', modifiers: {})
       let event = Event(kind: Key, key: keyEvent)
 
-      check event.kind == Key
+      check event.kind == EventKind.Key
       check event.key.code == Tab
       check event.key.char == '\t'
 
@@ -144,7 +144,7 @@ suite "Events Module Tests":
       let keyEvent = KeyEvent(code: Space, char: ' ', modifiers: {})
       let event = Event(kind: Key, key: keyEvent)
 
-      check event.kind == Key
+      check event.kind == EventKind.Key
       check event.key.code == Space
       check event.key.char == ' '
 
@@ -152,7 +152,7 @@ suite "Events Module Tests":
       let keyEvent = KeyEvent(code: Backspace, char: '\x08', modifiers: {})
       let event = Event(kind: Key, key: keyEvent)
 
-      check event.kind == Key
+      check event.kind == EventKind.Key
       check event.key.code == Backspace
       check event.key.char == '\x08'
 
@@ -162,14 +162,14 @@ suite "Events Module Tests":
       for ch in 'a' .. 'z':
         let keyEvent = KeyEvent(code: Char, char: ch, modifiers: {})
         let event = Event(kind: Key, key: keyEvent)
-        check event.kind == Key
+        check event.kind == EventKind.Key
         check event.key.code == Char
         check event.key.char == ch
 
       for ch in 'A' .. 'Z':
         let keyEvent = KeyEvent(code: Char, char: ch, modifiers: {})
         let event = Event(kind: Key, key: keyEvent)
-        check event.kind == Key
+        check event.kind == EventKind.Key
         check event.key.code == Char
         check event.key.char == ch
 
@@ -178,7 +178,7 @@ suite "Events Module Tests":
       for ch in '0' .. '9':
         let keyEvent = KeyEvent(code: Char, char: ch, modifiers: {})
         let event = Event(kind: Key, key: keyEvent)
-        check event.kind == Key
+        check event.kind == EventKind.Key
         check event.key.code == Char
         check event.key.char == ch
 
@@ -193,7 +193,7 @@ suite "Events Module Tests":
       for ch in specialChars:
         let keyEvent = KeyEvent(code: Char, char: ch, modifiers: {})
         let event = Event(kind: Key, key: keyEvent)
-        check event.kind == Key
+        check event.kind == EventKind.Key
         check event.key.code == Char
         check event.key.char == ch
 
@@ -298,7 +298,7 @@ suite "Events Module Tests":
       for fKey in functionKeys:
         let keyEvent = KeyEvent(code: fKey, char: '\0', modifiers: {})
         let event = Event(kind: Key, key: keyEvent)
-        check event.kind == Key
+        check event.kind == EventKind.Key
         check event.key.code == fKey
         check event.key.char == '\0'
         check event.key.modifiers.len == 0
@@ -326,7 +326,7 @@ suite "Events Module Tests":
       for arrowKey in arrowKeys:
         let keyEvent = KeyEvent(code: arrowKey, char: '\0', modifiers: {})
         let event = Event(kind: Key, key: keyEvent)
-        check event.kind == Key
+        check event.kind == EventKind.Key
         check event.key.code == arrowKey
         check event.key.char == '\0'
         check event.key.modifiers.len == 0
@@ -361,15 +361,15 @@ suite "Events Module Tests":
       let quitEvent = Event(kind: Quit)
       let unknownEvent = Event(kind: Unknown)
 
-      check keyEvent.kind == Key
+      check keyEvent.kind == EventKind.Key
       check quitEvent.kind == Quit
       check unknownEvent.kind == Unknown
 
       check keyEvent.kind != Quit
       check keyEvent.kind != Unknown
-      check quitEvent.kind != Key
+      check quitEvent.kind != EventKind.Key
       check quitEvent.kind != Unknown
-      check unknownEvent.kind != Key
+      check unknownEvent.kind != EventKind.Key
       check unknownEvent.kind != Quit
 
     test "Event field access safety":
@@ -377,7 +377,7 @@ suite "Events Module Tests":
         Event(kind: Key, key: KeyEvent(code: Enter, char: '\r', modifiers: {Ctrl}))
 
       # Key event should have accessible key field
-      check keyEvent.kind == Key
+      check keyEvent.kind == EventKind.Key
       check keyEvent.key.code == Enter
       check keyEvent.key.char == '\r'
       check Ctrl in keyEvent.key.modifiers
@@ -389,7 +389,7 @@ suite "Events Module Tests":
       for navKey in navKeys:
         let keyEvent = KeyEvent(code: navKey, char: '\0', modifiers: {})
         let event = Event(kind: Key, key: keyEvent)
-        check event.kind == Key
+        check event.kind == EventKind.Key
         check event.key.code == navKey
         check event.key.char == '\0'
         check event.key.modifiers.len == 0
@@ -527,7 +527,7 @@ suite "Events Module Tests":
       let highAsciiChars = ['\x80', '\xFF', '\xA0', '\xF0']
       for ch in highAsciiChars:
         let event = Event(kind: Key, key: KeyEvent(code: Char, char: ch, modifiers: {}))
-        check event.kind == Key
+        check event.kind == EventKind.Key
         check event.key.code == Char
         check event.key.char == ch
 
@@ -853,10 +853,10 @@ suite "Events Module Tests":
       let quitEvent = Event(kind: Quit)
 
       check mouseEvent.kind == Mouse
-      check keyEvent.kind == Key
+      check keyEvent.kind == EventKind.Key
       check quitEvent.kind == Quit
 
-      check mouseEvent.kind != Key
+      check mouseEvent.kind != EventKind.Key
       check mouseEvent.kind != Quit
       check keyEvent.kind != Mouse
       check quitEvent.kind != Mouse
@@ -1021,7 +1021,7 @@ suite "Events Module Tests":
       let escEvent =
         Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b', modifiers: {}))
 
-      check escEvent.kind == Key
+      check escEvent.kind == EventKind.Key
       check escEvent.key.code == Escape
       check escEvent.key.char == '\x1b'
       check escEvent.key.char.ord == 27
@@ -1096,7 +1096,7 @@ suite "Events Module Tests":
       ]
 
       for arrowEvent in arrowSequences:
-        check arrowEvent.kind == Key
+        check arrowEvent.kind == EventKind.Key
         check arrowEvent.key.char == '\0'
         check arrowEvent.key.code != Escape
 
@@ -1115,7 +1115,7 @@ suite "Events Module Tests":
       for (keyCode, description) in specialKeys:
         let specialEvent =
           Event(kind: Key, key: KeyEvent(code: keyCode, char: '\0', modifiers: {}))
-        check specialEvent.kind == Key
+        check specialEvent.kind == EventKind.Key
         check specialEvent.key.code == keyCode
         check specialEvent.key.code != Escape
         check specialEvent.key.char == '\0'
