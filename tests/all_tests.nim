@@ -1,5 +1,5 @@
 import
-  tgeometry, tcolors, tunicode, tbuffer, tevent, tterminal, tlayout, twindows, tmouse,
+  tgeometry, tcolors, tunicode, tbuffer, tevents, tterminal, tlayout, twindows, tmouse,
   tapp_windows, tcelina, terror_handling, tterminal_common, tbutton
 
 import ../celina/async/async_backend
