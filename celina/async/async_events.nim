@@ -59,6 +59,13 @@ proc readKeyAsync*(): Future[Event] {.async.} =
     of '\x08', '\x7f': # Backspace or DEL
       return Event(kind: Key, key: KeyEvent(code: Backspace, char: ch))
     of '\x1b': # Escape or start of escape sequence
+      # Check if more data is available with 20ms timeout
+      let hasMoreData = await hasInputAsync(20)
+
+      if not hasMoreData:
+        # No more data after timeout - standalone ESC key
+        return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+
       # Try to read escape sequence
       let next = await readCharAsync()
 
@@ -133,7 +140,7 @@ proc parseMouseEventX10Async*(): Future[Event] {.async.} =
   return Event(kind: Unknown)
 
 proc parseMouseEventSGRAsync*(): Future[Event] {.async.} =
-  ## Parse SGR mouse format - simplified implementation  
+  ## Parse SGR mouse format - simplified implementation
   return Event(kind: Unknown)
 
 # Non-blocking async event reading
