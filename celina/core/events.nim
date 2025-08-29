@@ -1,9 +1,10 @@
-## Event handling for Celina CLI library
+## Event handling
 ##
 ## This module provides comprehensive event handling for keyboard input,
 ## including escape sequences and arrow keys for POSIX systems.
 
 import std/[os, posix, options, strutils]
+
 import errors
 
 # Define SIGWINCH if not available
@@ -457,8 +458,15 @@ proc readKeyInput*(): Option[Event] =
 
   if bytesRead > 0:
     if ch == '\x1b':
-      # Temporarily switch to blocking mode to read escape sequence
-      discard fcntl(STDIN_FILENO, F_SETFL, flags)
+      # Use select with timeout to detect escape sequences
+      var readSet: TFdSet
+      FD_ZERO(readSet)
+      FD_SET(STDIN_FILENO, readSet)
+      var timeout = Timeval(tv_sec: Time(0), tv_usec: Suseconds(20000)) # 20ms
+
+      # If no more data available in 20ms, it's a standalone ESC
+      if select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout) == 0:
+        return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
 
       var next: char
       if read(STDIN_FILENO, addr next, 1) == 1 and next == '[':
@@ -644,12 +652,10 @@ proc readKeyInput*(): Option[Event] =
           else:
             return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
         else:
-          # Restore non-blocking mode
-          discard fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK)
+          # Not an escape sequence we recognize
           return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
       else:
-        # Restore non-blocking mode
-        discard fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK)
+        # Not an escape sequence (no '[' after ESC)
         return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
     else:
       # Restore non-blocking mode
