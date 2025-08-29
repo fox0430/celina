@@ -32,6 +32,7 @@ Check out the [`examples/`](examples/) directory for sample applications demonst
 - **[`button_demo.nim`](examples/button_demo.nim)**: Interactive button widget, various styles, and click handling
 - **[`color_demo.nim`](examples/color_demo.nim)**: 24-bit RGB color support demonstration with gradients, palettes, and animations
 - **[`cursor_demo.nim`](examples/cursor_demo.nim)**: Terminal cursor control including position, visibility, and style management
+- **[`input_demo.nim`](examples/input_demo.nim)**: Text input widgets including password fields, borders, search, and real-time value display
 - **[`mouse_demo.nim`](examples/mouse_demo.nim)**: Mouse event handling including clicks, drag, wheel scroll, and movement detection
 - **[`window_demo.nim`](examples/window_demo.nim)**: Window management system with multiple overlapping windows, focus control, and modal dialogs
 - **[`async_file_manager.nim`](examples/async_file_manager.nim)**: Real-world file manager implementation with async I/O, multi-window UI, and vim-style navigation
