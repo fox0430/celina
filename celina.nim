@@ -36,12 +36,12 @@ import
     geometry, colors, buffer, events, terminal, layout, errors, resources,
     terminal_common,
   ]
-import celina/widgets/[text, base, windows, button, input]
+import celina/widgets/[text, base, windows, button, input, list]
 import celina/async/async_backend
 
 export
   geometry, colors, buffer, events, layout, terminal, windows, text, base, button,
-  input, unicode, errors, resources, async_backend, hasAsyncSupport, hasChronos,
+  input, list, unicode, errors, resources, async_backend, hasAsyncSupport, hasChronos,
   hasAsyncDispatch, terminal_common
 
 # ============================================================================
