@@ -8,7 +8,7 @@ import ../celina {.all.}
 suite "Celina Main Module Tests":
   suite "Basic API Tests":
     test "version returns valid version string":
-      let ver = version()
+      let ver = celinaVersion()
       check ver.len > 0
       check "." in ver # Should contain at least one dot for semantic versioning
 
@@ -229,7 +229,7 @@ suite "Integration Tests":
 
   suite "Module Documentation":
     test "version is semantic":
-      let ver = version()
+      let ver = celinaVersion()
       let parts = ver.split('.')
       check parts.len >= 2 # At least major.minor
 
