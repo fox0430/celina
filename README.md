@@ -35,6 +35,7 @@ Check out the [`examples/`](examples/) directory for sample applications demonst
 - **[`input_demo.nim`](examples/input_demo.nim)**: Text input widgets including password fields, borders, search, and real-time value display
 - **[`list_demo.nim`](examples/list_demo.nim)**: List widget with single/multiple selection modes, keyboard/mouse navigation, scrolling, and custom styling
 - **[`mouse_demo.nim`](examples/mouse_demo.nim)**: Mouse event handling including clicks, drag, wheel scroll, and movement detection
+- **[`table_demo.nim`](examples/table_demo.nim)**: Table widget with custom column widths, multiple selection modes, border styles, vim-like navigation, and scrolling support for large datasets
 - **[`window_demo.nim`](examples/window_demo.nim)**: Window management system with multiple overlapping windows, focus control, and modal dialogs
 - **[`async_file_manager.nim`](examples/async_file_manager.nim)**: Real-world file manager implementation with async I/O, multi-window UI, and vim-style navigation
 
