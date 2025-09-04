@@ -493,20 +493,25 @@ proc removeWindow*(wm: WindowManager, windowId: WindowId) =
   wm.windows = wm.windows.filterIt(it.id != windowId)
 
   # Update focus if the focused window was removed
-  if wm.focusedWindow.isSome() and wm.focusedWindow.get() == windowId:
-    if wm.windows.len > 0:
-      wm.focusWindow(wm.windows[^1].id) # Focus last window
-    else:
-      wm.focusedWindow = none(WindowId)
+  if wm.focusedWindow.isSome():
+    let focusedId = wm.focusedWindow.get()
+    if focusedId == windowId:
+      if wm.windows.len > 0:
+        wm.focusWindow(wm.windows[^1].id) # Focus last window
+      else:
+        wm.focusedWindow = none(WindowId)
 
   # Clear modal if modal window was removed
-  if wm.modalWindow.isSome() and wm.modalWindow.get() == windowId:
-    wm.modalWindow = none(WindowId)
+  if wm.modalWindow.isSome():
+    let modalId = wm.modalWindow.get()
+    if modalId == windowId:
+      wm.modalWindow = none(WindowId)
 
 proc getFocusedWindow*(wm: WindowManager): Option[Window] =
   ## Get the currently focused window
   if wm.focusedWindow.isSome():
-    return wm.getWindow(wm.focusedWindow.get())
+    let windowId = wm.focusedWindow.get()
+    return wm.getWindow(windowId)
   return none(Window)
 
 proc getVisibleWindows*(wm: WindowManager): seq[Window] =
@@ -544,7 +549,8 @@ proc handleEvent*(wm: WindowManager, event: Event): bool =
 
   # If there's a modal window, only it can handle events
   if wm.modalWindow.isSome():
-    let modalWindow = wm.getWindow(wm.modalWindow.get())
+    let modalWindowId = wm.modalWindow.get()
+    let modalWindow = wm.getWindow(modalWindowId)
     if modalWindow.isSome():
       return modalWindow.get().handleWindowEvent(event)
 
@@ -593,7 +599,6 @@ proc preventDefault*(event: var WindowEvent) =
 
 proc dispatchEvent*(wm: WindowManager, event: Event): bool =
   ## Dispatch event through window hierarchy with bubbling
-  result = false
 
   # Find target window based on event type
   var targetWindow: Option[Window]
@@ -603,14 +608,12 @@ proc dispatchEvent*(wm: WindowManager, event: Event): bool =
     targetWindow = wm.findWindowAt(pos(event.mouse.x, event.mouse.y))
   of EventKind.Key:
     targetWindow = wm.getFocusedWindow()
-  else:
-    return false
-
-  if targetWindow.isNone():
-    return false
+  of EventKind.Resize, EventKind.Quit, EventKind.Unknown:
+    targetWindow = wm.getFocusedWindow()
 
   # Dispatch to target window's event handlers
-  result = targetWindow.get().handleWindowEvent(event)
+  if targetWindow.isSome():
+    result = targetWindow.get().handleWindowEvent(event)
 
 # ============================================================================
 # Utility functions
