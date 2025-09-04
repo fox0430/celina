@@ -41,37 +41,15 @@ import celina/widgets/[text, base, windows, button, input, list]
 
 import celina/async/async_backend
 
-export
-  unicode
+export unicode
 
 export
-  geometry,
-  colors,
-  buffer,
-  events,
-  layout,
-  terminal,
-  errors,
-  resources,
-  terminal_common,
-  app,
-  renderer,
-  cursor,
-  fps
+  geometry, colors, buffer, events, layout, terminal, errors, resources,
+  terminal_common, app, renderer, cursor, fps
 
-export
-  windows,
-  text,
-  base,
-  button,
-  input,
-  list
+export windows, text, base, button, input, list
 
-export
-  async_backend,
-  hasAsyncSupport,
-  hasChronos,
-  hasAsyncDispatch
+export async_backend, hasAsyncSupport, hasChronos, hasAsyncDispatch
 
 # ============================================================================
 # Convenience Functions
