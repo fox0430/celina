@@ -8,6 +8,7 @@
 ## - Scrolling with large datasets
 
 import pkg/celina
+import pkg/celina/Widgets/table
 
 import std/[strformat, random, options, sequtils, strutils]
 

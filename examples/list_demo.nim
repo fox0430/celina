@@ -9,6 +9,7 @@
 import std/[strformat, sequtils, strutils]
 
 import pkg/celina
+import pkg/celina/widgets/list
 
 proc main() =
   var selectedItem = -1
@@ -179,7 +180,7 @@ proc main() =
     let statusX = (area.width - statusText.len) div 2
     buffer.setString(statusX, statusY, statusText, statusColor)
 
-  app.run(config)
+  app.run()
 
 when isMainModule:
   main()
