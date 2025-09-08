@@ -45,8 +45,6 @@ export
   geometry, colors, buffer, events, layout, terminal, errors, resources,
   terminal_common, app, renderer, cursor, fps
 
-export windows, text, base, button, input, list, table
-
 export async_backend, hasAsyncSupport, hasChronos, hasAsyncDispatch
 
 # ============================================================================

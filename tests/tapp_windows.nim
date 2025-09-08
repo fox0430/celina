@@ -3,6 +3,7 @@
 import std/[unittest, options]
 
 import ../celina
+import ../celina/widgets/windows
 
 suite "App Window Manager API Tests":
   test "getWindows with no window mode":
