@@ -3,6 +3,7 @@
 ## A example demonstrating basic button functionality
 
 import pkg/celina
+import pkg/celina/widgets/button
 
 proc main() =
   var clickCount = 0
@@ -92,7 +93,7 @@ proc main() =
     let instrX = (area.width - instructions.len) div 2
     buffer.setString(instrX, area.height - 2, instructions, style(BrightBlack))
 
-  app.run(config)
+  app.run()
 
 when isMainModule:
   main()
