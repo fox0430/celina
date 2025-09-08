@@ -70,8 +70,9 @@ jobs:
       - name: Run tests
         run: nimble test -y
 
-      - name: Build example
+      - name: Build examples
         run: |
           nimble install
-          nim c examples/hello_world.nim
+          for f in examples/*.nim; do if [[ "$f" == *"async"* ]]; then nim c -d:asyncBackend=chronos "$f"; else nim c "$f"; fi; done'
+
           nimble uninstall celina -y
