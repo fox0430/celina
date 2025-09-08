@@ -37,8 +37,6 @@ import
     terminal_common, app, renderer, cursor, fps,
   ]
 
-import celina/widgets/[text, base, windows, button, input, list, table]
-
 import celina/async/async_backend
 
 export unicode

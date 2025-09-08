@@ -9,6 +9,7 @@
 ## - Mouse interaction with windows
 
 import pkg/celina
+import pkg/celina/widgets/windows
 
 import std/[strformat, strutils, random, options]
 
@@ -328,7 +329,7 @@ proc main() =
     demo.updateWindowContent(app)
 
   try:
-    app.run(config)
+    app.run()
   except TerminalError as e:
     echo "Terminal error: ", e.msg
   except CatchableError as e:

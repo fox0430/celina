@@ -1,7 +1,9 @@
 ## Input Widget Demo
-## Test different input types including password fields
+##
+## Different input types including password fields
 
 import pkg/celina
+import pkg/celina/widgets/input
 
 proc main() =
   var inputs = [

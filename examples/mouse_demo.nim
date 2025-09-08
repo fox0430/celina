@@ -206,7 +206,7 @@ proc main() =
     demo.renderDemo(buffer)
 
   try:
-    app.run(config)
+    app.run()
   except TerminalError as e:
     echo "Terminal error: ", e.msg
   except CatchableError as e:
