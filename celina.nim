@@ -37,7 +37,7 @@ import
     terminal_common, app, renderer, cursor, fps,
   ]
 
-import celina/widgets/[text, base, windows, button, input, list]
+import celina/widgets/[text, base, windows, button, input, list, table]
 
 import celina/async/async_backend
 
@@ -47,7 +47,7 @@ export
   geometry, colors, buffer, events, layout, terminal, errors, resources,
   terminal_common, app, renderer, cursor, fps
 
-export windows, text, base, button, input, list
+export windows, text, base, button, input, list, table
 
 export async_backend, hasAsyncSupport, hasChronos, hasAsyncDispatch
 
