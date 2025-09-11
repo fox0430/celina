@@ -1,6 +1,7 @@
 import
   tgeometry, tcolors, tunicode, tbuffer, tevents, tterminal, tlayout, twindows, tmouse,
-  tapp_windows, tcelina, terror_handling, tterminal_common, tbutton, ttable, ttabs
+  tapp_windows, tcelina, terror_handling, tterminal_common, tbutton, ttable, ttabs,
+  tprogress
 
 import ../celina/async/async_backend
 
