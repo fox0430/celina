@@ -43,4 +43,34 @@ Check out the [`examples/`](examples/) directory for sample applications demonst
 
 ## Documentation
 
+## Core
 https://fox0430.github.io/celina/celina.html
+
+## Widgets
+
+### Base
+https://fox0430.github.io/celina/widgets/base.html
+
+###  Button
+https://fox0430.github.io/celina/widgets/button.html
+
+### Input
+https://fox0430.github.io/celina/widgets/input.html
+
+### List
+https://fox0430.github.io/celina/widgets/list.html
+
+### Progress
+https://fox0430.github.io/celina/widgets/progress.html
+
+### Table
+https://fox0430.github.io/celina/widgets/table.html
+
+### Tabs
+https://fox0430.github.io/celina/widgets/tabs.html
+
+### Text
+https://fox0430.github.io/celina/widgets/text.html
+
+### Windows
+https://fox0430.github.io/celina/widgets/windows.html
