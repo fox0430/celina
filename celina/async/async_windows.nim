@@ -6,8 +6,7 @@
 import std/[sequtils, options, atomics]
 
 import async_backend, async_buffer
-import ../core/[geometry, buffer, colors, events]
-import ../widgets/windows
+import ../core/[geometry, buffer, colors, events, windows]
 
 export
   WindowId, Window, WindowState, WindowBorder, BorderChars, EventPhase, WindowEvent,

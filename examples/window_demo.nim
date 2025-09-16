@@ -9,7 +9,6 @@
 ## - Mouse interaction with windows
 
 import pkg/celina
-import pkg/celina/widgets/windows
 
 import std/[strformat, strutils, random, options]
 
