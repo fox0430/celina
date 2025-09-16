@@ -3,7 +3,7 @@
 ## This module provides asynchronous event handling for keyboard input,
 ## mouse events, and other terminal events using either Chronos or std/asyncdispatch.
 
-import std/[posix, options]
+import std/[posix, options, strutils]
 
 import async_backend, async_io
 import ../core/events
@@ -38,6 +38,149 @@ proc cleanupAsyncEventSystem*() =
     cleanupAsyncIO()
   except CatchableError:
     discard # Ignore cleanup errors
+
+# Async mouse event parsing
+proc parseMouseEventX10(): Future[Event] {.async.} =
+  ## Parse X10 mouse format: ESC[Mbxy
+  ## where b is button byte, x,y are coordinate bytes
+  var data: array[3, char]
+
+  # Read 3 bytes for X10 format
+  for i in 0 .. 2:
+    let ch = await readCharAsync()
+    if ch == '\0':
+      return Event(kind: Unknown)
+    data[i] = ch
+
+  let button_byte = data[0].ord
+  let x = data[1].ord - 33 # X10 uses offset 33
+  let y = data[2].ord - 33 # X10 uses offset 33
+
+  let button_info = button_byte and 0x03
+  let is_drag = (button_byte and 0x20) != 0
+  let is_wheel = (button_byte and 0x40) != 0
+
+  var button: MouseButton
+  var kind: MouseEventKind
+
+  if is_wheel:
+    # X10 wheel events: bit 0 indicates direction
+    if (button_byte and 0x01) != 0:
+      button = WheelDown
+    else:
+      button = WheelUp
+    kind = Press
+  else:
+    case button_info
+    of 0:
+      button = Left
+    of 1:
+      button = Middle
+    of 2:
+      button = Right
+    else:
+      button = Left
+
+    if is_drag:
+      kind = Drag
+    elif (button_byte and 0x03) == 3:
+      kind = Release
+    else:
+      kind = Press
+
+  # Parse modifiers
+  var modifiers: set[KeyModifier] = {}
+  if (button_byte and 0x04) != 0:
+    modifiers.incl(Shift)
+  if (button_byte and 0x08) != 0:
+    modifiers.incl(Alt)
+  if (button_byte and 0x10) != 0:
+    modifiers.incl(Ctrl)
+
+  return Event(
+    kind: EventKind.Mouse,
+    mouse: MouseEvent(kind: kind, button: button, x: x, y: y, modifiers: modifiers),
+  )
+
+proc parseMouseEventSGR(): Future[Event] {.async.} =
+  ## Parse SGR mouse format: ESC[<button;x;y;M/m
+  ## M for press, m for release
+  var buffer: string
+  var ch: char
+  var readCount = 0
+  const maxReadCount = 20 # Prevent infinite loops
+
+  # Read until we get M or m, with safety limits
+  while readCount < maxReadCount:
+    ch = await readCharAsync()
+    readCount.inc()
+    if ch == '\0':
+      return Event(kind: Unknown)
+    if ch == 'M' or ch == 'm':
+      break
+    buffer.add(ch)
+
+  # If we didn't find a terminator, return unknown event
+  if readCount >= maxReadCount or (ch != 'M' and ch != 'm'):
+    return Event(kind: Unknown)
+
+  # Parse the SGR format: button;x;y
+  let parts = buffer.split(';')
+  if parts.len >= 3:
+    try:
+      let button_code = parseInt(parts[0])
+      let x = parseInt(parts[1]) - 1 # SGR uses 1-based coordinates
+      let y = parseInt(parts[2]) - 1
+
+      let is_release = (ch == 'm')
+      let is_wheel = (button_code and 0x40) != 0
+      let button_info = button_code and 0x03
+
+      var button: MouseButton
+      var kind: MouseEventKind
+
+      if is_wheel:
+        # Wheel events: button_code 64 (0x40) = WheelUp, 65 (0x41) = WheelDown
+        if (button_code and 0x01) != 0:
+          button = WheelDown
+        else:
+          button = WheelUp
+        kind = Press
+      else:
+        case button_info
+        of 0:
+          button = Left
+        of 1:
+          button = Middle
+        of 2:
+          button = Right
+        else:
+          button = Left
+
+        if is_release:
+          kind = Release
+        elif (button_code and 0x20) != 0:
+          kind = Drag
+        else:
+          kind = Press
+
+      # Parse modifiers from SGR button code
+      var modifiers: set[KeyModifier] = {}
+      if (button_code and 0x04) != 0:
+        modifiers.incl(Shift)
+      if (button_code and 0x08) != 0:
+        modifiers.incl(Alt)
+      if (button_code and 0x10) != 0:
+        modifiers.incl(Ctrl)
+
+      return Event(
+        kind: EventKind.Mouse,
+        mouse: MouseEvent(kind: kind, button: button, x: x, y: y, modifiers: modifiers),
+      )
+    except ValueError:
+      return Event(kind: Unknown)
+
+  return Event(kind: Unknown)
 
 # Async key reading with escape sequence support
 proc readKeyAsync*(): Future[Event] {.async.} =
@@ -88,10 +231,10 @@ proc readKeyAsync*(): Future[Event] {.async.} =
             return Event(kind: Key, key: KeyEvent(code: End, char: '\0'))
           of 'Z': # Shift+Tab (BackTab)
             return Event(kind: Key, key: KeyEvent(code: BackTab, char: '\0'))
-          of 'M': # Mouse event (X10 format) - not implemented yet
-            return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
-          of '<': # SGR mouse format - not implemented yet
-            return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+          of 'M': # Mouse event (X10 format)
+            return await parseMouseEventX10()
+          of '<': # SGR mouse format
+            return await parseMouseEventSGR()
           of '1' .. '6':
             # Could be function key or special key with modifiers
             let nextChar = await readCharAsync()
@@ -133,15 +276,6 @@ proc readKeyAsync*(): Future[Event] {.async.} =
     raise newException(AsyncEventError, "Async key reading failed: " & e.msg)
   except CatchableError:
     return Event(kind: Unknown)
-
-# Async mouse event parsing (simplified - to be implemented later)
-proc parseMouseEventX10Async*(): Future[Event] {.async.} =
-  ## Parse X10 mouse format - simplified implementation
-  return Event(kind: Unknown)
-
-proc parseMouseEventSGRAsync*(): Future[Event] {.async.} =
-  ## Parse SGR mouse format - simplified implementation
-  return Event(kind: Unknown)
 
 # Non-blocking async event reading
 proc pollKeyAsync*(): Future[Option[Event]] {.async.} =
