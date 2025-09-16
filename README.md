@@ -2,8 +2,6 @@
 
 A CLI library in Nim, inspired by Ratatui.
 
-Still under development
-
 ## Features
 
 - High-performance terminal rendering with buffer-based system
@@ -51,7 +49,7 @@ https://fox0430.github.io/celina/celina.html
 ### Base
 https://fox0430.github.io/celina/widgets/base.html
 
-###  Button
+### Button
 https://fox0430.github.io/celina/widgets/button.html
 
 ### Input
@@ -71,6 +69,3 @@ https://fox0430.github.io/celina/widgets/tabs.html
 
 ### Text
 https://fox0430.github.io/celina/widgets/text.html
-
-### Windows
-https://fox0430.github.io/celina/widgets/windows.html
