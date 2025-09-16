@@ -146,12 +146,12 @@ suite "Multiple Event Sources":
         check async_events.resizeDetected == false
 
 suite "Mouse Event Parsing (Async)":
-  test "parseMouseEventX10Async returns unknown (placeholder)":
-    let event = waitFor parseMouseEventX10Async()
+  test "parseMouseEventX10 returns unknown (placeholder)":
+    let event = waitFor parseMouseEventX10()
     check event.kind == EventKind.Unknown
 
-  test "parseMouseEventSGRAsync returns unknown (placeholder)":
-    let event = waitFor parseMouseEventSGRAsync()
+  test "parseMouseEventSGR returns unknown (placeholder)":
+    let event = waitFor parseMouseEventSGR()
     check event.kind == EventKind.Unknown
 
 suite "Async Event Stream":
