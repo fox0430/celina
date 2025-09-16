@@ -7,8 +7,7 @@
 import std/options
 
 import
-  terminal, buffer, events, renderer, fps, cursor, geometry, errors, terminal_common
-import ../widgets/windows
+  terminal, buffer, events, renderer, fps, cursor, geometry, errors, terminal_common, windows
 
 type
   AppConfig* = object ## Application configuration options

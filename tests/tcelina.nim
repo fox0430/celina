@@ -3,7 +3,6 @@
 import std/[unittest, strutils, options]
 
 import ../celina/async/async_backend
-import ../celina/widgets/windows
 import ../celina {.all.}
 
 suite "Celina Main Module Tests":
