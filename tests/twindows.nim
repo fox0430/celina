@@ -4,7 +4,7 @@ import std/[unittest, options]
 
 import ../celina/core/[geometry, buffer, colors, events]
 
-import ../celina/widgets/windows {.all.}
+import ../celina/core/windows {.all.}
 
 suite "Window Tests":
   test "Create window with default settings":
