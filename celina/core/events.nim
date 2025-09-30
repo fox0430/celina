@@ -456,6 +456,17 @@ proc readKeyInput*(): Option[Event] =
   var ch: char
   let bytesRead = read(STDIN_FILENO, addr ch, 1)
 
+  # Handle EAGAIN/EWOULDBLOCK (no data available in non-blocking mode)
+  if bytesRead == -1:
+    let err = errno
+    if err == EAGAIN or err == EWOULDBLOCK:
+      discard fcntl(STDIN_FILENO, F_SETFL, flags)
+      return none(Event)
+    else:
+      # Other error occurred
+      discard fcntl(STDIN_FILENO, F_SETFL, flags)
+      return none(Event)
+
   if bytesRead > 0:
     if ch == '\x1b':
       # Use select with timeout to detect escape sequences
@@ -469,9 +480,19 @@ proc readKeyInput*(): Option[Event] =
         return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
 
       var next: char
-      if read(STDIN_FILENO, addr next, 1) == 1 and next == '[':
+      let nextRead = read(STDIN_FILENO, addr next, 1)
+      if nextRead == -1 and (errno == EAGAIN or errno == EWOULDBLOCK):
+        discard fcntl(STDIN_FILENO, F_SETFL, flags)
+        return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+
+      if nextRead == 1 and next == '[':
         var final: char
-        if read(STDIN_FILENO, addr final, 1) == 1:
+        let finalRead = read(STDIN_FILENO, addr final, 1)
+        if finalRead == -1 and (errno == EAGAIN or errno == EWOULDBLOCK):
+          discard fcntl(STDIN_FILENO, F_SETFL, flags)
+          return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+
+        if finalRead == 1:
           # Restore non-blocking mode
           discard fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK)
 
@@ -499,7 +520,12 @@ proc readKeyInput*(): Option[Event] =
           of '1' .. '6':
             # Could be function key or special key with modifiers
             var nextChar: char
-            if read(STDIN_FILENO, addr nextChar, 1) == 1:
+            let nextCharRead = read(STDIN_FILENO, addr nextChar, 1)
+            if nextCharRead == -1 and (errno == EAGAIN or errno == EWOULDBLOCK):
+              discard fcntl(STDIN_FILENO, F_SETFL, flags)
+              return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+
+            if nextCharRead == 1:
               if nextChar == '~':
                 # Special keys with numeric codes
                 case final
@@ -522,7 +548,13 @@ proc readKeyInput*(): Option[Event] =
               elif nextChar == ';':
                 # Modified key sequence
                 var modChar: char
-                if read(STDIN_FILENO, addr modChar, 1) == 1:
+                let modCharRead = read(STDIN_FILENO, addr modChar, 1)
+                if modCharRead == -1 and (errno == EAGAIN or errno == EWOULDBLOCK):
+                  discard fcntl(STDIN_FILENO, F_SETFL, flags)
+                  return
+                    some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+
+                if modCharRead == 1:
                   # Parse modifier
                   let modifier = parseInt($modChar)
                   var modifiers: set[KeyModifier] = {}
@@ -534,7 +566,13 @@ proc readKeyInput*(): Option[Event] =
                     modifiers.incl(Ctrl)
 
                   var keyChar: char
-                  if read(STDIN_FILENO, addr keyChar, 1) == 1:
+                  let keyCharRead = read(STDIN_FILENO, addr keyChar, 1)
+                  if keyCharRead == -1 and (errno == EAGAIN or errno == EWOULDBLOCK):
+                    discard fcntl(STDIN_FILENO, F_SETFL, flags)
+                    return
+                      some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+
+                  if keyCharRead == 1:
                     case keyChar
                     of 'A': # Modified Arrow Up
                       return some(

@@ -4,6 +4,7 @@
 ## using ANSI escape sequences for POSIX systems (Linux, macOS, etc.).
 
 import std/[termios, posix]
+
 import geometry, colors, buffer, errors, terminal_common
 
 export errors.TerminalError
@@ -89,6 +90,50 @@ proc disableRawMode*(terminal: Terminal) =
   terminal.rawMode = false
   terminal.rawModeEnabled = false
 
+# Safe write helper that handles EAGAIN
+proc tryWrite(data: string) =
+  ## Try to write data, ignoring transient errors
+  ## For cursor control sequences, we prefer to silently skip on EAGAIN
+  ## rather than crashing, since they're often non-critical
+  try:
+    var
+      written = 0
+      retries = 0
+    let dataLen = data.len
+    const maxRetries = 3
+
+    while written < dataLen:
+      let
+        fd = cint(stdout.getFileHandle())
+        n = write(fd, unsafeAddr data[written], dataLen - written)
+
+      if n == -1:
+        let err = errno
+        if err == EINTR:
+          # Interrupted, retry immediately
+          continue
+        elif err == EAGAIN or err == EWOULDBLOCK:
+          retries.inc
+          if retries >= maxRetries:
+            # Give up silently for cursor operations
+            return
+          discard usleep(1000) # 1ms
+          continue
+        else:
+          # Other error, give up silently
+          return
+      elif n > 0:
+        written += n
+        retries = 0
+      else:
+        # Unexpected, give up
+        return
+
+    stdout.flushFile()
+  except:
+    # Silently ignore all errors for cursor operations
+    discard
+
 # Alternate screen control
 proc enableAlternateScreen*(terminal: Terminal) =
   ## Switch to alternate screen buffer
@@ -115,57 +160,55 @@ proc disableAlternateScreen*(terminal: Terminal) =
 proc enableMouse*(terminal: Terminal) =
   ## Enable mouse reporting
   if not terminal.mouseEnabled:
-    stdout.write(enableMouseMode(MouseSGR))
-    stdout.flushFile()
+    tryWrite(enableMouseMode(MouseSGR))
     terminal.mouseEnabled = true
 
 proc disableMouse*(terminal: Terminal) =
   ## Disable mouse reporting
   if terminal.mouseEnabled:
-    stdout.write(disableMouseMode(MouseSGR))
-    stdout.flushFile()
+    tryWrite(disableMouseMode(MouseSGR))
     terminal.mouseEnabled = false
 
 # Cursor control
 proc hideCursor*() =
   ## Hide the cursor
-  stdout.write(HideCursorSeq)
+  tryWrite(HideCursorSeq)
 
 proc showCursor*() =
   ## Show the cursor
-  stdout.write(ShowCursorSeq)
+  tryWrite(ShowCursorSeq)
 
 proc setCursorPos*(x, y: int) =
   ## Set cursor position (1-based coordinates)
-  stdout.write(makeCursorPositionSeq(x, y))
+  tryWrite(makeCursorPositionSeq(x, y))
 
 proc setCursorPos*(pos: Position) =
   ## Set cursor position
-  stdout.write(makeCursorPositionSeq(pos))
+  tryWrite(makeCursorPositionSeq(pos))
 
 proc saveCursor*() =
   ## Save current cursor position
-  stdout.write(SaveCursorSeq)
+  tryWrite(SaveCursorSeq)
 
 proc restoreCursor*() =
   ## Restore previously saved cursor position
-  stdout.write(RestoreCursorSeq)
+  tryWrite(RestoreCursorSeq)
 
 proc moveCursorUp*(steps: int = 1) =
   ## Move cursor up by specified steps
-  stdout.write(makeCursorMoveSeq(CursorUpSeq, steps))
+  tryWrite(makeCursorMoveSeq(CursorUpSeq, steps))
 
 proc moveCursorDown*(steps: int = 1) =
   ## Move cursor down by specified steps
-  stdout.write(makeCursorMoveSeq(CursorDownSeq, steps))
+  tryWrite(makeCursorMoveSeq(CursorDownSeq, steps))
 
 proc moveCursorLeft*(steps: int = 1) =
   ## Move cursor left by specified steps
-  stdout.write(makeCursorMoveSeq(CursorLeftSeq, steps))
+  tryWrite(makeCursorMoveSeq(CursorLeftSeq, steps))
 
 proc moveCursorRight*(steps: int = 1) =
   ## Move cursor right by specified steps
-  stdout.write(makeCursorMoveSeq(CursorRightSeq, steps))
+  tryWrite(makeCursorMoveSeq(CursorRightSeq, steps))
 
 proc moveCursor*(dx, dy: int) =
   ## Move cursor relatively by dx, dy
@@ -181,7 +224,7 @@ proc moveCursor*(dx, dy: int) =
 
 proc setCursorStyle*(style: CursorStyle) =
   ## Set cursor appearance style
-  stdout.write(getCursorStyleSeq(style))
+  tryWrite(getCursorStyleSeq(style))
 
 # Screen control
 proc clearScreen*() =
@@ -207,7 +250,7 @@ proc clearToEndOfLine*() =
 
 proc clearToStartOfLine*() =
   ## Clear from start of line to cursor
-  stdout.write(ClearToStartOfLineSeq)
+  tryWrite(ClearToStartOfLineSeq)
 
 # Buffer rendering
 proc renderCell*(cell: Cell, x, y: int) =
@@ -216,12 +259,12 @@ proc renderCell*(cell: Cell, x, y: int) =
 
   let styleSeq = cell.style.toAnsiSequence()
   if styleSeq.len > 0:
-    stdout.write(styleSeq)
+    tryWrite(styleSeq)
 
-  stdout.write(cell.symbol)
+  tryWrite(cell.symbol)
 
   if styleSeq.len > 0:
-    stdout.write(resetSequence())
+    tryWrite(resetSequence())
 
 proc render*(terminal: Terminal, buffer: Buffer) =
   ## Render a buffer to the terminal using differential updates
