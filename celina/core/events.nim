@@ -256,6 +256,27 @@ proc readKey*(): Event =
     )
 
     if bytesRead == 1:
+      # Handle Ctrl+letter combinations (excluding special keys)
+      # \x01-\x1a = Ctrl-A to Ctrl-Z, but exclude already-handled keys:
+      # \x03 = Ctrl-C (Quit), \x08 = Ctrl-H (Backspace), \x09 = Ctrl-I (Tab)
+      # \x0a = Ctrl-J (Line Feed), \x0d = Ctrl-M (Enter), \x1b = Ctrl-[ (Escape)
+      if ch >= '\x01' and ch <= '\x1a' and
+          ch notin {'\x03', '\x08', '\x09', '\x0a', '\x0d', '\x1b'}:
+        let letter = chr(ch.ord + ord('a') - 1)
+        return
+          Event(kind: Key, key: KeyEvent(code: Char, char: letter, modifiers: {Ctrl}))
+
+      # Handle Ctrl-number and special control characters
+      # Following crossterm's mapping:
+      # \x00 = Ctrl-Space, \x1c = Ctrl-4, \x1d = Ctrl-5, \x1e = Ctrl-6, \x1f = Ctrl-7
+      if ch == '\x00':
+        return
+          Event(kind: Key, key: KeyEvent(code: Space, char: ' ', modifiers: {Ctrl}))
+      elif ch >= '\x1c' and ch <= '\x1f':
+        let digit = chr(ch.ord - 0x1c + ord('4'))
+        return
+          Event(kind: Key, key: KeyEvent(code: Char, char: digit, modifiers: {Ctrl}))
+
       case ch
       of '\r', '\n':
         return Event(kind: Key, key: KeyEvent(code: Enter, char: ch))
@@ -319,7 +340,7 @@ proc readKey*(): Event =
                   var modChar: char
                   if stdin.readBuffer(addr modChar, 1) == 1:
                     modSeq.add(modChar)
-                    # Parse modifier (2=Shift, 3=Alt, 4=Shift+Alt, 5=Ctrl, 6=Ctrl+Shift, 7=Ctrl+Alt, 8=Ctrl+Shift+Alt)
+                    # Parse modifier (2=Shift, 3=Alt, 4=Shift+Alt, 5=Ctrl, 6=Ctrl-Shift, 7=Ctrl-Alt, 8=Ctrl-Shift-Alt)
                     let modifier = parseInt($modChar)
                     var modifiers: set[KeyModifier] = {}
                     if (modifier and 1) != 0:
@@ -419,7 +440,7 @@ proc readKey*(): Event =
             return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
         else:
           return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
-      of '\x03': # Ctrl+C
+      of '\x03': # Ctrl-C
         return Event(kind: Quit)
       else:
         return Event(kind: Key, key: KeyEvent(code: Char, char: ch))
@@ -698,6 +719,34 @@ proc readKeyInput*(): Option[Event] =
     else:
       # Restore non-blocking mode
       discard fcntl(STDIN_FILENO, F_SETFL, flags)
+
+      # Handle Ctrl-letter combinations (excluding special keys)
+      if ch >= '\x01' and ch <= '\x1a' and
+          ch notin {'\x03', '\x08', '\x09', '\x0a', '\x0d', '\x1b'}:
+        let letter = chr(ch.ord + ord('a') - 1)
+        return some(
+          Event(
+            kind: EventKind.Key,
+            key: KeyEvent(code: KeyCode.Char, char: letter, modifiers: {Ctrl}),
+          )
+        )
+
+      # Handle Ctrl-number and special control characters
+      if ch == '\x00':
+        return some(
+          Event(
+            kind: EventKind.Key,
+            key: KeyEvent(code: KeyCode.Space, char: ' ', modifiers: {Ctrl}),
+          )
+        )
+      elif ch >= '\x1c' and ch <= '\x1f':
+        let digit = chr(ch.ord - 0x1c + ord('4'))
+        return some(
+          Event(
+            kind: EventKind.Key,
+            key: KeyEvent(code: KeyCode.Char, char: digit, modifiers: {Ctrl}),
+          )
+        )
 
       let event = Event(
         kind: EventKind.Key,
