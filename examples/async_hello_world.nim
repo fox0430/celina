@@ -28,7 +28,7 @@ proc main() {.async.} =
     of EventKind.Key:
       case event.key.code
       of KeyCode.Char:
-        if event.key.char == 'q':
+        if event.key.char == "q":
           return false # Quit on 'q'
       of KeyCode.Escape:
         return false # Quit on Escape

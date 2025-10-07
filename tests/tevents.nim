@@ -59,53 +59,53 @@ suite "Events Module Tests":
 
   suite "KeyEvent Tests":
     test "KeyEvent creation - character key":
-      let keyEvent = KeyEvent(code: Char, char: 'a', modifiers: {})
+      let keyEvent = KeyEvent(code: Char, char: "a", modifiers: {})
       check keyEvent.code == Char
-      check keyEvent.char == 'a'
+      check keyEvent.char == "a"
       check keyEvent.modifiers.len == 0
 
     test "KeyEvent creation - special key":
-      let keyEvent = KeyEvent(code: Enter, char: '\r', modifiers: {})
+      let keyEvent = KeyEvent(code: Enter, char: "\r", modifiers: {})
       check keyEvent.code == Enter
-      check keyEvent.char == '\r'
+      check keyEvent.char == "\r"
       check keyEvent.modifiers.len == 0
 
     test "KeyEvent creation - with modifiers":
-      let keyEvent = KeyEvent(code: Char, char: 'c', modifiers: {Ctrl})
+      let keyEvent = KeyEvent(code: Char, char: "c", modifiers: {Ctrl})
       check keyEvent.code == Char
-      check keyEvent.char == 'c'
+      check keyEvent.char == "c"
       check Ctrl in keyEvent.modifiers
       check keyEvent.modifiers.len == 1
 
     test "KeyEvent creation - multiple modifiers":
-      let keyEvent = KeyEvent(code: Char, char: 'x', modifiers: {Ctrl, Shift})
+      let keyEvent = KeyEvent(code: Char, char: "x", modifiers: {Ctrl, Shift})
       check keyEvent.code == Char
-      check keyEvent.char == 'x'
+      check keyEvent.char == "x"
       check Ctrl in keyEvent.modifiers
       check Shift in keyEvent.modifiers
       check Alt notin keyEvent.modifiers
       check keyEvent.modifiers.len == 2
 
     test "KeyEvent creation - function key":
-      let keyEvent = KeyEvent(code: F1, char: '\0', modifiers: {})
+      let keyEvent = KeyEvent(code: F1, char: "", modifiers: {})
       check keyEvent.code == F1
-      check keyEvent.char == '\0'
+      check keyEvent.char == ""
       check keyEvent.modifiers.len == 0
 
     test "KeyEvent creation - arrow key":
-      let keyEvent = KeyEvent(code: ArrowUp, char: '\0', modifiers: {})
+      let keyEvent = KeyEvent(code: ArrowUp, char: "", modifiers: {})
       check keyEvent.code == ArrowUp
-      check keyEvent.char == '\0'
+      check keyEvent.char == ""
       check keyEvent.modifiers.len == 0
 
   suite "Event Tests":
     test "Event creation - Key event":
-      let keyEvent = KeyEvent(code: Char, char: 'h', modifiers: {})
+      let keyEvent = KeyEvent(code: Char, char: "h", modifiers: {})
       let event = Event(kind: Key, key: keyEvent)
 
       check event.kind == EventKind.Key
       check event.key.code == Char
-      check event.key.char == 'h'
+      check event.key.char == "h"
       check event.key.modifiers.len == 0
 
     test "Event creation - Quit event":
@@ -117,70 +117,70 @@ suite "Events Module Tests":
       check event.kind == Unknown
 
     test "Event creation - Key event with Enter":
-      let keyEvent = KeyEvent(code: Enter, char: '\r', modifiers: {})
+      let keyEvent = KeyEvent(code: Enter, char: "\r", modifiers: {})
       let event = Event(kind: Key, key: keyEvent)
 
       check event.kind == EventKind.Key
       check event.key.code == Enter
-      check event.key.char == '\r'
+      check event.key.char == "\r"
 
     test "Event creation - Key event with Escape":
-      let keyEvent = KeyEvent(code: Escape, char: '\x1b', modifiers: {})
+      let keyEvent = KeyEvent(code: Escape, char: "\x1b", modifiers: {})
       let event = Event(kind: Key, key: keyEvent)
 
       check event.kind == EventKind.Key
       check event.key.code == Escape
-      check event.key.char == '\x1b'
+      check event.key.char == "\x1b"
 
     test "Event creation - Key event with Tab":
-      let keyEvent = KeyEvent(code: Tab, char: '\t', modifiers: {})
+      let keyEvent = KeyEvent(code: Tab, char: "\t", modifiers: {})
       let event = Event(kind: Key, key: keyEvent)
 
       check event.kind == EventKind.Key
       check event.key.code == Tab
-      check event.key.char == '\t'
+      check event.key.char == "\t"
 
     test "Event creation - Key event with Space":
-      let keyEvent = KeyEvent(code: Space, char: ' ', modifiers: {})
+      let keyEvent = KeyEvent(code: Space, char: " ", modifiers: {})
       let event = Event(kind: Key, key: keyEvent)
 
       check event.kind == EventKind.Key
       check event.key.code == Space
-      check event.key.char == ' '
+      check event.key.char == " "
 
     test "Event creation - Key event with Backspace":
-      let keyEvent = KeyEvent(code: Backspace, char: '\x08', modifiers: {})
+      let keyEvent = KeyEvent(code: Backspace, char: "\x08", modifiers: {})
       let event = Event(kind: Key, key: keyEvent)
 
       check event.kind == EventKind.Key
       check event.key.code == Backspace
-      check event.key.char == '\x08'
+      check event.key.char == "\x08"
 
   suite "Character Mapping Tests":
     test "Character event creation - letters":
       # Test various letter characters
       for ch in 'a' .. 'z':
-        let keyEvent = KeyEvent(code: Char, char: ch, modifiers: {})
+        let keyEvent = KeyEvent(code: Char, char: $ch, modifiers: {})
         let event = Event(kind: Key, key: keyEvent)
         check event.kind == EventKind.Key
         check event.key.code == Char
-        check event.key.char == ch
+        check event.key.char == $ch
 
       for ch in 'A' .. 'Z':
-        let keyEvent = KeyEvent(code: Char, char: ch, modifiers: {})
+        let keyEvent = KeyEvent(code: Char, char: $ch, modifiers: {})
         let event = Event(kind: Key, key: keyEvent)
         check event.kind == EventKind.Key
         check event.key.code == Char
-        check event.key.char == ch
+        check event.key.char == $ch
 
     test "Character event creation - digits":
       # Test digit characters
       for ch in '0' .. '9':
-        let keyEvent = KeyEvent(code: Char, char: ch, modifiers: {})
+        let keyEvent = KeyEvent(code: Char, char: $ch, modifiers: {})
         let event = Event(kind: Key, key: keyEvent)
         check event.kind == EventKind.Key
         check event.key.code == Char
-        check event.key.char == ch
+        check event.key.char == $ch
 
     test "Character event creation - special characters":
       # Test common special characters
@@ -191,91 +191,91 @@ suite "Events Module Tests":
         ]
 
       for ch in specialChars:
-        let keyEvent = KeyEvent(code: Char, char: ch, modifiers: {})
+        let keyEvent = KeyEvent(code: Char, char: $ch, modifiers: {})
         let event = Event(kind: Key, key: keyEvent)
         check event.kind == EventKind.Key
         check event.key.code == Char
-        check event.key.char == ch
+        check event.key.char == $ch
 
   suite "Special Key Tests":
     test "Special key mapping - control characters":
       # Test control characters mapping to special keys
       let enterEvent =
-        Event(kind: Key, key: KeyEvent(code: Enter, char: '\r', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: Enter, char: "\r", modifiers: {}))
       check enterEvent.key.code == Enter
-      check enterEvent.key.char == '\r'
+      check enterEvent.key.char == "\r"
 
       let tabEvent =
-        Event(kind: Key, key: KeyEvent(code: Tab, char: '\t', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: Tab, char: "\t", modifiers: {}))
       check tabEvent.key.code == Tab
-      check tabEvent.key.char == '\t'
+      check tabEvent.key.char == "\t"
 
       let escapeEvent =
-        Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b", modifiers: {}))
       check escapeEvent.key.code == Escape
-      check escapeEvent.key.char == '\x1b'
+      check escapeEvent.key.char == "\x1b"
 
       let backspaceEvent =
-        Event(kind: Key, key: KeyEvent(code: Backspace, char: '\x08', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: Backspace, char: "\x08", modifiers: {}))
       check backspaceEvent.key.code == Backspace
-      check backspaceEvent.key.char == '\x08'
+      check backspaceEvent.key.char == "\x08"
 
       let spaceEvent =
-        Event(kind: Key, key: KeyEvent(code: Space, char: ' ', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: Space, char: " ", modifiers: {}))
       check spaceEvent.key.code == Space
-      check spaceEvent.key.char == ' '
+      check spaceEvent.key.char == " "
 
     test "Unix line ending handling":
       # Test Unix line ending (\n) maps to Enter
       let unixEnterEvent =
-        Event(kind: Key, key: KeyEvent(code: Enter, char: '\n', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: Enter, char: "\n", modifiers: {}))
       check unixEnterEvent.key.code == Enter
-      check unixEnterEvent.key.char == '\n'
+      check unixEnterEvent.key.char == "\n"
 
     test "DEL character handling":
       # Test DEL character (\x7f) maps to Backspace
       let delEvent =
-        Event(kind: Key, key: KeyEvent(code: Backspace, char: '\x7f', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: Backspace, char: "\x7f", modifiers: {}))
       check delEvent.key.code == Backspace
-      check delEvent.key.char == '\x7f'
+      check delEvent.key.char == "\x7f"
 
   suite "Modifier Combination Tests":
     test "Single modifier combinations":
       let ctrlEvent =
-        Event(kind: Key, key: KeyEvent(code: Char, char: 'a', modifiers: {Ctrl}))
+        Event(kind: Key, key: KeyEvent(code: Char, char: "a", modifiers: {Ctrl}))
       check Ctrl in ctrlEvent.key.modifiers
       check Alt notin ctrlEvent.key.modifiers
       check Shift notin ctrlEvent.key.modifiers
 
       let altEvent =
-        Event(kind: Key, key: KeyEvent(code: Char, char: 'b', modifiers: {Alt}))
+        Event(kind: Key, key: KeyEvent(code: Char, char: "b", modifiers: {Alt}))
       check Alt in altEvent.key.modifiers
       check Ctrl notin altEvent.key.modifiers
       check Shift notin altEvent.key.modifiers
 
       let shiftEvent =
-        Event(kind: Key, key: KeyEvent(code: Char, char: 'C', modifiers: {Shift}))
+        Event(kind: Key, key: KeyEvent(code: Char, char: "C", modifiers: {Shift}))
       check Shift in shiftEvent.key.modifiers
       check Ctrl notin shiftEvent.key.modifiers
       check Alt notin shiftEvent.key.modifiers
 
     test "Multiple modifier combinations":
       let ctrlShiftEvent =
-        Event(kind: Key, key: KeyEvent(code: Char, char: 'D', modifiers: {Ctrl, Shift}))
+        Event(kind: Key, key: KeyEvent(code: Char, char: "D", modifiers: {Ctrl, Shift}))
       check Ctrl in ctrlShiftEvent.key.modifiers
       check Shift in ctrlShiftEvent.key.modifiers
       check Alt notin ctrlShiftEvent.key.modifiers
       check ctrlShiftEvent.key.modifiers.len == 2
 
       let ctrlAltEvent =
-        Event(kind: Key, key: KeyEvent(code: Char, char: 'e', modifiers: {Ctrl, Alt}))
+        Event(kind: Key, key: KeyEvent(code: Char, char: "e", modifiers: {Ctrl, Alt}))
       check Ctrl in ctrlAltEvent.key.modifiers
       check Alt in ctrlAltEvent.key.modifiers
       check Shift notin ctrlAltEvent.key.modifiers
       check ctrlAltEvent.key.modifiers.len == 2
 
       let altShiftEvent =
-        Event(kind: Key, key: KeyEvent(code: Char, char: 'F', modifiers: {Alt, Shift}))
+        Event(kind: Key, key: KeyEvent(code: Char, char: "F", modifiers: {Alt, Shift}))
       check Alt in altShiftEvent.key.modifiers
       check Shift in altShiftEvent.key.modifiers
       check Ctrl notin altShiftEvent.key.modifiers
@@ -283,7 +283,7 @@ suite "Events Module Tests":
 
     test "All modifiers combination":
       let allModsEvent = Event(
-        kind: Key, key: KeyEvent(code: Char, char: 'g', modifiers: {Ctrl, Alt, Shift})
+        kind: Key, key: KeyEvent(code: Char, char: "g", modifiers: {Ctrl, Alt, Shift})
       )
       check Ctrl in allModsEvent.key.modifiers
       check Alt in allModsEvent.key.modifiers
@@ -296,26 +296,26 @@ suite "Events Module Tests":
       let functionKeys = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12]
 
       for fKey in functionKeys:
-        let keyEvent = KeyEvent(code: fKey, char: '\0', modifiers: {})
+        let keyEvent = KeyEvent(code: fKey, char: "", modifiers: {})
         let event = Event(kind: Key, key: keyEvent)
         check event.kind == EventKind.Key
         check event.key.code == fKey
-        check event.key.char == '\0'
+        check event.key.char == ""
         check event.key.modifiers.len == 0
 
     test "Function keys with modifiers":
       let f1CtrlEvent =
-        Event(kind: Key, key: KeyEvent(code: F1, char: '\0', modifiers: {Ctrl}))
+        Event(kind: Key, key: KeyEvent(code: F1, char: "", modifiers: {Ctrl}))
       check f1CtrlEvent.key.code == F1
       check Ctrl in f1CtrlEvent.key.modifiers
 
       let f5ShiftEvent =
-        Event(kind: Key, key: KeyEvent(code: F5, char: '\0', modifiers: {Shift}))
+        Event(kind: Key, key: KeyEvent(code: F5, char: "", modifiers: {Shift}))
       check f5ShiftEvent.key.code == F5
       check Shift in f5ShiftEvent.key.modifiers
 
       let f12AltEvent =
-        Event(kind: Key, key: KeyEvent(code: F12, char: '\0', modifiers: {Alt}))
+        Event(kind: Key, key: KeyEvent(code: F12, char: "", modifiers: {Alt}))
       check f12AltEvent.key.code == F12
       check Alt in f12AltEvent.key.modifiers
 
@@ -324,31 +324,31 @@ suite "Events Module Tests":
       let arrowKeys = [ArrowUp, ArrowDown, ArrowLeft, ArrowRight]
 
       for arrowKey in arrowKeys:
-        let keyEvent = KeyEvent(code: arrowKey, char: '\0', modifiers: {})
+        let keyEvent = KeyEvent(code: arrowKey, char: "", modifiers: {})
         let event = Event(kind: Key, key: keyEvent)
         check event.kind == EventKind.Key
         check event.key.code == arrowKey
-        check event.key.char == '\0'
+        check event.key.char == ""
         check event.key.modifiers.len == 0
 
     test "Arrow keys with modifiers":
       let upCtrlEvent =
-        Event(kind: Key, key: KeyEvent(code: ArrowUp, char: '\0', modifiers: {Ctrl}))
+        Event(kind: Key, key: KeyEvent(code: ArrowUp, char: "", modifiers: {Ctrl}))
       check upCtrlEvent.key.code == ArrowUp
       check Ctrl in upCtrlEvent.key.modifiers
 
       let downShiftEvent =
-        Event(kind: Key, key: KeyEvent(code: ArrowDown, char: '\0', modifiers: {Shift}))
+        Event(kind: Key, key: KeyEvent(code: ArrowDown, char: "", modifiers: {Shift}))
       check downShiftEvent.key.code == ArrowDown
       check Shift in downShiftEvent.key.modifiers
 
       let leftAltEvent =
-        Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: '\0', modifiers: {Alt}))
+        Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: "", modifiers: {Alt}))
       check leftAltEvent.key.code == ArrowLeft
       check Alt in leftAltEvent.key.modifiers
 
       let rightMultiEvent = Event(
-        kind: Key, key: KeyEvent(code: ArrowRight, char: '\0', modifiers: {Ctrl, Alt})
+        kind: Key, key: KeyEvent(code: ArrowRight, char: "", modifiers: {Ctrl, Alt})
       )
       check rightMultiEvent.key.code == ArrowRight
       check Ctrl in rightMultiEvent.key.modifiers
@@ -357,7 +357,7 @@ suite "Events Module Tests":
   suite "Event Type Discrimination Tests":
     test "Key event vs other event types":
       let keyEvent =
-        Event(kind: Key, key: KeyEvent(code: Char, char: 'x', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: Char, char: "x", modifiers: {}))
       let quitEvent = Event(kind: Quit)
       let unknownEvent = Event(kind: Unknown)
 
@@ -374,12 +374,12 @@ suite "Events Module Tests":
 
     test "Event field access safety":
       let keyEvent =
-        Event(kind: Key, key: KeyEvent(code: Enter, char: '\r', modifiers: {Ctrl}))
+        Event(kind: Key, key: KeyEvent(code: Enter, char: "\r", modifiers: {Ctrl}))
 
       # Key event should have accessible key field
       check keyEvent.kind == EventKind.Key
       check keyEvent.key.code == Enter
-      check keyEvent.key.char == '\r'
+      check keyEvent.key.char == "\r"
       check Ctrl in keyEvent.key.modifiers
 
   suite "Navigation Key Tests":
@@ -387,87 +387,87 @@ suite "Events Module Tests":
       let navKeys = [Home, End, PageUp, PageDown, Insert, Delete]
 
       for navKey in navKeys:
-        let keyEvent = KeyEvent(code: navKey, char: '\0', modifiers: {})
+        let keyEvent = KeyEvent(code: navKey, char: "", modifiers: {})
         let event = Event(kind: Key, key: keyEvent)
         check event.kind == EventKind.Key
         check event.key.code == navKey
-        check event.key.char == '\0'
+        check event.key.char == ""
         check event.key.modifiers.len == 0
 
     test "Navigation keys with modifiers":
       let homeCtrlEvent =
-        Event(kind: Key, key: KeyEvent(code: Home, char: '\0', modifiers: {Ctrl}))
+        Event(kind: Key, key: KeyEvent(code: Home, char: "", modifiers: {Ctrl}))
       check homeCtrlEvent.key.code == Home
       check Ctrl in homeCtrlEvent.key.modifiers
 
       let endShiftEvent =
-        Event(kind: Key, key: KeyEvent(code: End, char: '\0', modifiers: {Shift}))
+        Event(kind: Key, key: KeyEvent(code: End, char: "", modifiers: {Shift}))
       check endShiftEvent.key.code == End
       check Shift in endShiftEvent.key.modifiers
 
       let pageUpAltEvent =
-        Event(kind: Key, key: KeyEvent(code: PageUp, char: '\0', modifiers: {Alt}))
+        Event(kind: Key, key: KeyEvent(code: PageUp, char: "", modifiers: {Alt}))
       check pageUpAltEvent.key.code == PageUp
       check Alt in pageUpAltEvent.key.modifiers
 
       let pageDownMultiEvent = Event(
-        kind: Key, key: KeyEvent(code: PageDown, char: '\0', modifiers: {Ctrl, Shift})
+        kind: Key, key: KeyEvent(code: PageDown, char: "", modifiers: {Ctrl, Shift})
       )
       check pageDownMultiEvent.key.code == PageDown
       check Ctrl in pageDownMultiEvent.key.modifiers
       check Shift in pageDownMultiEvent.key.modifiers
 
       let insertEvent =
-        Event(kind: Key, key: KeyEvent(code: Insert, char: '\0', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: Insert, char: "", modifiers: {}))
       check insertEvent.key.code == Insert
       check insertEvent.key.modifiers.len == 0
 
       let deleteEvent =
-        Event(kind: Key, key: KeyEvent(code: Delete, char: '\0', modifiers: {Ctrl}))
+        Event(kind: Key, key: KeyEvent(code: Delete, char: "", modifiers: {Ctrl}))
       check deleteEvent.key.code == Delete
       check Ctrl in deleteEvent.key.modifiers
 
   suite "BackTab and Modified Keys Tests":
     test "BackTab (Shift+Tab) key creation":
       let backTabEvent =
-        Event(kind: Key, key: KeyEvent(code: BackTab, char: '\0', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: BackTab, char: "", modifiers: {}))
       check backTabEvent.key.code == BackTab
-      check backTabEvent.key.char == '\0'
+      check backTabEvent.key.char == ""
       check backTabEvent.key.modifiers.len == 0
 
     test "Modified arrow keys":
       # Ctrl+Arrow keys for word navigation
       let ctrlUpEvent =
-        Event(kind: Key, key: KeyEvent(code: ArrowUp, char: '\0', modifiers: {Ctrl}))
+        Event(kind: Key, key: KeyEvent(code: ArrowUp, char: "", modifiers: {Ctrl}))
       check ctrlUpEvent.key.code == ArrowUp
       check Ctrl in ctrlUpEvent.key.modifiers
       check Shift notin ctrlUpEvent.key.modifiers
 
       let ctrlDownEvent =
-        Event(kind: Key, key: KeyEvent(code: ArrowDown, char: '\0', modifiers: {Ctrl}))
+        Event(kind: Key, key: KeyEvent(code: ArrowDown, char: "", modifiers: {Ctrl}))
       check ctrlDownEvent.key.code == ArrowDown
       check Ctrl in ctrlDownEvent.key.modifiers
 
       let ctrlLeftEvent =
-        Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: '\0', modifiers: {Ctrl}))
+        Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: "", modifiers: {Ctrl}))
       check ctrlLeftEvent.key.code == ArrowLeft
       check Ctrl in ctrlLeftEvent.key.modifiers
 
       let ctrlRightEvent =
-        Event(kind: Key, key: KeyEvent(code: ArrowRight, char: '\0', modifiers: {Ctrl}))
+        Event(kind: Key, key: KeyEvent(code: ArrowRight, char: "", modifiers: {Ctrl}))
       check ctrlRightEvent.key.code == ArrowRight
       check Ctrl in ctrlRightEvent.key.modifiers
 
       # Shift+Arrow keys for selection
       let shiftUpEvent =
-        Event(kind: Key, key: KeyEvent(code: ArrowUp, char: '\0', modifiers: {Shift}))
+        Event(kind: Key, key: KeyEvent(code: ArrowUp, char: "", modifiers: {Shift}))
       check shiftUpEvent.key.code == ArrowUp
       check Shift in shiftUpEvent.key.modifiers
       check Ctrl notin shiftUpEvent.key.modifiers
 
       # Ctrl+Shift+Arrow for extended selection
       let ctrlShiftLeftEvent = Event(
-        kind: Key, key: KeyEvent(code: ArrowLeft, char: '\0', modifiers: {Ctrl, Shift})
+        kind: Key, key: KeyEvent(code: ArrowLeft, char: "", modifiers: {Ctrl, Shift})
       )
       check ctrlShiftLeftEvent.key.code == ArrowLeft
       check Ctrl in ctrlShiftLeftEvent.key.modifiers
@@ -477,40 +477,40 @@ suite "Events Module Tests":
     test "Modified navigation keys":
       # Ctrl+Home/End for document navigation
       let ctrlHomeEvent =
-        Event(kind: Key, key: KeyEvent(code: Home, char: '\0', modifiers: {Ctrl}))
+        Event(kind: Key, key: KeyEvent(code: Home, char: "", modifiers: {Ctrl}))
       check ctrlHomeEvent.key.code == Home
       check Ctrl in ctrlHomeEvent.key.modifiers
 
       let ctrlEndEvent =
-        Event(kind: Key, key: KeyEvent(code: End, char: '\0', modifiers: {Ctrl}))
+        Event(kind: Key, key: KeyEvent(code: End, char: "", modifiers: {Ctrl}))
       check ctrlEndEvent.key.code == End
       check Ctrl in ctrlEndEvent.key.modifiers
 
       # Shift+PageUp/PageDown for selection
       let shiftPageUpEvent =
-        Event(kind: Key, key: KeyEvent(code: PageUp, char: '\0', modifiers: {Shift}))
+        Event(kind: Key, key: KeyEvent(code: PageUp, char: "", modifiers: {Shift}))
       check shiftPageUpEvent.key.code == PageUp
       check Shift in shiftPageUpEvent.key.modifiers
 
       let shiftPageDownEvent =
-        Event(kind: Key, key: KeyEvent(code: PageDown, char: '\0', modifiers: {Shift}))
+        Event(kind: Key, key: KeyEvent(code: PageDown, char: "", modifiers: {Shift}))
       check shiftPageDownEvent.key.code == PageDown
       check Shift in shiftPageDownEvent.key.modifiers
 
       # Ctrl+Insert/Delete for clipboard operations
       let ctrlInsertEvent =
-        Event(kind: Key, key: KeyEvent(code: Insert, char: '\0', modifiers: {Ctrl}))
+        Event(kind: Key, key: KeyEvent(code: Insert, char: "", modifiers: {Ctrl}))
       check ctrlInsertEvent.key.code == Insert
       check Ctrl in ctrlInsertEvent.key.modifiers
 
       let shiftDeleteEvent =
-        Event(kind: Key, key: KeyEvent(code: Delete, char: '\0', modifiers: {Shift}))
+        Event(kind: Key, key: KeyEvent(code: Delete, char: "", modifiers: {Shift}))
       check shiftDeleteEvent.key.code == Delete
       check Shift in shiftDeleteEvent.key.modifiers
 
   suite "Edge Case Tests":
     test "Empty modifier set":
-      let event = Event(kind: Key, key: KeyEvent(code: Char, char: 'a', modifiers: {}))
+      let event = Event(kind: Key, key: KeyEvent(code: Char, char: "a", modifiers: {}))
       check event.key.modifiers.len == 0
       check Ctrl notin event.key.modifiers
       check Alt notin event.key.modifiers
@@ -518,49 +518,50 @@ suite "Events Module Tests":
 
     test "Null character handling":
       let nullEvent =
-        Event(kind: Key, key: KeyEvent(code: Char, char: '\0', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: Char, char: "", modifiers: {}))
       check nullEvent.key.code == Char
-      check nullEvent.key.char == '\0'
+      check nullEvent.key.char == ""
 
     test "High ASCII characters":
       # Test extended ASCII characters
       let highAsciiChars = ['\x80', '\xFF', '\xA0', '\xF0']
       for ch in highAsciiChars:
-        let event = Event(kind: Key, key: KeyEvent(code: Char, char: ch, modifiers: {}))
+        let event =
+          Event(kind: Key, key: KeyEvent(code: Char, char: $ch, modifiers: {}))
         check event.kind == EventKind.Key
         check event.key.code == Char
-        check event.key.char == ch
+        check event.key.char == $ch
 
   suite "Integration Tests":
     test "Complex event scenarios":
       # Simulate typing "Hello" with various modifiers
       let events = [
-        Event(kind: Key, key: KeyEvent(code: Char, char: 'H', modifiers: {Shift})),
-        Event(kind: Key, key: KeyEvent(code: Char, char: 'e', modifiers: {})),
-        Event(kind: Key, key: KeyEvent(code: Char, char: 'l', modifiers: {})),
-        Event(kind: Key, key: KeyEvent(code: Char, char: 'l', modifiers: {})),
-        Event(kind: Key, key: KeyEvent(code: Char, char: 'o', modifiers: {})),
-        Event(kind: Key, key: KeyEvent(code: Enter, char: '\r', modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "H", modifiers: {Shift})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "e", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "l", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "l", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "o", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Enter, char: "\r", modifiers: {})),
       ]
 
-      check events[0].key.char == 'H'
+      check events[0].key.char == "H"
       check Shift in events[0].key.modifiers
-      check events[1].key.char == 'e'
+      check events[1].key.char == "e"
       check events[1].key.modifiers.len == 0
       check events[5].key.code == Enter
 
     test "Mixed key types sequence":
       let sequence = [
-        Event(kind: Key, key: KeyEvent(code: F1, char: '\0', modifiers: {})),
-        Event(kind: Key, key: KeyEvent(code: Char, char: 'x', modifiers: {Ctrl})),
-        Event(kind: Key, key: KeyEvent(code: ArrowUp, char: '\0', modifiers: {})),
-        Event(kind: Key, key: KeyEvent(code: Space, char: ' ', modifiers: {})),
-        Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b', modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: F1, char: "", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "x", modifiers: {Ctrl})),
+        Event(kind: Key, key: KeyEvent(code: ArrowUp, char: "", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Space, char: " ", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b", modifiers: {})),
         Event(kind: Quit),
       ]
 
       check sequence[0].key.code == F1
-      check sequence[1].key.char == 'x'
+      check sequence[1].key.char == "x"
       check Ctrl in sequence[1].key.modifiers
       check sequence[2].key.code == ArrowUp
       check sequence[3].key.code == Space
@@ -573,22 +574,21 @@ suite "Events Module Tests":
       # Note: These tests verify the function logic, not actual stdin reading
 
       # Verify arrow key codes are correctly defined
-      let arrowUpEvent = Event(kind: Key, key: KeyEvent(code: ArrowUp, char: '\0'))
+      let arrowUpEvent = Event(kind: Key, key: KeyEvent(code: ArrowUp, char: ""))
       check arrowUpEvent.key.code == ArrowUp
-      check arrowUpEvent.key.char == '\0'
+      check arrowUpEvent.key.char == ""
 
-      let arrowDownEvent = Event(kind: Key, key: KeyEvent(code: ArrowDown, char: '\0'))
+      let arrowDownEvent = Event(kind: Key, key: KeyEvent(code: ArrowDown, char: ""))
       check arrowDownEvent.key.code == ArrowDown
-      check arrowDownEvent.key.char == '\0'
+      check arrowDownEvent.key.char == ""
 
-      let arrowLeftEvent = Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: '\0'))
+      let arrowLeftEvent = Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: ""))
       check arrowLeftEvent.key.code == ArrowLeft
-      check arrowLeftEvent.key.char == '\0'
+      check arrowLeftEvent.key.char == ""
 
-      let arrowRightEvent =
-        Event(kind: Key, key: KeyEvent(code: ArrowRight, char: '\0'))
+      let arrowRightEvent = Event(kind: Key, key: KeyEvent(code: ArrowRight, char: ""))
       check arrowRightEvent.key.code == ArrowRight
-      check arrowRightEvent.key.char == '\0'
+      check arrowRightEvent.key.char == ""
 
     test "Arrow key sequence mapping":
       # Test that the correct KeyCode values are used for arrow keys
@@ -606,15 +606,15 @@ suite "Events Module Tests":
       ]
 
       for (keyCode, description) in expectedMappings:
-        let event = Event(kind: Key, key: KeyEvent(code: keyCode, char: '\0'))
+        let event = Event(kind: Key, key: KeyEvent(code: keyCode, char: ""))
         check event.key.code == keyCode
-        check event.key.char == '\0'
+        check event.key.char == ""
 
     test "Escape key fallback behavior":
       # Test that malformed escape sequences fall back to Escape key
-      let escapeEvent = Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+      let escapeEvent = Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
       check escapeEvent.key.code == Escape
-      check escapeEvent.key.char == '\x1b'
+      check escapeEvent.key.char == "\x1b"
 
   # Mouse Event Tests
   suite "Mouse Event Tests":
@@ -849,7 +849,7 @@ suite "Events Module Tests":
         mouse: MouseEvent(kind: Press, button: Left, x: 0, y: 0, modifiers: {}),
       )
       let keyEvent =
-        Event(kind: Key, key: KeyEvent(code: Char, char: 'a', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: Char, char: "a", modifiers: {}))
       let quitEvent = Event(kind: Quit)
 
       check mouseEvent.kind == Mouse
@@ -1019,28 +1019,28 @@ suite "Events Module Tests":
   suite "ESC Key Detection Fix Tests":
     test "Standalone ESC key event properties":
       let escEvent =
-        Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b", modifiers: {}))
 
       check escEvent.kind == EventKind.Key
       check escEvent.key.code == Escape
-      check escEvent.key.char == '\x1b'
-      check escEvent.key.char.ord == 27
+      check escEvent.key.char == "\x1b"
+      check escEvent.key.char[0].ord == 27
       check escEvent.key.modifiers.len == 0
 
     test "ESC vs Arrow key discrimination":
       # ESC key should be standalone
       let escEvent =
-        Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b", modifiers: {}))
       check escEvent.key.code == Escape
 
       # Arrow keys should be different codes
       let arrowKeys = [ArrowUp, ArrowDown, ArrowLeft, ArrowRight]
       for arrowKey in arrowKeys:
         let arrowEvent =
-          Event(kind: Key, key: KeyEvent(code: arrowKey, char: '\0', modifiers: {}))
+          Event(kind: Key, key: KeyEvent(code: arrowKey, char: "", modifiers: {}))
         check arrowEvent.key.code == arrowKey
         check arrowEvent.key.code != Escape
-        check arrowEvent.key.char == '\0'
+        check arrowEvent.key.char == ""
 
     test "Timeout mechanism constants":
       # Verify timeout constants used in the fix
@@ -1068,36 +1068,35 @@ suite "Events Module Tests":
       # This prevents the original bug where ESC needed to be pressed twice
 
       let singleEscEvent =
-        Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b", modifiers: {}))
       check singleEscEvent.key.code == Escape
 
       # Multiple ESC events should each be valid individually
       let escSequence = [
-        Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b', modifiers: {})),
-        Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b', modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b", modifiers: {})),
       ]
 
       check escSequence.len == 2
       for escEvent in escSequence:
         check escEvent.key.code == Escape
-        check escEvent.key.char == '\x1b'
+        check escEvent.key.char == "\x1b"
 
     test "Arrow key compatibility after fix":
       # Ensure the ESC fix doesn't break arrow key detection
       let arrowSequences = [
-        Event(kind: Key, key: KeyEvent(code: ArrowUp, char: '\0', modifiers: {})),
-          # ESC[A
-        Event(kind: Key, key: KeyEvent(code: ArrowDown, char: '\0', modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: ArrowUp, char: "", modifiers: {})), # ESC[A
+        Event(kind: Key, key: KeyEvent(code: ArrowDown, char: "", modifiers: {})),
           # ESC[B
-        Event(kind: Key, key: KeyEvent(code: ArrowRight, char: '\0', modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: ArrowRight, char: "", modifiers: {})),
           # ESC[C
-        Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: '\0', modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: "", modifiers: {})),
           # ESC[D
       ]
 
       for arrowEvent in arrowSequences:
         check arrowEvent.kind == EventKind.Key
-        check arrowEvent.key.char == '\0'
+        check arrowEvent.key.char == ""
         check arrowEvent.key.code != Escape
 
     test "Other escape sequences compatibility":
@@ -1114,11 +1113,11 @@ suite "Events Module Tests":
 
       for (keyCode, description) in specialKeys:
         let specialEvent =
-          Event(kind: Key, key: KeyEvent(code: keyCode, char: '\0', modifiers: {}))
+          Event(kind: Key, key: KeyEvent(code: keyCode, char: "", modifiers: {}))
         check specialEvent.kind == EventKind.Key
         check specialEvent.key.code == keyCode
         check specialEvent.key.code != Escape
-        check specialEvent.key.char == '\0'
+        check specialEvent.key.char == ""
 
     test "Select system call parameter validation":
       # Test parameters used in the ESC detection fix

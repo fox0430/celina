@@ -103,12 +103,12 @@ proc main() =
       case event.key.code
       of KeyCode.Char:
         case event.key.char
-        of 'q':
+        of "q":
           return false
-        of '?': # Show/hide help with '?'
+        of "?": # Show/hide help with '?'
           showHelp = not showHelp
           return true
-        of 'B': # Capital B to cycle border styles (to avoid conflict with vim 'b')
+        of "B": # Capital B to cycle border styles (to avoid conflict with vim 'b')
           # Cycle through border styles
           currentBorderStyle =
             case currentBorderStyle
@@ -118,7 +118,7 @@ proc main() =
             of table.DoubleBorder: table.NoBorder
           tableWidget.borderStyle = currentBorderStyle
           return true
-        of 'M':
+        of "M":
           # Capital M to cycle selection modes (to avoid conflict with vim movements)
           # Cycle through selection modes
           currentSelectionMode =
@@ -129,7 +129,7 @@ proc main() =
           tableWidget.selectionMode = currentSelectionMode
           tableWidget.clearSelection()
           return true
-        of 'C': # Capital C to clear selection
+        of "C": # Capital C to clear selection
           tableWidget.clearSelection()
           return true
         else:

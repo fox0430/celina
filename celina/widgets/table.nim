@@ -421,44 +421,44 @@ proc handleKeyEvent*(widget: Table, event: KeyEvent): bool =
   of Char:
     case event.char
     # Vim-like navigation
-    of 'j': # Down
+    of "j": # Down
       widget.highlightNext()
       return true
-    of 'k': # Up
+    of "k": # Up
       widget.highlightPrevious()
       return true
-    of 'g': # Go to first (gg in vim, but single g for simplicity)
+    of "g": # Go to first (gg in vim, but single g for simplicity)
       widget.highlightFirst()
       return true
-    of 'G': # Go to last
+    of "G": # Go to last
       widget.highlightLast()
       return true
-    of 'h': # Left (could be used for horizontal scrolling)
+    of "h": # Left (could be used for horizontal scrolling)
       return false
-    of 'l': # Right (could be used for horizontal scrolling)
+    of "l": # Right (could be used for horizontal scrolling)
       return false
     # Vim-like scrolling
-    of 'u': # Half page up (Ctrl-U in vim)
+    of "u": # Half page up (Ctrl-U in vim)
       widget.pageUp()
       return true
-    of 'd': # Half page down (Ctrl-D in vim)
+    of "d": # Half page down (Ctrl-D in vim)
       widget.pageDown()
       return true
-    of 'b': # Full page up (Ctrl-B in vim)
+    of "b": # Full page up (Ctrl-B in vim)
       widget.fullPageUp()
       return true
-    of 'f': # Full page down (Ctrl-F in vim)
+    of "f": # Full page down (Ctrl-F in vim)
       widget.fullPageDown()
       return true
     # Selection
-    of ' ': # Space for selection
+    of " ": # Space for selection
       if widget.highlightedIndex >= 0 and widget.selectionMode != None:
         if widget.selectionMode == Multiple:
           widget.toggleSelection(widget.highlightedIndex)
         else:
           widget.selectRow(widget.highlightedIndex)
         return true
-    of 'v': # Visual mode toggle (for multiple selection)
+    of "v": # Visual mode toggle (for multiple selection)
       if widget.highlightedIndex >= 0 and widget.selectionMode == Multiple:
         widget.toggleSelection(widget.highlightedIndex)
         return true

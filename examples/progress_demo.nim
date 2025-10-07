@@ -53,13 +53,13 @@ proc main() =
         case event.key.code
         of KeyCode.Char:
           case event.key.char
-          of 'q', 'Q':
+          of "q", "Q":
             return false # Quit
-          of 'r', 'R': # Reset
+          of "r", "R": # Reset
             progress = 0.0
             tasksCompleted = 0
             bytesDownloaded = 0
-          of 'c', 'C': # Complete
+          of "c", "C": # Complete
             progress = 1.0
             tasksCompleted = 10
             bytesDownloaded = 1024 * 1024 * 100

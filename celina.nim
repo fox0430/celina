@@ -71,7 +71,7 @@ proc quickRun*(
   ##   eventHandler = proc(event: Event): bool =
   ##     case event.kind
   ##     of EventKind.Key:
-  ##       if event.key.code == KeyCode.Char and event.key.char == 'q':
+  ##       if event.key.code == KeyCode.Char and event.key.char == "q":
   ##         return false
   ##     else: discard
   ##     return true,

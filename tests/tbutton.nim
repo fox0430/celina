@@ -97,7 +97,7 @@ suite "Button Widget Tests":
         clickCount.inc()
       btn.setState(Focused)
 
-      let enterEvent = KeyEvent(code: Enter, char: '\0', modifiers: {})
+      let enterEvent = KeyEvent(code: Enter, char: "", modifiers: {})
 
       let handled = btn.handleKeyEvent(enterEvent)
       check handled == true
@@ -110,7 +110,7 @@ suite "Button Widget Tests":
         clickCount.inc()
       btn.setState(Focused)
 
-      let spaceEvent = KeyEvent(code: Space, char: ' ', modifiers: {})
+      let spaceEvent = KeyEvent(code: Space, char: " ", modifiers: {})
 
       let handled = btn.handleKeyEvent(spaceEvent)
       check handled == true
@@ -120,12 +120,12 @@ suite "Button Widget Tests":
       var customKeyPressed = false
       var btn = newButton("Test")
       btn.onKeyPress = proc(key: KeyEvent): bool =
-        if key.code == Char and key.char == 'x':
+        if key.code == Char and key.char == "x":
           customKeyPressed = true
           return true
         return false
 
-      let customEvent = KeyEvent(code: Char, char: 'x', modifiers: {})
+      let customEvent = KeyEvent(code: Char, char: "x", modifiers: {})
 
       let handled = btn.handleKeyEvent(customEvent)
       check handled == true

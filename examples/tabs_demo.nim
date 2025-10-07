@@ -108,15 +108,15 @@ tabWidget.removeTab(1)""",
       case event.key.code
       of KeyCode.Char:
         case event.key.char
-        of 'q', 'Q':
+        of "q", "Q":
           return false
-        of '1':
+        of "1":
           tabsWidget.setActiveTab(0)
-        of '2':
+        of "2":
           tabsWidget.setActiveTab(1)
-        of '3':
+        of "3":
           tabsWidget.setActiveTab(2)
-        of '4':
+        of "4":
           tabsWidget.setActiveTab(3)
         else:
           discard

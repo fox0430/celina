@@ -414,30 +414,30 @@ proc handleKeyEventAsync(fm: FileManagerApp, key: KeyEvent): Future[bool] {.asyn
   case key.code
   of Char:
     case key.char
-    of 'q', 'Q':
+    of "q", "Q":
       return false # Quit
-    of 'j', 'J':
+    of "j", "J":
       # Move down
       if fm.selectedIndex < fm.files.len - 1:
         fm.selectedIndex.inc()
         fm.markSelectionChanged()
         await fm.updateWindowsAsync()
-    of 'k', 'K':
+    of "k", "K":
       # Move up
       if fm.selectedIndex > 0:
         fm.selectedIndex.dec()
         fm.markSelectionChanged()
         await fm.updateWindowsAsync()
-    of 'r', 'R':
+    of "r", "R":
       # Refresh
       await fm.refreshAsync()
-    of 'g':
+    of "g":
       # Go to top
       fm.selectedIndex = 0
       fm.scrollOffset = 0
       fm.markSelectionChanged()
       await fm.updateWindowsAsync()
-    of 'G':
+    of "G":
       # Go to bottom
       fm.selectedIndex = max(0, fm.files.len - 1)
       # scrollOffset will be set in updateDirectoryWindowAsync
