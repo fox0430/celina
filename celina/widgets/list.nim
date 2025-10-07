@@ -300,10 +300,10 @@ proc handleKeyEvent*(widget: List, event: KeyEvent): bool =
     return true
   of Char:
     case event.char
-    of 'k':
+    of "k":
       widget.highlightPrevious()
       return true
-    of 'j':
+    of "j":
       widget.highlightNext()
       return true
     else:

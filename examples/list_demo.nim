@@ -45,12 +45,12 @@ proc main() =
       case event.key.code
       of KeyCode.Escape, KeyCode.Char:
         if event.key.code == Escape or (
-          event.key.code == Char and event.key.char == 'q'
+          event.key.code == Char and event.key.char == "q"
         ):
           return false
         elif event.key.code == Char:
           case event.key.char
-          of '1':
+          of "1":
             # Switch to single selection mode
             listMode = 0
             listWidget = selectList(
@@ -59,7 +59,7 @@ proc main() =
                 selectedItem = index,
             )
             listWidget.setState(Focused)
-          of '2':
+          of "2":
             # Switch to multiple selection mode
             listMode = 1
             listWidget = checkList(
@@ -68,12 +68,12 @@ proc main() =
                 multipleSelection = indices,
             )
             listWidget.setState(Focused)
-          of '3':
+          of "3":
             # Switch to no selection mode with bullets
             listMode = 2
             listWidget = bulletList(items, "→ ")
             listWidget.setState(Focused)
-          of 'c':
+          of "c":
             # Clear selection
             listWidget.clearSelection()
             selectedItem = -1

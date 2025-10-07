@@ -188,7 +188,7 @@ proc main() =
     case event.kind
     of Key:
       # Handle keyboard events
-      if event.key.code == Char and event.key.char == 'q':
+      if event.key.code == Char and event.key.char == "q":
         return false # Quit on 'q'
       elif event.key.code == Escape:
         return false # Quit on Escape

@@ -245,35 +245,35 @@ suite "List Widget Tests":
     listWidget.setState(Focused)
 
     # Arrow down
-    let downEvent = KeyEvent(code: ArrowDown, char: '\0', modifiers: {})
+    let downEvent = KeyEvent(code: ArrowDown, char: "", modifiers: {})
     check listWidget.handleKeyEvent(downEvent) == true
     check listWidget.highlightedIndex == 1
 
     # Arrow up
-    let upEvent = KeyEvent(code: ArrowUp, char: '\0', modifiers: {})
+    let upEvent = KeyEvent(code: ArrowUp, char: "", modifiers: {})
     check listWidget.handleKeyEvent(upEvent) == true
     check listWidget.highlightedIndex == 0
 
     # Vim keys
-    let jEvent = KeyEvent(code: Char, char: 'j', modifiers: {})
+    let jEvent = KeyEvent(code: Char, char: "j", modifiers: {})
     check listWidget.handleKeyEvent(jEvent) == true
     check listWidget.highlightedIndex == 1
 
-    let kEvent = KeyEvent(code: Char, char: 'k', modifiers: {})
+    let kEvent = KeyEvent(code: Char, char: "k", modifiers: {})
     check listWidget.handleKeyEvent(kEvent) == true
     check listWidget.highlightedIndex == 0
 
     # Enter to select
-    let enterEvent = KeyEvent(code: Enter, char: '\0', modifiers: {})
+    let enterEvent = KeyEvent(code: Enter, char: "", modifiers: {})
     check listWidget.handleKeyEvent(enterEvent) == true
     check listWidget.selectedIndices == @[0]
 
     # Home/End
-    let endEvent = KeyEvent(code: End, char: '\0', modifiers: {})
+    let endEvent = KeyEvent(code: End, char: "", modifiers: {})
     check listWidget.handleKeyEvent(endEvent) == true
     check listWidget.highlightedIndex == 2
 
-    let homeEvent = KeyEvent(code: Home, char: '\0', modifiers: {})
+    let homeEvent = KeyEvent(code: Home, char: "", modifiers: {})
     check listWidget.handleKeyEvent(homeEvent) == true
     check listWidget.highlightedIndex == 0
 

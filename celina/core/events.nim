@@ -81,7 +81,7 @@ type
 
   KeyEvent* = object
     code*: KeyCode
-    char*: char # Only valid when code == Char
+    char*: string # Only valid when code == Char, supports multi-byte UTF-8
     modifiers*: set[KeyModifier]
 
   MouseEvent* = object
@@ -243,6 +243,97 @@ proc parseMouseEventSGR(): Event =
 
   return Event(kind: Unknown)
 
+# UTF-8 helper functions
+proc utf8ByteLength(firstByte: byte): int =
+  ## Determine the number of bytes in a UTF-8 character from its first byte
+  ## Returns 1 for ASCII, 2-4 for multi-byte characters, 0 for invalid
+  if (firstByte and 0x80) == 0:
+    return 1 # ASCII: 0xxxxxxx
+  elif (firstByte and 0xE0) == 0xC0:
+    return 2 # 110xxxxx
+  elif (firstByte and 0xF0) == 0xE0:
+    return 3 # 1110xxxx
+  elif (firstByte and 0xF8) == 0xF0:
+    return 4 # 11110xxx
+  else:
+    return 0 # Invalid UTF-8 start byte
+
+proc readUtf8Char(firstByte: byte): string =
+  ## Read a complete UTF-8 character given its first byte
+  ## Returns the complete UTF-8 character as a string
+  let byteLen = utf8ByteLength(firstByte)
+  if byteLen == 0:
+    return ""
+
+  result = newString(byteLen)
+  result[0] = char(firstByte)
+
+  if byteLen == 1:
+    return result
+
+  # Read remaining bytes
+  for i in 1 ..< byteLen:
+    var nextByte: char
+    let bytesRead = tryRecover(
+      proc(): int =
+        stdin.readBuffer(addr nextByte, 1),
+      fallback = 0,
+    )
+    if bytesRead != 1:
+      # Failed to read continuation byte, return what we have
+      result.setLen(i)
+      return result
+
+    # Validate continuation byte (should be 10xxxxxx)
+    if (nextByte.byte and 0xC0) != 0x80:
+      # Invalid continuation byte, return what we have
+      result.setLen(i)
+      return result
+
+    result[i] = nextByte
+
+proc readUtf8CharNonBlocking(firstByte: byte): string =
+  ## Read a complete UTF-8 character in non-blocking mode
+  ## Returns the complete UTF-8 character as a string
+  let byteLen = utf8ByteLength(firstByte)
+  if byteLen == 0:
+    return ""
+
+  result = newString(byteLen)
+  result[0] = char(firstByte)
+
+  if byteLen == 1:
+    return result
+
+  # Read remaining bytes in non-blocking mode
+  for i in 1 ..< byteLen:
+    var nextByte: char
+    let bytesRead = read(STDIN_FILENO, addr nextByte, 1)
+    if bytesRead == -1:
+      let err = errno
+      if err == EAGAIN or err == EWOULDBLOCK:
+        # No more data available, return what we have
+        result.setLen(i)
+        return result
+      else:
+        # Other error, return what we have
+        result.setLen(i)
+        return result
+    elif bytesRead != 1:
+      # Failed to read continuation byte, return what we have
+      result.setLen(i)
+      return result
+
+    # Validate continuation byte (should be 10xxxxxx)
+    if (nextByte.byte and 0xC0) != 0x80:
+      # Invalid continuation byte, return what we have
+      result.setLen(i)
+      return result
+
+    result[i] = nextByte
+
+  return result
+
 # Advanced key reading with escape sequence support
 proc readKey*(): Event =
   ## Read a key event (blocking mode)
@@ -264,28 +355,28 @@ proc readKey*(): Event =
           ch notin {'\x03', '\x08', '\x09', '\x0a', '\x0d', '\x1b'}:
         let letter = chr(ch.ord + ord('a') - 1)
         return
-          Event(kind: Key, key: KeyEvent(code: Char, char: letter, modifiers: {Ctrl}))
+          Event(kind: Key, key: KeyEvent(code: Char, char: $letter, modifiers: {Ctrl}))
 
       # Handle Ctrl-number and special control characters
       # Following crossterm's mapping:
       # \x00 = Ctrl-Space, \x1c = Ctrl-4, \x1d = Ctrl-5, \x1e = Ctrl-6, \x1f = Ctrl-7
       if ch == '\x00':
         return
-          Event(kind: Key, key: KeyEvent(code: Space, char: ' ', modifiers: {Ctrl}))
+          Event(kind: Key, key: KeyEvent(code: Space, char: " ", modifiers: {Ctrl}))
       elif ch >= '\x1c' and ch <= '\x1f':
         let digit = chr(ch.ord - 0x1c + ord('4'))
         return
-          Event(kind: Key, key: KeyEvent(code: Char, char: digit, modifiers: {Ctrl}))
+          Event(kind: Key, key: KeyEvent(code: Char, char: $digit, modifiers: {Ctrl}))
 
       case ch
       of '\r', '\n':
-        return Event(kind: Key, key: KeyEvent(code: Enter, char: ch))
+        return Event(kind: Key, key: KeyEvent(code: Enter, char: $ch))
       of '\t':
-        return Event(kind: Key, key: KeyEvent(code: Tab, char: ch))
+        return Event(kind: Key, key: KeyEvent(code: Tab, char: $ch))
       of ' ':
-        return Event(kind: Key, key: KeyEvent(code: Space, char: ch))
+        return Event(kind: Key, key: KeyEvent(code: Space, char: $ch))
       of '\x08', '\x7f': # Backspace or DEL
-        return Event(kind: Key, key: KeyEvent(code: Backspace, char: ch))
+        return Event(kind: Key, key: KeyEvent(code: Backspace, char: $ch))
       of '\x1b': # Escape or start of escape sequence
         # Try to read escape sequence in blocking mode
         var next: char
@@ -294,19 +385,19 @@ proc readKey*(): Event =
           if stdin.readBuffer(addr final, 1) == 1:
             case final
             of 'A': # Arrow Up
-              return Event(kind: Key, key: KeyEvent(code: ArrowUp, char: '\0'))
+              return Event(kind: Key, key: KeyEvent(code: ArrowUp, char: ""))
             of 'B': # Arrow Down
-              return Event(kind: Key, key: KeyEvent(code: ArrowDown, char: '\0'))
+              return Event(kind: Key, key: KeyEvent(code: ArrowDown, char: ""))
             of 'C': # Arrow Right
-              return Event(kind: Key, key: KeyEvent(code: ArrowRight, char: '\0'))
+              return Event(kind: Key, key: KeyEvent(code: ArrowRight, char: ""))
             of 'D': # Arrow Left
-              return Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: '\0'))
+              return Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: ""))
             of 'H': # Home
-              return Event(kind: Key, key: KeyEvent(code: Home, char: '\0'))
+              return Event(kind: Key, key: KeyEvent(code: Home, char: ""))
             of 'F': # End
-              return Event(kind: Key, key: KeyEvent(code: End, char: '\0'))
+              return Event(kind: Key, key: KeyEvent(code: End, char: ""))
             of 'Z': # Shift+Tab (BackTab)
-              return Event(kind: Key, key: KeyEvent(code: BackTab, char: '\0'))
+              return Event(kind: Key, key: KeyEvent(code: BackTab, char: ""))
             of 'M': # Mouse event (X10 format)
               return parseMouseEventX10()
             of '<': # SGR mouse format
@@ -321,19 +412,19 @@ proc readKey*(): Event =
                   # Special keys with numeric codes
                   case final
                   of '1': # Home (alternative)
-                    return Event(kind: Key, key: KeyEvent(code: Home, char: '\0'))
+                    return Event(kind: Key, key: KeyEvent(code: Home, char: ""))
                   of '2': # Insert
-                    return Event(kind: Key, key: KeyEvent(code: Insert, char: '\0'))
+                    return Event(kind: Key, key: KeyEvent(code: Insert, char: ""))
                   of '3': # Delete
-                    return Event(kind: Key, key: KeyEvent(code: Delete, char: '\0'))
+                    return Event(kind: Key, key: KeyEvent(code: Delete, char: ""))
                   of '4': # End (alternative)
-                    return Event(kind: Key, key: KeyEvent(code: End, char: '\0'))
+                    return Event(kind: Key, key: KeyEvent(code: End, char: ""))
                   of '5': # PageUp
-                    return Event(kind: Key, key: KeyEvent(code: PageUp, char: '\0'))
+                    return Event(kind: Key, key: KeyEvent(code: PageUp, char: ""))
                   of '6': # PageDown
-                    return Event(kind: Key, key: KeyEvent(code: PageDown, char: '\0'))
+                    return Event(kind: Key, key: KeyEvent(code: PageDown, char: ""))
                   else:
-                    return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+                    return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
                 elif nextChar == ';':
                   # Modified key sequence ESC[1;modifierX where X is the key
                   var modSeq: string = seq & nextChar
@@ -356,35 +447,33 @@ proc readKey*(): Event =
                       of 'A': # Modified Arrow Up
                         return Event(
                           kind: Key,
-                          key: KeyEvent(code: ArrowUp, char: '\0', modifiers: modifiers),
+                          key: KeyEvent(code: ArrowUp, char: "", modifiers: modifiers),
                         )
                       of 'B': # Modified Arrow Down
                         return Event(
                           kind: Key,
-                          key:
-                            KeyEvent(code: ArrowDown, char: '\0', modifiers: modifiers),
+                          key: KeyEvent(code: ArrowDown, char: "", modifiers: modifiers),
                         )
                       of 'C': # Modified Arrow Right
                         return Event(
                           kind: Key,
                           key:
-                            KeyEvent(code: ArrowRight, char: '\0', modifiers: modifiers),
+                            KeyEvent(code: ArrowRight, char: "", modifiers: modifiers),
                         )
                       of 'D': # Modified Arrow Left
                         return Event(
                           kind: Key,
-                          key:
-                            KeyEvent(code: ArrowLeft, char: '\0', modifiers: modifiers),
+                          key: KeyEvent(code: ArrowLeft, char: "", modifiers: modifiers),
                         )
                       of 'H': # Modified Home
                         return Event(
                           kind: Key,
-                          key: KeyEvent(code: Home, char: '\0', modifiers: modifiers),
+                          key: KeyEvent(code: Home, char: "", modifiers: modifiers),
                         )
                       of 'F': # Modified End
                         return Event(
                           kind: Key,
-                          key: KeyEvent(code: End, char: '\0', modifiers: modifiers),
+                          key: KeyEvent(code: End, char: "", modifiers: modifiers),
                         )
                       of '~':
                         # Modified special keys
@@ -392,58 +481,61 @@ proc readKey*(): Event =
                         of '1': # Modified Home
                           return Event(
                             kind: Key,
-                            key: KeyEvent(code: Home, char: '\0', modifiers: modifiers),
+                            key: KeyEvent(code: Home, char: "", modifiers: modifiers),
                           )
                         of '2': # Modified Insert
                           return Event(
                             kind: Key,
-                            key:
-                              KeyEvent(code: Insert, char: '\0', modifiers: modifiers),
+                            key: KeyEvent(code: Insert, char: "", modifiers: modifiers),
                           )
                         of '3': # Modified Delete
                           return Event(
                             kind: Key,
-                            key:
-                              KeyEvent(code: Delete, char: '\0', modifiers: modifiers),
+                            key: KeyEvent(code: Delete, char: "", modifiers: modifiers),
                           )
                         of '4': # Modified End
                           return Event(
                             kind: Key,
-                            key: KeyEvent(code: End, char: '\0', modifiers: modifiers),
+                            key: KeyEvent(code: End, char: "", modifiers: modifiers),
                           )
                         of '5': # Modified PageUp
                           return Event(
                             kind: Key,
-                            key:
-                              KeyEvent(code: PageUp, char: '\0', modifiers: modifiers),
+                            key: KeyEvent(code: PageUp, char: "", modifiers: modifiers),
                           )
                         of '6': # Modified PageDown
                           return Event(
                             kind: Key,
                             key:
-                              KeyEvent(code: PageDown, char: '\0', modifiers: modifiers),
+                              KeyEvent(code: PageDown, char: "", modifiers: modifiers),
                           )
                         else:
                           return
-                            Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+                            Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
                       else:
                         return
-                          Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+                          Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
                 else:
                   # Might be function key, but we'll skip for now
-                  return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+                  return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
               else:
-                return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+                return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
             else:
-              return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+              return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
           else:
-            return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+            return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
         else:
-          return Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+          return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
       of '\x03': # Ctrl-C
         return Event(kind: Quit)
       else:
-        return Event(kind: Key, key: KeyEvent(code: Char, char: ch))
+        # Read complete UTF-8 character
+        let utf8Char = readUtf8Char(ch.byte)
+        if utf8Char.len > 0:
+          return Event(kind: Key, key: KeyEvent(code: Char, char: utf8Char))
+        else:
+          # Invalid UTF-8, treat as single byte
+          return Event(kind: Key, key: KeyEvent(code: Char, char: $ch))
     else:
       return Event(kind: Unknown)
   except IOError:
@@ -498,20 +590,20 @@ proc readKeyInput*(): Option[Event] =
 
       # If no more data available in 20ms, it's a standalone ESC
       if select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout) == 0:
-        return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+        return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
 
       var next: char
       let nextRead = read(STDIN_FILENO, addr next, 1)
       if nextRead == -1 and (errno == EAGAIN or errno == EWOULDBLOCK):
         discard fcntl(STDIN_FILENO, F_SETFL, flags)
-        return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+        return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
 
       if nextRead == 1 and next == '[':
         var final: char
         let finalRead = read(STDIN_FILENO, addr final, 1)
         if finalRead == -1 and (errno == EAGAIN or errno == EWOULDBLOCK):
           discard fcntl(STDIN_FILENO, F_SETFL, flags)
-          return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+          return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
 
         if finalRead == 1:
           # Restore non-blocking mode
@@ -519,19 +611,19 @@ proc readKeyInput*(): Option[Event] =
 
           case final
           of 'A': # Arrow Up
-            return some(Event(kind: Key, key: KeyEvent(code: ArrowUp, char: '\0')))
+            return some(Event(kind: Key, key: KeyEvent(code: ArrowUp, char: "")))
           of 'B': # Arrow Down
-            return some(Event(kind: Key, key: KeyEvent(code: ArrowDown, char: '\0')))
+            return some(Event(kind: Key, key: KeyEvent(code: ArrowDown, char: "")))
           of 'C': # Arrow Right
-            return some(Event(kind: Key, key: KeyEvent(code: ArrowRight, char: '\0')))
+            return some(Event(kind: Key, key: KeyEvent(code: ArrowRight, char: "")))
           of 'D': # Arrow Left
-            return some(Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: '\0')))
+            return some(Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: "")))
           of 'H': # Home
-            return some(Event(kind: Key, key: KeyEvent(code: Home, char: '\0')))
+            return some(Event(kind: Key, key: KeyEvent(code: Home, char: "")))
           of 'F': # End
-            return some(Event(kind: Key, key: KeyEvent(code: End, char: '\0')))
+            return some(Event(kind: Key, key: KeyEvent(code: End, char: "")))
           of 'Z': # Shift+Tab (BackTab)
-            return some(Event(kind: Key, key: KeyEvent(code: BackTab, char: '\0')))
+            return some(Event(kind: Key, key: KeyEvent(code: BackTab, char: "")))
           of 'M': # Mouse event (X10 format)
             let mouseEvent = parseMouseEventX10()
             return some(mouseEvent)
@@ -544,28 +636,27 @@ proc readKeyInput*(): Option[Event] =
             let nextCharRead = read(STDIN_FILENO, addr nextChar, 1)
             if nextCharRead == -1 and (errno == EAGAIN or errno == EWOULDBLOCK):
               discard fcntl(STDIN_FILENO, F_SETFL, flags)
-              return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+              return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
 
             if nextCharRead == 1:
               if nextChar == '~':
                 # Special keys with numeric codes
                 case final
                 of '1': # Home (alternative)
-                  return some(Event(kind: Key, key: KeyEvent(code: Home, char: '\0')))
+                  return some(Event(kind: Key, key: KeyEvent(code: Home, char: "")))
                 of '2': # Insert
-                  return some(Event(kind: Key, key: KeyEvent(code: Insert, char: '\0')))
+                  return some(Event(kind: Key, key: KeyEvent(code: Insert, char: "")))
                 of '3': # Delete
-                  return some(Event(kind: Key, key: KeyEvent(code: Delete, char: '\0')))
+                  return some(Event(kind: Key, key: KeyEvent(code: Delete, char: "")))
                 of '4': # End (alternative)
-                  return some(Event(kind: Key, key: KeyEvent(code: End, char: '\0')))
+                  return some(Event(kind: Key, key: KeyEvent(code: End, char: "")))
                 of '5': # PageUp
-                  return some(Event(kind: Key, key: KeyEvent(code: PageUp, char: '\0')))
+                  return some(Event(kind: Key, key: KeyEvent(code: PageUp, char: "")))
                 of '6': # PageDown
-                  return
-                    some(Event(kind: Key, key: KeyEvent(code: PageDown, char: '\0')))
+                  return some(Event(kind: Key, key: KeyEvent(code: PageDown, char: "")))
                 else:
                   return
-                    some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+                    some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
               elif nextChar == ';':
                 # Modified key sequence
                 var modChar: char
@@ -573,7 +664,7 @@ proc readKeyInput*(): Option[Event] =
                 if modCharRead == -1 and (errno == EAGAIN or errno == EWOULDBLOCK):
                   discard fcntl(STDIN_FILENO, F_SETFL, flags)
                   return
-                    some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+                    some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
 
                 if modCharRead == 1:
                   # Parse modifier
@@ -591,7 +682,7 @@ proc readKeyInput*(): Option[Event] =
                   if keyCharRead == -1 and (errno == EAGAIN or errno == EWOULDBLOCK):
                     discard fcntl(STDIN_FILENO, F_SETFL, flags)
                     return
-                      some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+                      some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
 
                   if keyCharRead == 1:
                     case keyChar
@@ -599,15 +690,14 @@ proc readKeyInput*(): Option[Event] =
                       return some(
                         Event(
                           kind: Key,
-                          key: KeyEvent(code: ArrowUp, char: '\0', modifiers: modifiers),
+                          key: KeyEvent(code: ArrowUp, char: "", modifiers: modifiers),
                         )
                       )
                     of 'B': # Modified Arrow Down
                       return some(
                         Event(
                           kind: Key,
-                          key:
-                            KeyEvent(code: ArrowDown, char: '\0', modifiers: modifiers),
+                          key: KeyEvent(code: ArrowDown, char: "", modifiers: modifiers),
                         )
                       )
                     of 'C': # Modified Arrow Right
@@ -615,29 +705,28 @@ proc readKeyInput*(): Option[Event] =
                         Event(
                           kind: Key,
                           key:
-                            KeyEvent(code: ArrowRight, char: '\0', modifiers: modifiers),
+                            KeyEvent(code: ArrowRight, char: "", modifiers: modifiers),
                         )
                       )
                     of 'D': # Modified Arrow Left
                       return some(
                         Event(
                           kind: Key,
-                          key:
-                            KeyEvent(code: ArrowLeft, char: '\0', modifiers: modifiers),
+                          key: KeyEvent(code: ArrowLeft, char: "", modifiers: modifiers),
                         )
                       )
                     of 'H': # Modified Home
                       return some(
                         Event(
                           kind: Key,
-                          key: KeyEvent(code: Home, char: '\0', modifiers: modifiers),
+                          key: KeyEvent(code: Home, char: "", modifiers: modifiers),
                         )
                       )
                     of 'F': # Modified End
                       return some(
                         Event(
                           kind: Key,
-                          key: KeyEvent(code: End, char: '\0', modifiers: modifiers),
+                          key: KeyEvent(code: End, char: "", modifiers: modifiers),
                         )
                       )
                     of '~':
@@ -647,38 +736,35 @@ proc readKeyInput*(): Option[Event] =
                         return some(
                           Event(
                             kind: Key,
-                            key: KeyEvent(code: Home, char: '\0', modifiers: modifiers),
+                            key: KeyEvent(code: Home, char: "", modifiers: modifiers),
                           )
                         )
                       of '2': # Modified Insert
                         return some(
                           Event(
                             kind: Key,
-                            key:
-                              KeyEvent(code: Insert, char: '\0', modifiers: modifiers),
+                            key: KeyEvent(code: Insert, char: "", modifiers: modifiers),
                           )
                         )
                       of '3': # Modified Delete
                         return some(
                           Event(
                             kind: Key,
-                            key:
-                              KeyEvent(code: Delete, char: '\0', modifiers: modifiers),
+                            key: KeyEvent(code: Delete, char: "", modifiers: modifiers),
                           )
                         )
                       of '4': # Modified End
                         return some(
                           Event(
                             kind: Key,
-                            key: KeyEvent(code: End, char: '\0', modifiers: modifiers),
+                            key: KeyEvent(code: End, char: "", modifiers: modifiers),
                           )
                         )
                       of '5': # Modified PageUp
                         return some(
                           Event(
                             kind: Key,
-                            key:
-                              KeyEvent(code: PageUp, char: '\0', modifiers: modifiers),
+                            key: KeyEvent(code: PageUp, char: "", modifiers: modifiers),
                           )
                         )
                       of '6': # Modified PageDown
@@ -686,36 +772,36 @@ proc readKeyInput*(): Option[Event] =
                           Event(
                             kind: Key,
                             key:
-                              KeyEvent(code: PageDown, char: '\0', modifiers: modifiers),
+                              KeyEvent(code: PageDown, char: "", modifiers: modifiers),
                           )
                         )
                       else:
                         return some(
-                          Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+                          Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
                         )
                     else:
                       return some(
-                        Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b'))
+                        Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
                       )
                   else:
                     return
-                      some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+                      some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
                 else:
                   return
-                    some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+                    some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
               else:
                 # Might be function key, but we'll skip for now
-                return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+                return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
             else:
-              return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+              return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
           else:
-            return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+            return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
         else:
           # Not an escape sequence we recognize
-          return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+          return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
       else:
         # Not an escape sequence (no '[' after ESC)
-        return some(Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b')))
+        return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
     else:
       # Restore non-blocking mode
       discard fcntl(STDIN_FILENO, F_SETFL, flags)
@@ -727,7 +813,7 @@ proc readKeyInput*(): Option[Event] =
         return some(
           Event(
             kind: EventKind.Key,
-            key: KeyEvent(code: KeyCode.Char, char: letter, modifiers: {Ctrl}),
+            key: KeyEvent(code: KeyCode.Char, char: $letter, modifiers: {Ctrl}),
           )
         )
 
@@ -736,7 +822,7 @@ proc readKeyInput*(): Option[Event] =
         return some(
           Event(
             kind: EventKind.Key,
-            key: KeyEvent(code: KeyCode.Space, char: ' ', modifiers: {Ctrl}),
+            key: KeyEvent(code: KeyCode.Space, char: " ", modifiers: {Ctrl}),
           )
         )
       elif ch >= '\x1c' and ch <= '\x1f':
@@ -744,32 +830,43 @@ proc readKeyInput*(): Option[Event] =
         return some(
           Event(
             kind: EventKind.Key,
-            key: KeyEvent(code: KeyCode.Char, char: digit, modifiers: {Ctrl}),
+            key: KeyEvent(code: KeyCode.Char, char: $digit, modifiers: {Ctrl}),
           )
         )
 
-      let event = Event(
-        kind: EventKind.Key,
-        key: KeyEvent(
-          code:
-            case ch
-            of '\r', '\n':
-              KeyCode.Enter
-            of '\x08', '\x7f':
-              KeyCode.Backspace
-            of '\t':
-              KeyCode.Tab
-            of ' ':
-              KeyCode.Space
-            of '\x03':
-              return some(Event(kind: Quit))
-            else:
-              KeyCode.Char,
-          char: ch,
-          modifiers: {},
-        ),
-      )
-      return some(event)
+      # Handle special control characters
+      case ch
+      of '\r', '\n':
+        return some(
+          Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Enter, char: $ch))
+        )
+      of '\x08', '\x7f':
+        return some(
+          Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Backspace, char: $ch))
+        )
+      of '\t':
+        return
+          some(Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Tab, char: $ch)))
+      of ' ':
+        return some(
+          Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Space, char: $ch))
+        )
+      of '\x03':
+        return some(Event(kind: Quit))
+      else:
+        # Read complete UTF-8 character in non-blocking mode
+        let utf8Char = readUtf8CharNonBlocking(ch.byte)
+        if utf8Char.len > 0:
+          return some(
+            Event(
+              kind: EventKind.Key, key: KeyEvent(code: KeyCode.Char, char: utf8Char)
+            )
+          )
+        else:
+          # Invalid UTF-8, treat as single byte
+          return some(
+            Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Char, char: $ch))
+          )
   else:
     # Restore non-blocking mode
     discard fcntl(STDIN_FILENO, F_SETFL, flags)

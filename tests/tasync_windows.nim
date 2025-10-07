@@ -128,9 +128,9 @@ suite "AsyncWindows Configuration and Types":
 suite "AsyncWindows Event Types":
   test "Event type construction":
     # Test that we can create events for async handling
-    let keyEvent = Event(kind: Key, key: KeyEvent(code: Char, char: 'a'))
+    let keyEvent = Event(kind: Key, key: KeyEvent(code: Char, char: "a"))
     check keyEvent.kind == Key
-    check keyEvent.key.char == 'a'
+    check keyEvent.key.char == "a"
 
     let mouseEvent = Event(
       kind: Mouse,
@@ -410,7 +410,7 @@ suite "AsyncWindows Async Operations":
     discard waitFor awm.addWindowAsync(window)
 
     # Test key event
-    let keyEvent = Event(kind: Key, key: KeyEvent(code: Char, char: 'a'))
+    let keyEvent = Event(kind: Key, key: KeyEvent(code: Char, char: "a"))
     discard waitFor awm.handleEventAsync(keyEvent)
     # Result depends on handler presence, but should not crash
 

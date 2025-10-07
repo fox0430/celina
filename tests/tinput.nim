@@ -217,7 +217,7 @@ suite "Input Widget Tests":
     test "Character input":
       var input = newInput()
       input.setFocus(true)
-      let event = KeyEvent(code: Char, char: 'A', modifiers: {})
+      let event = KeyEvent(code: Char, char: "A", modifiers: {})
       check input.handleKeyEvent(event) == true
       check input.getText() == "A"
       check input.state.cursor == 1
@@ -227,7 +227,7 @@ suite "Input Widget Tests":
       input.setFocus(true)
       input.setText("Hello World")
       input.state.selection = (0, 6)
-      let event = KeyEvent(code: Char, char: 'X', modifiers: {})
+      let event = KeyEvent(code: Char, char: "X", modifiers: {})
       check input.handleKeyEvent(event) == true
       check input.getText() == "XWorld"
       check input.state.cursor == 1
@@ -309,7 +309,7 @@ suite "Input Widget Tests":
       var input = newInput()
       input.setFocus(true)
       input.setText("Hello World")
-      let event = KeyEvent(code: Char, char: 'a', modifiers: {Ctrl})
+      let event = KeyEvent(code: Char, char: "a", modifiers: {Ctrl})
       check input.handleKeyEvent(event) == true
       check input.getSelection() == (0, 11)
       check input.state.cursor == 11
@@ -342,7 +342,7 @@ suite "Input Widget Tests":
       check customHandled == true
 
       customHandled = false
-      let charEvent = KeyEvent(code: Char, char: 'A', modifiers: {})
+      let charEvent = KeyEvent(code: Char, char: "A", modifiers: {})
       check input.handleKeyEvent(charEvent) == true
       check customHandled == false
       check input.getText() == "A"
@@ -350,7 +350,7 @@ suite "Input Widget Tests":
     test "Unfocused input ignores events":
       var input = newInput()
       input.setText("Hello")
-      let event = KeyEvent(code: Char, char: 'A', modifiers: {})
+      let event = KeyEvent(code: Char, char: "A", modifiers: {})
       check input.handleKeyEvent(event) == false
       check input.getText() == "Hello"
 
@@ -359,7 +359,7 @@ suite "Input Widget Tests":
       input.setFocus(true)
       input.setText("Hello")
 
-      let charEvent = KeyEvent(code: Char, char: 'A', modifiers: {})
+      let charEvent = KeyEvent(code: Char, char: "A", modifiers: {})
       check input.handleKeyEvent(charEvent) == false
       check input.getText() == "Hello"
 
