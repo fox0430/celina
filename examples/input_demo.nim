@@ -2,8 +2,8 @@
 ##
 ## Different input types including password fields
 
-import pkg/celina
-import pkg/celina/widgets/input
+import ../celina
+import ../celina/widgets/input
 
 proc main() =
   var inputs = [

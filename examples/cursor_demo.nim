@@ -96,7 +96,7 @@ proc main() =
           app.setCursorStyle(styles[styleIndex])
         of KeyCode.Char:
           case event.key.char
-          of 'v', 'V':
+          of "v", "V":
             # Toggle visibility
             if app.isCursorVisible():
               app.hideCursor()
@@ -104,21 +104,21 @@ proc main() =
               app.showCursor()
 
           # Vim-style movement
-          of 'h':
+          of "h":
             if cursorX > 16:
               cursorX -= 1
-          of 'l':
+          of "l":
             if cursorX < 59:
               cursorX += 1
-          of 'k':
+          of "k":
             if cursorY > 15:
               cursorY -= 1
-          of 'j':
+          of "j":
             if cursorY < 23:
               cursorY += 1
 
           # Quit
-          of 'q', 'Q':
+          of "q", "Q":
             return false
           else:
             discard

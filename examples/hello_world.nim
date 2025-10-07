@@ -29,7 +29,7 @@ proc main() =
       # Check if this is a keyboard event
       if event.kind == EventKind.Key:
         # Quit when 'q' is pressed
-        if event.key.code == KeyCode.Char and event.key.char == 'q':
+        if event.key.code == KeyCode.Char and event.key.char == "q":
           return false # Returning false exits the app
       return true # Continue running for all other events
   )

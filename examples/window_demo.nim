@@ -45,10 +45,10 @@ proc createTestWindow(
       case key.code
       of KeyCode.Char:
         case key.char
-        of 'c':
+        of "c":
           demo.addMessage(&"Window '{win.title}' received 'c' key")
           return true
-        of 'x':
+        of "x":
           demo.addMessage(&"Closing window '{win.title}'")
           app.removeWindow(win.id)
           return true
@@ -234,15 +234,15 @@ proc main() =
       case event.key.code
       of Char:
         case event.key.char
-        of 'q':
+        of "q":
           return false # Quit
-        of '1', '2', '3':
-          let num = parseInt($event.key.char)
+        of "1", "2", "3":
+          let num = parseInt(event.key.char)
           let area = rect(5 + num * 8, 3 + num * 3, 30 + num * 2, 8 + num)
           discard demo.createTestWindow(app, &"Window {demo.nextWindowNum}", area)
           demo.nextWindowNum.inc()
           demo.addMessage(&"Created window #{num}")
-        of 'r':
+        of "r":
           # Create random window
           let x = rand(5 .. 50)
           let y = rand(3 .. 15)
@@ -252,12 +252,12 @@ proc main() =
           discard demo.createTestWindow(app, &"Random {demo.nextWindowNum}", area)
           demo.nextWindowNum.inc()
           demo.addMessage("Created random window")
-        of 'm':
+        of "m":
           # Create modal dialog in center
           let area = rect(20, 10, 40, 10)
           discard demo.createTestWindow(app, "Modal Dialog", area, modal = true)
           demo.addMessage("Created modal dialog")
-        of 'f':
+        of "f":
           # Cycle through window focus
           let windows = app.getWindows()
           if windows.len > 0:

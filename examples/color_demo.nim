@@ -222,7 +222,7 @@ proc main() =
   app.onEvent(
     proc(event: Event): bool =
       if event.kind == EventKind.Key:
-        if event.key.code == KeyCode.Char and event.key.char == 'q':
+        if event.key.code == KeyCode.Char and event.key.char == "q":
           return false
       return true
   )

@@ -92,7 +92,7 @@ proc onEventAsync*(app: AsyncApp, handler: proc(event: Event): Future[bool] {.as
   ## app.onEventAsync proc(event: Event): Future[bool] {.async.} =
   ##   case event.kind
   ##   of EventKind.Key:
-  ##     if event.key.code == KeyCode.Char and event.key.char == 'q':
+  ##     if event.key.code == KeyCode.Char and event.key.char == "q":
   ##       return false  # Quit application
   ##     elif event.key.code == KeyCode.Escape:
   ##       return false  # Quit on escape
@@ -393,7 +393,7 @@ proc quickRunAsync*(
   ##   eventHandler = proc(event: Event): Future[bool] {.async.} =
   ##     case event.kind
   ##     of EventKind.Key:
-  ##       if event.key.code == KeyCode.Char and event.key.char == 'q':
+  ##       if event.key.code == KeyCode.Char and event.key.char == "q":
   ##         return false
   ##     else: discard
   ##     return true,

@@ -43,7 +43,7 @@ proc main() =
       of KeyCode.Escape:
         return false
       of KeyCode.Char:
-        if event.key.char == 'q':
+        if event.key.char == "q":
           return false
       of KeyCode.Enter, KeyCode.Space:
         # Button-specific activation keys

@@ -44,6 +44,12 @@ type
     onBlur*: proc() # Called when input loses focus
     onKeyPress*: proc(key: KeyEvent): bool # Custom key handler
 
+# Display width utility
+proc displayWidth(s: string): int =
+  ## Calculate the display width of a string considering wide characters
+  for r in s.runes:
+    result += runeWidth(r)
+
 # Border drawing utilities
 proc getBorderChars(
     borderStyle: BorderStyle
@@ -295,14 +301,14 @@ proc handleKeyEvent*(widget: Input, event: KeyEvent): bool =
     case event.code
     of Char:
       case event.char
-      of 'a', 'A': # Ctrl+A - Select all
+      of "a", "A": # Ctrl+A - Select all
         widget.selectAll()
         return true
-      of 'c', 'C': # Ctrl+C - Copy (handled externally)
+      of "c", "C": # Ctrl+C - Copy (handled externally)
         return false
-      of 'v', 'V': # Ctrl+V - Paste (handled externally)
+      of "v", "V": # Ctrl+V - Paste (handled externally)
         return false
-      of 'x', 'X': # Ctrl+X - Cut (handled externally)
+      of "x", "X": # Ctrl+X - Cut (handled externally)
         return false
       else:
         return false
@@ -312,10 +318,11 @@ proc handleKeyEvent*(widget: Input, event: KeyEvent): bool =
   # Handle regular key events
   case event.code
   of Char:
-    if not widget.readOnly and event.char.ord >= 32: # Printable characters
+    if not widget.readOnly and event.char.len > 0 and event.char[0].ord >= 32:
+      # Printable characters
       if widget.hasSelection():
         widget.deleteSelection()
-      widget.insertText($event.char)
+      widget.insertText(event.char)
       return true
     else:
       return false # Non-printable character
@@ -389,29 +396,79 @@ proc calculateVisibleRange(
     widget: Input, width: int
 ): tuple[offset: int, visibleStart: int, visibleEnd: int, cursorX: int] =
   ## Calculate which part of the text is visible and where the cursor should be drawn
+  ## This now works with display widths instead of rune counts
   let textLen = widget.state.text.runeLen
   let cursor = widget.state.cursor
 
   if textLen == 0 or width <= 0:
     return (0, 0, 0, 0)
 
-  # Ensure cursor is visible
+  # Calculate display width from start to cursor position
+  var cursorDisplayWidth = 0
+  var runeIndex = 0
+  for r in widget.state.text.runes:
+    if runeIndex >= cursor:
+      break
+    cursorDisplayWidth += runeWidth(r)
+    runeIndex += 1
+
+  # Ensure cursor is visible - adjust offset based on display width
   var offset = widget.state.offset
 
+  # Calculate display width from offset to current view
+  var offsetDisplayWidth = 0
+  runeIndex = 0
+  for r in widget.state.text.runes:
+    if runeIndex >= offset:
+      break
+    offsetDisplayWidth += runeWidth(r)
+    runeIndex += 1
+
   # If cursor is beyond the right edge, scroll right
-  if cursor >= offset + width:
-    offset = max(0, cursor - width + 1)
+  let cursorRelativeWidth = cursorDisplayWidth - offsetDisplayWidth
+  if cursorRelativeWidth >= width:
+    # Scroll right until cursor is visible
+    offsetDisplayWidth = cursorDisplayWidth - width + 1
+    offset = 0
+    var accWidth = 0
+    for r in widget.state.text.runes:
+      if accWidth >= offsetDisplayWidth:
+        break
+      accWidth += runeWidth(r)
+      offset += 1
 
   # If cursor is beyond the left edge, scroll left
   if cursor < offset:
     offset = cursor
 
   # Constrain offset to valid range
-  offset = max(0, min(offset, max(0, textLen - width)))
+  offset = max(0, min(offset, textLen))
 
+  # Calculate visible range based on display width
   let visibleStart = offset
-  let visibleEnd = min(textLen, offset + width)
-  let cursorX = cursor - offset
+  var visibleEnd = offset
+  var accumulatedWidth = 0
+  runeIndex = 0
+  for r in widget.state.text.runes:
+    if runeIndex < offset:
+      runeIndex += 1
+      continue
+    let charWidth = runeWidth(r)
+    if accumulatedWidth + charWidth > width:
+      break
+    accumulatedWidth += charWidth
+    visibleEnd += 1
+    runeIndex += 1
+
+  # Calculate cursor X position in display width
+  var cursorX = 0
+  runeIndex = 0
+  for r in widget.state.text.runes:
+    if runeIndex >= offset and runeIndex < cursor:
+      cursorX += runeWidth(r)
+    elif runeIndex >= cursor:
+      break
+    runeIndex += 1
 
   # Ensure cursor position is within bounds
   let clampedCursorX =
@@ -511,6 +568,12 @@ method render*(widget: Input, area: Rect, buf: var Buffer) =
         break
 
       let char = displayText.runeSubStr(i, 1)
+      let charWidth = char.displayWidth()
+
+      # Check if we have enough space for this character
+      if x + charWidth > contentArea.width:
+        break
+
       let charStyle =
         if widget.hasSelection():
           let selection = widget.getSelection()
@@ -522,7 +585,7 @@ method render*(widget: Input, area: Rect, buf: var Buffer) =
           currentStyle
 
       buf.setString(contentArea.x + x, contentArea.y, char, charStyle)
-      x += 1
+      x += charWidth
 
   # Note: Cursor rendering is handled by the application level
   # The cursor position should be calculated and set by the app

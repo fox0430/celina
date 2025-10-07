@@ -260,7 +260,7 @@ suite "Error Handling":
 suite "Integration with Core Events":
   test "Event types compatibility":
     # Test that async events produce compatible Event types
-    let testKeyEvent = Event(kind: Key, key: KeyEvent(code: Enter, char: '\n'))
+    let testKeyEvent = Event(kind: Key, key: KeyEvent(code: Enter, char: "\n"))
     let testResizeEvent = Event(kind: Resize)
     let testQuitEvent = Event(kind: Quit)
     let testUnknownEvent = Event(kind: Unknown)
@@ -359,12 +359,12 @@ suite "Performance and Resource Management":
   suite "Async ESC Key Detection Fix Tests":
     test "Async standalone ESC key event properties":
       let escEvent =
-        Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b", modifiers: {}))
 
       check escEvent.kind == Key
       check escEvent.key.code == Escape
-      check escEvent.key.char == '\x1b'
-      check escEvent.key.char.ord == 27
+      check escEvent.key.char == "\x1b"
+      check escEvent.key.char[0].ord == 27
       check escEvent.key.modifiers.len == 0
 
     test "Async timeout mechanism integration":
@@ -384,51 +384,50 @@ suite "Performance and Resource Management":
     test "Async ESC vs Arrow key discrimination":
       # ESC key should be standalone
       let escEvent =
-        Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b", modifiers: {}))
       check escEvent.key.code == Escape
 
       # Arrow keys should be different codes
       let arrowKeys = [ArrowUp, ArrowDown, ArrowLeft, ArrowRight]
       for arrowKey in arrowKeys:
         let arrowEvent =
-          Event(kind: Key, key: KeyEvent(code: arrowKey, char: '\0', modifiers: {}))
+          Event(kind: Key, key: KeyEvent(code: arrowKey, char: "", modifiers: {}))
         check arrowEvent.key.code == arrowKey
         check arrowEvent.key.code != Escape
-        check arrowEvent.key.char == '\0'
+        check arrowEvent.key.char == ""
 
     test "Async regression prevention - no double ESC required":
       # Test that single ESC press is sufficient in async context
       let singleEscEvent =
-        Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b', modifiers: {}))
+        Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b", modifiers: {}))
       check singleEscEvent.key.code == Escape
 
       # Multiple async ESC events should each be valid individually
       let escSequence = [
-        Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b', modifiers: {})),
-        Event(kind: Key, key: KeyEvent(code: Escape, char: '\x1b', modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b", modifiers: {})),
       ]
 
       check escSequence.len == 2
       for escEvent in escSequence:
         check escEvent.key.code == Escape
-        check escEvent.key.char == '\x1b'
+        check escEvent.key.char == "\x1b"
 
     test "Async arrow key compatibility after fix":
       # Ensure the async ESC fix doesn't break arrow key detection
       let arrowSequences = [
-        Event(kind: Key, key: KeyEvent(code: ArrowUp, char: '\0', modifiers: {})),
-          # ESC[A
-        Event(kind: Key, key: KeyEvent(code: ArrowDown, char: '\0', modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: ArrowUp, char: "", modifiers: {})), # ESC[A
+        Event(kind: Key, key: KeyEvent(code: ArrowDown, char: "", modifiers: {})),
           # ESC[B
-        Event(kind: Key, key: KeyEvent(code: ArrowRight, char: '\0', modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: ArrowRight, char: "", modifiers: {})),
           # ESC[C
-        Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: '\0', modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: "", modifiers: {})),
           # ESC[D
       ]
 
       for arrowEvent in arrowSequences:
         check arrowEvent.kind == Key
-        check arrowEvent.key.char == '\0'
+        check arrowEvent.key.char == ""
         check arrowEvent.key.code != Escape
 
     test "Async escape sequences compatibility":
@@ -445,11 +444,11 @@ suite "Performance and Resource Management":
 
       for (keyCode, description) in specialKeys:
         let specialEvent =
-          Event(kind: Key, key: KeyEvent(code: keyCode, char: '\0', modifiers: {}))
+          Event(kind: Key, key: KeyEvent(code: keyCode, char: "", modifiers: {}))
         check specialEvent.kind == Key
         check specialEvent.key.code == keyCode
         check specialEvent.key.code != Escape
-        check specialEvent.key.char == '\0'
+        check specialEvent.key.char == ""
 
     test "Async input availability checking":
       # Test that hasInputAsync function works correctly
