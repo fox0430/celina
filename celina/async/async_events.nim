@@ -193,7 +193,11 @@ proc utf8ByteLength(firstByte: byte): int =
   elif (firstByte and 0xF0) == 0xE0:
     return 3 # 1110xxxx
   elif (firstByte and 0xF8) == 0xF0:
-    return 4 # 11110xxx
+    # Valid 4-byte UTF-8 is 0xF0-0xF4 (U+10000 to U+10FFFF)
+    if firstByte >= 0xF0 and firstByte <= 0xF4:
+      return 4 # 11110xxx
+    else:
+      return 0 # Invalid (> 0xF4 or pattern mismatch)
   else:
     return 0 # Invalid UTF-8 start byte
 
