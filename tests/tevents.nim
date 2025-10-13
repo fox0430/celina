@@ -1130,3 +1130,279 @@ suite "Events Module Tests":
       let nfds = STDIN_FILENO + 1
       check nfds > STDIN_FILENO
       check nfds == 1
+
+  # UTF-8 Multibyte Input Support Tests
+  suite "UTF-8 Multibyte Character Support Tests":
+    test "UTF-8 byte length detection - 1 byte (ASCII)":
+      # ASCII characters: 0xxxxxxx
+      check utf8ByteLength(0x41) == 1 # 'A'
+      check utf8ByteLength(0x7A) == 1 # 'z'
+      check utf8ByteLength(0x30) == 1 # '0'
+      check utf8ByteLength(0x20) == 1 # space
+      check utf8ByteLength(0x7F) == 1 # DEL
+
+    test "UTF-8 byte length detection - 2 bytes":
+      # 2-byte characters: 110xxxxx
+      check utf8ByteLength(0xC2) == 2 # Latin extended
+      check utf8ByteLength(0xC3) == 2 # À, Á, etc.
+      check utf8ByteLength(0xDF) == 2 # Upper range of 2-byte
+
+    test "UTF-8 byte length detection - 3 bytes":
+      # 3-byte characters: 1110xxxx
+      check utf8ByteLength(0xE0) == 3 # Devanagari, etc.
+      check utf8ByteLength(0xE3) == 3 # Japanese Hiragana/Katakana
+      check utf8ByteLength(0xE4) == 3 # CJK Unified Ideographs
+      check utf8ByteLength(0xE9) == 3 # CJK Unified Ideographs
+      check utf8ByteLength(0xEF) == 3 # Upper range of 3-byte
+
+    test "UTF-8 byte length detection - 4 bytes":
+      # 4-byte characters: 11110xxx
+      check utf8ByteLength(0xF0) == 4 # Emoji, rare characters
+      check utf8ByteLength(0xF1) == 4
+      check utf8ByteLength(0xF3) == 4
+      check utf8ByteLength(0xF4) == 4
+
+    test "UTF-8 byte length detection - invalid bytes":
+      # Invalid UTF-8 start bytes
+      check utf8ByteLength(0x80) == 0 # Continuation byte (10xxxxxx)
+      check utf8ByteLength(0xBF) == 0 # Continuation byte
+      check utf8ByteLength(0xF5) == 0 # Invalid (> 0xF4)
+      check utf8ByteLength(0xFF) == 0 # Invalid
+
+    test "KeyEvent with ASCII character (1 byte)":
+      # ASCII characters should work as before
+      let asciiEvent = KeyEvent(code: Char, char: "a", modifiers: {})
+      check asciiEvent.code == Char
+      check asciiEvent.char == "a"
+      check asciiEvent.char.len == 1
+
+    test "KeyEvent with 2-byte UTF-8 character":
+      # Latin extended characters (2 bytes)
+      let latinEvent = KeyEvent(code: Char, char: "é", modifiers: {})
+      check latinEvent.code == Char
+      check latinEvent.char == "é"
+      check latinEvent.char.len == 2 # é is 2 bytes in UTF-8
+
+      let umlautEvent = KeyEvent(code: Char, char: "ü", modifiers: {})
+      check umlautEvent.code == Char
+      check umlautEvent.char == "ü"
+      check umlautEvent.char.len == 2
+
+    test "KeyEvent with 3-byte UTF-8 character - Hiragana":
+      # Japanese Hiragana (3 bytes each)
+      let hiraganaA = KeyEvent(code: Char, char: "あ", modifiers: {})
+      check hiraganaA.code == Char
+      check hiraganaA.char == "あ"
+      check hiraganaA.char.len == 3
+
+      let hiraganaKa = KeyEvent(code: Char, char: "か", modifiers: {})
+      check hiraganaKa.code == Char
+      check hiraganaKa.char == "か"
+      check hiraganaKa.char.len == 3
+
+    test "KeyEvent with 3-byte UTF-8 character - Katakana":
+      # Japanese Katakana (3 bytes each)
+      let katakanaA = KeyEvent(code: Char, char: "ア", modifiers: {})
+      check katakanaA.code == Char
+      check katakanaA.char == "ア"
+      check katakanaA.char.len == 3
+
+      let katakanaKa = KeyEvent(code: Char, char: "カ", modifiers: {})
+      check katakanaKa.code == Char
+      check katakanaKa.char == "カ"
+      check katakanaKa.char.len == 3
+
+    test "KeyEvent with 3-byte UTF-8 character - Kanji":
+      # Japanese Kanji (3 bytes each)
+      let kanjiDay = KeyEvent(code: Char, char: "日", modifiers: {})
+      check kanjiDay.code == Char
+      check kanjiDay.char == "日"
+      check kanjiDay.char.len == 3
+
+      let kanjiBook = KeyEvent(code: Char, char: "本", modifiers: {})
+      check kanjiBook.code == Char
+      check kanjiBook.char == "本"
+      check kanjiBook.char.len == 3
+
+      let kanjiLanguage = KeyEvent(code: Char, char: "語", modifiers: {})
+      check kanjiLanguage.code == Char
+      check kanjiLanguage.char == "語"
+      check kanjiLanguage.char.len == 3
+
+    test "KeyEvent with 4-byte UTF-8 character - Emoji":
+      # Emoji (4 bytes)
+      let smileyEvent = KeyEvent(code: Char, char: "😀", modifiers: {})
+      check smileyEvent.code == Char
+      check smileyEvent.char == "😀"
+      check smileyEvent.char.len == 4
+
+      let heartEvent = KeyEvent(code: Char, char: "❤️", modifiers: {})
+      check heartEvent.code == Char
+      check heartEvent.char.len >= 3 # Heart emoji + variation selector
+
+      let rocketEvent = KeyEvent(code: Char, char: "🚀", modifiers: {})
+      check rocketEvent.code == Char
+      check rocketEvent.char == "🚀"
+      check rocketEvent.char.len == 4
+
+    test "Event creation with multibyte characters":
+      # Test complete Event creation with UTF-8
+      let japaneseEvent =
+        Event(kind: Key, key: KeyEvent(code: Char, char: "あ", modifiers: {}))
+      check japaneseEvent.kind == EventKind.Key
+      check japaneseEvent.key.code == Char
+      check japaneseEvent.key.char == "あ"
+
+      let emojiEvent =
+        Event(kind: Key, key: KeyEvent(code: Char, char: "😀", modifiers: {}))
+      check emojiEvent.kind == EventKind.Key
+      check emojiEvent.key.code == Char
+      check emojiEvent.key.char == "😀"
+
+    test "Multibyte characters with modifiers":
+      # Test UTF-8 characters with keyboard modifiers
+      let ctrlJapanese =
+        Event(kind: Key, key: KeyEvent(code: Char, char: "あ", modifiers: {Ctrl}))
+      check ctrlJapanese.key.char == "あ"
+      check Ctrl in ctrlJapanese.key.modifiers
+
+      let shiftEmoji =
+        Event(kind: Key, key: KeyEvent(code: Char, char: "😀", modifiers: {Shift}))
+      check shiftEmoji.key.char == "😀"
+      check Shift in shiftEmoji.key.modifiers
+
+    test "UTF-8 character sequence":
+      # Simulate typing a Japanese word "こんにちは" (hello)
+      let japaneseSequence = [
+        Event(kind: Key, key: KeyEvent(code: Char, char: "こ", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "ん", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "に", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "ち", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "は", modifiers: {})),
+      ]
+
+      check japaneseSequence.len == 5
+      check japaneseSequence[0].key.char == "こ"
+      check japaneseSequence[1].key.char == "ん"
+      check japaneseSequence[2].key.char == "に"
+      check japaneseSequence[3].key.char == "ち"
+      check japaneseSequence[4].key.char == "は"
+
+      for event in japaneseSequence:
+        check event.kind == EventKind.Key
+        check event.key.code == Char
+        check event.key.char.len == 3 # All Hiragana are 3 bytes
+
+    test "UTF-8 emoji sequence":
+      # Simulate typing emoji sequence
+      let emojiSequence = [
+        Event(kind: Key, key: KeyEvent(code: Char, char: "👍", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "🎉", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "🚀", modifiers: {})),
+      ]
+
+      check emojiSequence.len == 3
+      for event in emojiSequence:
+        check event.kind == EventKind.Key
+        check event.key.code == Char
+        check event.key.char.len == 4 # Standard emoji are 4 bytes
+
+    test "Mixed ASCII and multibyte sequence":
+      # Simulate typing "Hello 世界" (Hello World in English/Chinese)
+      let mixedSequence = [
+        Event(kind: Key, key: KeyEvent(code: Char, char: "H", modifiers: {Shift})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "e", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "l", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "l", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "o", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Space, char: " ", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "世", modifiers: {})),
+        Event(kind: Key, key: KeyEvent(code: Char, char: "界", modifiers: {})),
+      ]
+
+      check mixedSequence.len == 8
+      check mixedSequence[0].key.char == "H"
+      check mixedSequence[0].key.char.len == 1 # ASCII
+      check mixedSequence[6].key.char == "世"
+      check mixedSequence[6].key.char.len == 3 # CJK
+      check mixedSequence[7].key.char == "界"
+      check mixedSequence[7].key.char.len == 3 # CJK
+
+    test "Empty string handling":
+      # Test special keys with empty char field (as before)
+      let arrowEvent = KeyEvent(code: ArrowUp, char: "", modifiers: {})
+      check arrowEvent.code == ArrowUp
+      check arrowEvent.char == ""
+      check arrowEvent.char.len == 0
+
+      let f1Event = KeyEvent(code: F1, char: "", modifiers: {})
+      check f1Event.code == F1
+      check f1Event.char == ""
+      check f1Event.char.len == 0
+
+    test "UTF-8 string comparison":
+      # Test that string comparison works correctly with UTF-8
+      let event1 = KeyEvent(code: Char, char: "あ", modifiers: {})
+      let event2 = KeyEvent(code: Char, char: "あ", modifiers: {})
+      let event3 = KeyEvent(code: Char, char: "い", modifiers: {})
+
+      check event1.char == event2.char
+      check event1.char != event3.char
+
+    test "Regression: char is now string, not char":
+      # Test that migration from char to string is correct
+      let oldStyleWontCompile = KeyEvent(code: Char, char: "q", modifiers: {})
+      check oldStyleWontCompile.char == "q"
+      check oldStyleWontCompile.char.len == 1
+
+      # This should NOT compile (old code): event.key.char == 'q'
+      # This should compile (new code): event.key.char == "q"
+
+    test "UTF-8 character byte boundaries":
+      # Test various UTF-8 character boundaries
+      let chars = [
+        ("a", 1), # ASCII
+        ("é", 2), # 2-byte
+        ("€", 3), # Euro sign (3-byte)
+        ("日", 3), # CJK (3-byte)
+        ("𝕳", 4), # Mathematical bold (4-byte)
+        ("😀", 4), # Emoji (4-byte)
+      ]
+
+      for (char, expectedLen) in chars:
+        let event = KeyEvent(code: Char, char: char, modifiers: {})
+        check event.char == char
+        check event.char.len == expectedLen
+
+    test "UTF-8 continuation byte validation pattern":
+      # Test that continuation bytes follow 10xxxxxx pattern
+      # This is more of a documentation test
+
+      # Valid continuation byte masks
+      let contBytePattern = 0b10000000.byte # 0x80
+      let contByteMask = 0b11000000.byte # 0xC0
+
+      # Valid continuation byte should be 10xxxxxx
+      let validCont = 0b10101010.byte # 0xAA
+      check (validCont and contByteMask) == contBytePattern
+
+      # Invalid continuation byte (not 10xxxxxx)
+      let invalidCont = 0b11101010.byte # 0xEA (start byte, not continuation)
+      check (invalidCont and contByteMask) != contBytePattern
+
+    test "UTF-8 start byte patterns":
+      # Document the UTF-8 start byte patterns
+      # 1-byte: 0xxxxxxx (0x00-0x7F)
+      # 2-byte: 110xxxxx (0xC0-0xDF)
+      # 3-byte: 1110xxxx (0xE0-0xEF)
+      # 4-byte: 11110xxx (0xF0-0xF7)
+
+      # Test boundary values
+      check utf8ByteLength(0x00) == 1 # Min 1-byte
+      check utf8ByteLength(0x7F) == 1 # Max 1-byte
+      check utf8ByteLength(0xC0) == 2 # Min 2-byte
+      check utf8ByteLength(0xDF) == 2 # Max 2-byte
+      check utf8ByteLength(0xE0) == 3 # Min 3-byte
+      check utf8ByteLength(0xEF) == 3 # Max 3-byte
+      check utf8ByteLength(0xF0) == 4 # Min 4-byte
+      check utf8ByteLength(0xF4) == 4 # Max valid 4-byte (UTF-8 limit)
