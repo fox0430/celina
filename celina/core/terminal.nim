@@ -91,10 +91,15 @@ proc disableRawMode*(terminal: Terminal) =
   terminal.rawModeEnabled = false
 
 # Safe write helper that handles EAGAIN
-proc tryWrite(data: string) =
-  ## Try to write data, ignoring transient errors
-  ## For cursor control sequences, we prefer to silently skip on EAGAIN
-  ## rather than crashing, since they're often non-critical
+proc writeWithRetry(data: string): bool =
+  ## Write data with retry logic for EAGAIN/EINTR errors
+  ## Returns true if successful, false if failed
+  ## This is a low-level helper that handles transient I/O errors
+
+  # Early return for empty data
+  if data.len == 0:
+    return true
+
   try:
     var
       written = 0
@@ -110,29 +115,47 @@ proc tryWrite(data: string) =
       if n == -1:
         let err = errno
         if err == EINTR:
-          # Interrupted, retry immediately
+          # Interrupted by signal, retry immediately
           continue
         elif err == EAGAIN or err == EWOULDBLOCK:
+          # Resource temporarily unavailable, retry with backoff
           retries.inc
           if retries >= maxRetries:
-            # Give up silently for cursor operations
-            return
-          discard usleep(1000) # 1ms
+            when defined(celinaDebug):
+              stderr.writeLine(
+                "Warning: writeWithRetry failed after max retries (EAGAIN)"
+              )
+            return false
+          discard usleep(1000) # 1ms backoff
           continue
         else:
-          # Other error, give up silently
-          return
+          # Other error, give up
+          when defined(celinaDebug):
+            stderr.writeLine("Warning: writeWithRetry failed with error: " & $err)
+          return false
       elif n > 0:
         written += n
         retries = 0
       else:
-        # Unexpected, give up
-        return
+        # Unexpected EOF, give up
+        when defined(celinaDebug):
+          stderr.writeLine("Warning: writeWithRetry encountered unexpected EOF")
+        return false
 
     stdout.flushFile()
-  except:
-    # Silently ignore all errors for cursor operations
-    discard
+    return true
+  except CatchableError as e:
+    when defined(celinaDebug):
+      stderr.writeLine("Warning: writeWithRetry exception: " & e.msg)
+    else:
+      discard e # Avoid "declared but not used" warning
+    return false
+
+proc tryWrite(data: string) =
+  ## Try to write data, ignoring transient errors
+  ## For cursor control sequences, we prefer to silently skip on EAGAIN
+  ## rather than crashing, since they're often non-critical
+  discard writeWithRetry(data)
 
 # Alternate screen control
 proc enableAlternateScreen*(terminal: Terminal) =
@@ -267,7 +290,20 @@ proc renderCell*(cell: Cell, x, y: int) =
     tryWrite(resetSequence())
 
 proc render*(terminal: Terminal, buffer: Buffer) =
-  ## Render a buffer to the terminal using differential updates
+  ## Render a buffer to the terminal using differential updates (low-level API)
+  ##
+  ## This is a low-level rendering function that raises exceptions on errors.
+  ## For most use cases, prefer the high-level `draw()` or `drawWithCursor()` instead.
+  ##
+  ## Raises:
+  ## - TerminalError: If rendering fails due to I/O errors or terminal issues
+  ##
+  ## Use cases:
+  ## - Testing and debugging where explicit error handling is needed
+  ## - Initialization sequences where failures should halt execution
+  ## - Custom rendering pipelines with specific error recovery strategies
+  ##
+  ## For main application loops, use `draw()` which handles transient errors gracefully.
   try:
     let output = buildDifferentialOutput(terminal.lastBuffer, buffer)
 
@@ -283,7 +319,20 @@ proc render*(terminal: Terminal, buffer: Buffer) =
     raise newTerminalError("Rendering error: " & e.msg)
 
 proc renderFull*(terminal: Terminal, buffer: Buffer) =
-  ## Force a full render of the buffer (useful for initial draw)
+  ## Force a full render of the buffer (low-level API)
+  ##
+  ## This is a low-level rendering function that raises exceptions on errors.
+  ## For most use cases, prefer the high-level `draw()` or `drawWithCursor()` instead.
+  ##
+  ## Raises:
+  ## - TerminalError: If rendering fails due to I/O errors or terminal issues
+  ##
+  ## Use cases:
+  ## - Testing and debugging where explicit error handling is needed
+  ## - Initialization sequences where failures should halt execution
+  ## - Custom rendering pipelines with specific error recovery strategies
+  ##
+  ## For main application loops, use `draw()` which handles transient errors gracefully.
   try:
     let output = buildFullRenderOutput(buffer)
     stdout.write(output)
@@ -331,21 +380,42 @@ proc cleanup*(terminal: Terminal) =
 
 # High-level rendering interface
 proc draw*(terminal: Terminal, buffer: Buffer, force: bool = false) =
-  ## Draw a buffer to the terminal
+  ## Draw a buffer to the terminal (high-level API)
+  ##
+  ## This is the recommended high-level rendering function for main application loops.
+  ## Unlike `render()` and `renderFull()`, this function silently ignores I/O errors
+  ## to prevent crashes from transient terminal issues. Failed renders will be retried
+  ## in the next frame.
   ##
   ## Parameters:
   ## - buffer: The buffer to render to the terminal
   ## - force: If true, forces a full redraw regardless of changes
   ##
-  ## Raises:
-  ## - TerminalError: If rendering fails due to I/O errors or terminal issues
+  ## Note: For rendering with cursor positioning, use `drawWithCursor()` instead.
+  ## For low-level rendering with explicit error handling, use `render()` or `renderFull()`.
   try:
-    if force or terminal.lastBuffer.area.isEmpty:
-      terminal.renderFull(buffer)
+    let output =
+      if force or terminal.lastBuffer.area.isEmpty:
+        buildFullRenderOutput(buffer)
+      else:
+        buildDifferentialOutput(terminal.lastBuffer, buffer)
+
+    if output.len > 0:
+      # Use writeWithRetry for robust I/O handling
+      # Only update lastBuffer if write was successful
+      if writeWithRetry(output):
+        terminal.lastBuffer = buffer
+      # else: keep lastBuffer unchanged so next frame can retry the diff
     else:
-      terminal.render(buffer)
+      # No output means no changes - safe to update lastBuffer
+      terminal.lastBuffer = buffer
   except CatchableError as e:
-    raise newTerminalError("Draw operation failed: " & e.msg)
+    # Silently ignore errors for rendering - next frame will retry
+    # This prevents crashes from transient terminal I/O issues
+    when defined(celinaDebug):
+      stderr.writeLine("Warning: draw() failed: " & e.msg)
+    else:
+      discard e # Avoid "declared but not used" warning
 
 proc drawWithCursor*(
     terminal: Terminal,
@@ -358,6 +428,9 @@ proc drawWithCursor*(
 ) =
   ## Draw buffer with cursor positioning in single write operation
   ## This prevents cursor flickering by including cursor commands in the same output
+  ##
+  ## Note: This procedure silently ignores I/O errors to prevent crashes from transient
+  ## terminal issues. Failed renders will be retried in the next frame.
   try:
     let output = buildOutputWithCursor(
       terminal.lastBuffer, buffer, cursorX, cursorY, cursorVisible, cursorStyle,
@@ -365,12 +438,21 @@ proc drawWithCursor*(
     )
 
     if output.len > 0:
-      stdout.write(output)
-      stdout.flushFile()
-
-    terminal.lastBuffer = buffer
+      # Use writeWithRetry for robust I/O handling
+      # Only update lastBuffer if write was successful
+      if writeWithRetry(output):
+        terminal.lastBuffer = buffer
+      # else: keep lastBuffer unchanged so next frame can retry the diff
+    else:
+      # No output means no changes - safe to update lastBuffer
+      terminal.lastBuffer = buffer
   except CatchableError as e:
-    raise newTerminalError("Draw with cursor operation failed: " & e.msg)
+    # Silently ignore errors for rendering - next frame will retry
+    # This prevents crashes from transient terminal I/O issues
+    when defined(celinaDebug):
+      stderr.writeLine("Warning: drawWithCursor() failed: " & e.msg)
+    else:
+      discard e # Avoid "declared but not used" warning
 
 # Terminal state queries
 proc isRawMode*(terminal: Terminal): bool =
