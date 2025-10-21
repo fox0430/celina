@@ -3,6 +3,7 @@
 import std/[unittest]
 
 import ../celina/core/terminal
+import ../celina/core/terminal_common
 import ../celina/core/geometry
 import ../celina/core/colors
 import ../celina/core/buffer
@@ -294,6 +295,179 @@ suite "Terminal Module Tests":
       # Should detect differences
       let changes = buffer1.diff(buffer2)
       check changes.len > 0
+
+  suite "DrawWithCursor Function":
+    test "drawWithCursor updates lastBuffer":
+      let terminal = newTerminal()
+      var buffer = newBuffer(20, 10)
+      var lastCursorStyle = CursorStyle.Default
+
+      buffer[5, 5] = cell("X")
+
+      # Note: We can't test actual rendering in CI, but we can verify state updates
+      terminal.drawWithCursor(
+        buffer, 10, 5, true, CursorStyle.SteadyBlock, lastCursorStyle
+      )
+
+      # Terminal should update lastBuffer
+      check terminal.lastBuffer.area == buffer.area
+      check terminal.lastBuffer[5, 5].symbol == "X"
+
+    test "drawWithCursor with cursor visible":
+      let terminal = newTerminal()
+      var buffer = newBuffer(20, 10)
+      var lastCursorStyle = CursorStyle.Default
+
+      buffer[3, 3] = cell("A")
+
+      # Should handle cursor visible = true
+      terminal.drawWithCursor(
+        buffer, 5, 5, true, CursorStyle.BlinkingBlock, lastCursorStyle
+      )
+      check terminal.lastBuffer[3, 3].symbol == "A"
+
+    test "drawWithCursor with cursor hidden":
+      let terminal = newTerminal()
+      var buffer = newBuffer(20, 10)
+      var lastCursorStyle = CursorStyle.Default
+
+      buffer[3, 3] = cell("B")
+
+      # Should handle cursor visible = false
+      terminal.drawWithCursor(buffer, 5, 5, false, CursorStyle.Default, lastCursorStyle)
+      check terminal.lastBuffer[3, 3].symbol == "B"
+
+    test "drawWithCursor with different cursor styles":
+      let terminal = newTerminal()
+      var buffer = newBuffer(20, 10)
+      var lastCursorStyle = CursorStyle.Default
+
+      buffer[0, 0] = cell("1")
+
+      # Test with BlinkingBlock cursor style
+      terminal.drawWithCursor(
+        buffer, 10, 5, true, CursorStyle.BlinkingBlock, lastCursorStyle
+      )
+      check terminal.lastBuffer[0, 0].symbol == "1"
+
+      # Test with SteadyUnderline cursor style
+      buffer[0, 0] = cell("2")
+      terminal.drawWithCursor(
+        buffer, 10, 5, true, CursorStyle.SteadyUnderline, lastCursorStyle
+      )
+      check terminal.lastBuffer[0, 0].symbol == "2"
+
+      # Test with BlinkingBar cursor style
+      buffer[0, 0] = cell("3")
+      terminal.drawWithCursor(
+        buffer, 10, 5, true, CursorStyle.BlinkingBar, lastCursorStyle
+      )
+      check terminal.lastBuffer[0, 0].symbol == "3"
+
+    test "drawWithCursor with force parameter":
+      let terminal = newTerminal()
+      var buffer1 = newBuffer(20, 10)
+      var buffer2 = newBuffer(20, 10)
+      var lastCursorStyle = CursorStyle.Default
+
+      buffer1[5, 5] = cell("A")
+      buffer2[5, 5] = cell("A") # Same content
+
+      # First draw
+      terminal.drawWithCursor(
+        buffer1, 10, 5, true, CursorStyle.Default, lastCursorStyle
+      )
+      check terminal.lastBuffer[5, 5].symbol == "A"
+
+      # Second draw with force = true (should redraw even if content is same)
+      terminal.drawWithCursor(
+        buffer2, 10, 5, true, CursorStyle.Default, lastCursorStyle, force = true
+      )
+      check terminal.lastBuffer[5, 5].symbol == "A"
+
+    test "drawWithCursor handles buffer changes":
+      let terminal = newTerminal()
+      var buffer1 = newBuffer(20, 10)
+      var buffer2 = newBuffer(20, 10)
+      var lastCursorStyle = CursorStyle.Default
+
+      buffer1[1, 1] = cell("X")
+      buffer2[1, 1] = cell("Y")
+      buffer2[2, 2] = cell("Z")
+
+      # Draw first buffer
+      terminal.drawWithCursor(buffer1, 5, 5, true, CursorStyle.Default, lastCursorStyle)
+      check terminal.lastBuffer[1, 1].symbol == "X"
+
+      # Draw second buffer with changes
+      terminal.drawWithCursor(buffer2, 5, 5, true, CursorStyle.Default, lastCursorStyle)
+      check terminal.lastBuffer[1, 1].symbol == "Y"
+      check terminal.lastBuffer[2, 2].symbol == "Z"
+
+    test "drawWithCursor with empty buffer":
+      let terminal = newTerminal()
+      var buffer = newBuffer(10, 5)
+      var lastCursorStyle = CursorStyle.Default
+
+      # Empty buffer should render without errors
+      terminal.drawWithCursor(buffer, 3, 3, true, CursorStyle.Default, lastCursorStyle)
+      check terminal.lastBuffer.area == buffer.area
+
+    test "drawWithCursor with styled content":
+      let terminal = newTerminal()
+      var buffer = newBuffer(20, 10)
+      var lastCursorStyle = CursorStyle.Default
+
+      let styledCell = cell("S", style(Color.Green, Color.Black, {Bold}))
+      buffer[7, 7] = styledCell
+
+      terminal.drawWithCursor(buffer, 10, 5, true, CursorStyle.Default, lastCursorStyle)
+      check terminal.lastBuffer[7, 7].symbol == "S"
+      check terminal.lastBuffer[7, 7].style.fg.indexed == Color.Green
+      check Bold in terminal.lastBuffer[7, 7].style.modifiers
+
+    test "drawWithCursor with unicode content":
+      let terminal = newTerminal()
+      var buffer = newBuffer(20, 10)
+      var lastCursorStyle = CursorStyle.Default
+
+      buffer[0, 0] = cell("あ")
+      buffer[2, 0] = cell("🎉")
+      buffer[4, 0] = cell("α")
+
+      terminal.drawWithCursor(buffer, 5, 5, true, CursorStyle.Default, lastCursorStyle)
+      check terminal.lastBuffer[0, 0].symbol == "あ"
+      check terminal.lastBuffer[2, 0].symbol == "🎉"
+      check terminal.lastBuffer[4, 0].symbol == "α"
+
+    test "drawWithCursor cursor position boundaries":
+      let terminal = newTerminal()
+      var buffer = newBuffer(20, 10)
+      var lastCursorStyle = CursorStyle.Default
+
+      buffer[5, 5] = cell("M")
+
+      # Test various cursor positions
+      terminal.drawWithCursor(buffer, 0, 0, true, CursorStyle.Default, lastCursorStyle)
+      check terminal.lastBuffer[5, 5].symbol == "M"
+
+      terminal.drawWithCursor(buffer, 19, 9, true, CursorStyle.Default, lastCursorStyle)
+      check terminal.lastBuffer[5, 5].symbol == "M"
+
+      terminal.drawWithCursor(buffer, 10, 5, true, CursorStyle.Default, lastCursorStyle)
+      check terminal.lastBuffer[5, 5].symbol == "M"
+
+    test "drawWithCursor gracefully handles errors":
+      let terminal = newTerminal()
+      var buffer = newBuffer(20, 10)
+      var lastCursorStyle = CursorStyle.Default
+
+      buffer[1, 1] = cell("E")
+
+      # Should not raise exceptions even in error conditions
+      # (actual I/O errors are difficult to simulate in tests)
+      terminal.drawWithCursor(buffer, 5, 5, true, CursorStyle.Default, lastCursorStyle)
+      check terminal.lastBuffer[1, 1].symbol == "E"
 
   suite "Integration Tests":
     test "Terminal with styled content":
