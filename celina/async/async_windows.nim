@@ -23,9 +23,7 @@ type
 
   AsyncWindowError* = object of CatchableError
 
-# ============================================================================
 # Thread-Safe Access Control
-# ============================================================================
 
 proc getWindowHelper(awm: AsyncWindowManager, windowId: WindowId): Option[Window] =
   ## Helper function to get a window by ID (assumes caller has lock)
@@ -45,9 +43,7 @@ template withLock*(awm: AsyncWindowManager, operation: untyped): untyped =
   finally:
     awm.lock.store(false)
 
-# ============================================================================
 # AsyncWindowManager Creation and Management
-# ============================================================================
 
 proc newAsyncWindowManager*(): AsyncWindowManager =
   ## Create a new async-safe window manager
@@ -71,9 +67,7 @@ proc destroyAsyncWindowManager*(awm: AsyncWindowManager) {.async.} =
   # Yield to allow cleanup to complete
   await sleepMs(0)
 
-# ============================================================================
 # Async Window Operations
-# ============================================================================
 
 proc getWindowAsync*(
     awm: AsyncWindowManager, windowId: WindowId
@@ -215,9 +209,7 @@ proc findWindowAtAsync*(
 
   return none(Window)
 
-# ============================================================================
 # Async Event Handling
-# ============================================================================
 
 proc handleEventAsync*(awm: AsyncWindowManager, event: Event): Future[bool] {.async.} =
   ## Handle an event, routing it to the appropriate window asynchronously
@@ -257,9 +249,7 @@ proc handleEventAsync*(awm: AsyncWindowManager, event: Event): Future[bool] {.as
   except:
     return false
 
-# ============================================================================
 # Async Window Border Drawing
-# ============================================================================
 
 proc drawAsyncWindowBorder(window: Window, destBuffer: var Buffer) =
   ## Draw window border to destination buffer (async-compatible)
@@ -308,9 +298,7 @@ proc drawAsyncWindowBorder(window: Window, destBuffer: var Buffer) =
         window.title[0 ..< maxTitleLen - 1] & "…"
     destBuffer.setString(titleStart, area.y, displayTitle, style)
 
-# ============================================================================
 # Async Rendering
-# ============================================================================
 
 proc renderAsync*(
     awm: AsyncWindowManager, destBuffer: async_buffer.AsyncBuffer
@@ -366,9 +354,7 @@ proc renderSync*(awm: AsyncWindowManager, destBuffer: var Buffer) =
 
         destBuffer.merge(windowBuffer, pos(window.area.x, window.area.y))
 
-# ============================================================================
 # Window Layout and Management
-# ============================================================================
 
 proc bringToFrontAsync*(
     awm: AsyncWindowManager, windowId: WindowId
@@ -427,21 +413,18 @@ proc moveWindowAsync*(
       return true
     return false
 
-# ============================================================================
 # Compatibility Layer
-# ============================================================================
 
-proc getWindow*(awm: AsyncWindowManager, windowId: WindowId): Option[Window] =
-  ## Synchronous getWindow for compatibility
+proc getWindowSync*(awm: AsyncWindowManager, windowId: WindowId): Option[Window] =
+  ## Synchronous getWindow for compatibility with sync code
+  ## For async code, use getWindowAsync instead
   awm.withLock:
     for window in awm.windows:
       if window.id == windowId:
         return some(window)
     return none(Window)
 
-# ============================================================================
 # Statistics and Debugging
-# ============================================================================
 
 proc getStats*(
     awm: AsyncWindowManager

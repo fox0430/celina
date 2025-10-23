@@ -356,19 +356,6 @@ proc getFocusedWindowAsync*(app: AsyncApp): Future[Option[Window]] {.async.} =
     return await app.windowManager.getFocusedWindowAsync()
   return none(Window)
 
-# Synchronous compatibility functions
-proc addWindow*(app: AsyncApp, window: Window): WindowId =
-  ## Add a window to the application (compatibility)
-  if not app.windowMode:
-    app.enableWindowMode()
-  return waitFor app.windowManager.addWindowAsync(window)
-
-proc getWindow*(app: AsyncApp, windowId: WindowId): Option[Window] =
-  ## Get a window by ID (compatibility)
-  if app.windowMode and not app.windowManager.isNil:
-    return app.windowManager.getWindow(windowId)
-  return none(Window)
-
 # ============================================================================
 # Async Convenience Functions
 # ============================================================================
