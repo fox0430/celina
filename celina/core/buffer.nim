@@ -72,13 +72,7 @@ proc `$`*(cell: Cell): string =
 
 proc newBuffer*(area: Rect): Buffer =
   ## Create a new Buffer with the specified area
-  result = Buffer(area: area)
-  result.content = newSeqWith(area.height, newSeq[Cell](area.width))
-
-  # Initialize with empty cells
-  for y in 0 ..< area.height:
-    for x in 0 ..< area.width:
-      result.content[y][x] = cell()
+  Buffer(area: area, content: newSeqWith(area.height, newSeqWith(area.width, cell())))
 
 proc newBuffer*(width, height: int): Buffer {.inline.} =
   ## Create a new Buffer with specified dimensions at origin
@@ -219,12 +213,7 @@ proc resize*(buffer: var Buffer, newArea: Rect) =
   let oldArea = buffer.area
 
   buffer.area = newArea
-  buffer.content = newSeqWith(newArea.height, newSeq[Cell](newArea.width))
-
-  # Initialize with empty cells
-  for y in 0 ..< newArea.height:
-    for x in 0 ..< newArea.width:
-      buffer.content[y][x] = cell()
+  buffer.content = newSeqWith(newArea.height, newSeqWith(newArea.width, cell()))
 
   # Copy old content where it overlaps
   let intersection = oldArea.intersection(newArea)
