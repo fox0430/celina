@@ -17,11 +17,9 @@ type
     lastBuffer*: Buffer
     stdinFd*: AsyncFD
     stdoutFd*: AsyncFD
+    originalTermios: Termios # Store original terminal settings per instance
 
   AsyncTerminalError* = object of CatchableError
-
-# Raw mode control (for key input)
-var originalTermios: Termios
 
 proc getTerminalSizeAsync*(): Size =
   ## Get current terminal size
@@ -54,8 +52,8 @@ proc newAsyncTerminal*(): AsyncTerminal =
 
 proc enableRawMode*(terminal: AsyncTerminal) =
   ## Enable raw mode for direct key input
-  if tcgetattr(STDIN_FILENO, addr originalTermios) == 0:
-    var raw = originalTermios
+  if tcgetattr(STDIN_FILENO, addr terminal.originalTermios) == 0:
+    var raw = terminal.originalTermios
     applyTerminalConfig(raw, getRawModeConfig())
 
     if tcsetattr(STDIN_FILENO, TCSAFLUSH, addr raw) == 0:
@@ -64,7 +62,7 @@ proc enableRawMode*(terminal: AsyncTerminal) =
 proc disableRawMode*(terminal: AsyncTerminal) =
   ## Disable raw mode
   if terminal.rawMode:
-    discard tcsetattr(STDIN_FILENO, TCSAFLUSH, addr originalTermios)
+    discard tcsetattr(STDIN_FILENO, TCSAFLUSH, addr terminal.originalTermios)
   terminal.rawMode = false
 
 # Alternate screen control

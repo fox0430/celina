@@ -218,11 +218,6 @@ suite "Global State Management":
     # Reset for other tests
     async_events.resizeDetected = false
 
-  test "asyncStdinFd is declared":
-    # Verify the global AsyncFD is declared
-    # This is mainly a compilation test
-    check true
-
 suite "Error Handling":
   test "AsyncEventError with custom message":
     let customError = newException(AsyncEventError, "Custom async error message")
