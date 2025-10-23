@@ -16,9 +16,7 @@ type Terminal* = ref object ## Terminal interface for screen management
   mouseEnabled*: bool
   lastBuffer*: Buffer
   rawModeEnabled: bool # Track raw mode state internally
-
-# Raw mode control (for key input)
-var originalTermios: Termios
+  originalTermios: Termios # Store original terminal settings per instance
 
 proc getTerminalSize*(): Size =
   ## Get current terminal size with error handling
@@ -63,10 +61,11 @@ proc enableRawMode*(terminal: Terminal) =
 
   try:
     checkSystemCallVoid(
-      tcgetattr(STDIN_FILENO, addr originalTermios), "Failed to get terminal attributes"
+      tcgetattr(STDIN_FILENO, addr terminal.originalTermios),
+      "Failed to get terminal attributes",
     )
 
-    var raw = originalTermios
+    var raw = terminal.originalTermios
     applyTerminalConfig(raw, getRawModeConfig())
 
     checkSystemCallVoid(
@@ -84,7 +83,7 @@ proc disableRawMode*(terminal: Terminal) =
     return # Not enabled
 
   # Best effort restoration - log but don't raise
-  if tcsetattr(STDIN_FILENO, TCSAFLUSH, addr originalTermios) == -1:
+  if tcsetattr(STDIN_FILENO, TCSAFLUSH, addr terminal.originalTermios) == -1:
     when defined(celinaDebug):
       stderr.writeLine("Warning: Failed to restore terminal settings")
   terminal.rawMode = false

@@ -14,7 +14,6 @@ when not declared(SIGWINCH):
 
 # Global state for async event handling
 var resizeDetected* = false
-var asyncStdinFd*: AsyncFD
 
 # Signal handler for SIGWINCH
 proc sigwinchHandler(sig: cint) {.noconv.} =
