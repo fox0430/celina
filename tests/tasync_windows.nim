@@ -32,8 +32,8 @@ suite "AsyncWindows Synchronous Operations":
     let awm = newAsyncWindowManager()
     discard newWindow(rect(5, 5, 30, 20), "Sync Window")
 
-    # Test synchronous getWindow (before window is added)
-    let emptyResult = awm.getWindow(WindowId(1))
+    # Test synchronous getWindowSync (before window is added)
+    let emptyResult = awm.getWindowSync(WindowId(1))
     check emptyResult.isNone()
 
 suite "AsyncWindows Type and Configuration Tests":
@@ -89,8 +89,8 @@ suite "AsyncWindows Error Handling (Sync Tests)":
     let awm = newAsyncWindowManager()
     let invalidId = WindowId(-1)
 
-    # Test synchronous getWindow with invalid ID
-    let windowOpt = awm.getWindow(invalidId)
+    # Test synchronous getWindowSync with invalid ID
+    let windowOpt = awm.getWindowSync(invalidId)
     check windowOpt.isNone()
 
   test "Nil window detection":
