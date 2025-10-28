@@ -3,6 +3,7 @@
 import std/[unittest, posix]
 
 import ../celina/core/events {.all.}
+import ../celina/core/mouse_logic
 
 suite "Events Module Tests":
   suite "EventKind Tests":
@@ -754,16 +755,17 @@ suite "Events Module Tests":
       check Alt in allMods
       check allMods.len == 3
 
-    test "parseMouseModifiersSGR - same behavior as X10":
-      # SGR format should have same modifier parsing behavior
-      let noMods = parseMouseModifiersSGR(0x00)
+    test "parseMouseModifiers works for both X10 and SGR":
+      # SGR and X10 formats use the same modifier parsing (from button byte)
+      # This function works for both formats
+      let noMods = parseMouseModifiers(0x00)
       check noMods.len == 0
 
-      let shiftMods = parseMouseModifiersSGR(0x04)
+      let shiftMods = parseMouseModifiers(0x04)
       check Shift in shiftMods
       check shiftMods.len == 1
 
-      let allMods = parseMouseModifiersSGR(0x1C)
+      let allMods = parseMouseModifiers(0x1C)
       check Ctrl in allMods
       check Shift in allMods
       check Alt in allMods
@@ -921,9 +923,9 @@ suite "Events Module Tests":
 
     test "SGR mouse parsing - wheel events with modifiers":
       # Test wheel events combined with modifiers
-      let ctrlWheelUp = parseMouseModifiersSGR(64 or 0x10) # Wheel up + Ctrl
-      let shiftWheelDown = parseMouseModifiersSGR(65 or 0x04) # Wheel down + Shift
-      let altWheelUp = parseMouseModifiersSGR(64 or 0x08) # Wheel up + Alt
+      let ctrlWheelUp = parseMouseModifiers(64 or 0x10) # Wheel up + Ctrl
+      let shiftWheelDown = parseMouseModifiers(65 or 0x04) # Wheel down + Shift
+      let altWheelUp = parseMouseModifiers(64 or 0x08) # Wheel up + Alt
 
       check Ctrl in ctrlWheelUp
       check Shift in shiftWheelDown

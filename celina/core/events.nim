@@ -6,6 +6,14 @@
 import std/[os, posix, options, strutils]
 
 import errors
+import mouse_logic
+import utf8_utils
+import key_logic
+
+# Re-export types to maintain API compatibility
+export mouse_logic.MouseButton, mouse_logic.MouseEventKind, mouse_logic.KeyModifier
+export key_logic.KeyCode, key_logic.KeyEvent
+export utf8_utils
 
 # Define SIGWINCH if not available
 when not declared(SIGWINCH):
@@ -26,64 +34,6 @@ type
     Quit
     Unknown
 
-  KeyCode* = enum
-    # Basic keys
-    Char # Regular character
-    Enter # Enter/Return key
-    Escape # Escape key
-    Backspace # Backspace key
-    Tab # Tab key
-    BackTab # Shift+Tab
-    Space # Space key
-    # Arrow keys
-    ArrowUp
-    ArrowDown
-    ArrowLeft
-    ArrowRight
-    # Navigation keys
-    Home
-    End
-    PageUp
-    PageDown
-    Insert
-    Delete
-    # Function keys
-    F1
-    F2
-    F3
-    F4
-    F5
-    F6
-    F7
-    F8
-    F9
-    F10
-    F11
-    F12
-
-  KeyModifier* = enum
-    Ctrl
-    Alt
-    Shift
-
-  MouseButton* = enum
-    Left
-    Right
-    Middle
-    WheelUp
-    WheelDown
-
-  MouseEventKind* = enum
-    Press
-    Release
-    Move
-    Drag
-
-  KeyEvent* = object
-    code*: KeyCode
-    char*: string # Only valid when code == Char, supports multi-byte UTF-8
-    modifiers*: set[KeyModifier]
-
   MouseEvent* = object
     kind*: MouseEventKind
     button*: MouseButton
@@ -100,82 +50,39 @@ type
     of Resize, Quit, Unknown:
       discard
 
-# Mouse modifier parsing functions
-proc parseMouseModifiers(button_byte: int): set[KeyModifier] =
-  ## Parse mouse modifiers from X10 button byte
-  result = {}
-  if (button_byte and 0x04) != 0:
-    result.incl(Shift)
-  if (button_byte and 0x08) != 0:
-    result.incl(Alt)
-  if (button_byte and 0x10) != 0:
-    result.incl(Ctrl)
+# Mouse event parsing functions (using shared logic from mouse_logic module)
 
-proc parseMouseModifiersSGR(button_code: int): set[KeyModifier] =
-  ## Parse mouse modifiers from SGR button code
-  result = {}
-  if (button_code and 0x04) != 0:
-    result.incl(Shift)
-  if (button_code and 0x08) != 0:
-    result.incl(Alt)
-  if (button_code and 0x10) != 0:
-    result.incl(Ctrl)
+proc toEvent(data: mouse_logic.MouseEventData): Event =
+  ## Convert MouseEventData to Event
+  Event(
+    kind: EventKind.Mouse,
+    mouse: MouseEvent(
+      kind: data.kind,
+      button: data.button,
+      x: data.x,
+      y: data.y,
+      modifiers: data.modifiers,
+    ),
+  )
 
-# Mouse event parsing functions
 proc parseMouseEventX10(): Event =
   ## Parse X10 mouse format: ESC[Mbxy
   ## where b is button byte, x,y are coordinate bytes
+  ##
+  ## This function handles I/O and delegates parsing to shared mouse_logic module
   var data: array[3, char]
   # Use a timeout to prevent hanging on incomplete sequences
   if stdin.readBuffer(addr data[0], 3) == 3:
-    let button_byte = data[0].ord
-    let x = data[1].ord - 33 # X10 uses offset 33
-    let y = data[2].ord - 33 # X10 uses offset 33
-
-    let button_info = button_byte and 0x03
-    let is_drag = (button_byte and 0x20) != 0
-    let is_wheel = (button_byte and 0x40) != 0
-
-    var button: MouseButton
-    var kind: MouseEventKind
-
-    if is_wheel:
-      # X10 wheel events: bit 0 indicates direction
-      if (button_byte and 0x01) != 0:
-        button = WheelDown
-      else:
-        button = WheelUp
-      kind = Press
-    else:
-      case button_info
-      of 0:
-        button = Left
-      of 1:
-        button = Middle
-      of 2:
-        button = Right
-      else:
-        button = Left
-
-      if is_drag:
-        kind = Drag
-      elif (button_byte and 0x03) == 3:
-        kind = Release
-      else:
-        kind = Press
-
-    let modifiers = parseMouseModifiers(button_byte)
-
-    return Event(
-      kind: EventKind.Mouse,
-      mouse: MouseEvent(kind: kind, button: button, x: x, y: y, modifiers: modifiers),
-    )
+    # Use shared parsing logic - no duplication with async version!
+    return parseMouseDataX10(data).toEvent()
 
   return Event(kind: Unknown)
 
 proc parseMouseEventSGR(): Event =
   ## Parse SGR mouse format: ESC[<button;x;y;M/m
   ## M for press, m for release
+  ##
+  ## This function handles I/O and delegates parsing to shared mouse_logic module
   var buffer: string
   var ch: char
   var readCount = 0
@@ -196,86 +103,31 @@ proc parseMouseEventSGR(): Event =
   let parts = buffer.split(';')
   if parts.len >= 3:
     try:
-      let button_code = parseInt(parts[0])
+      let buttonCode = parseInt(parts[0])
       let x = parseInt(parts[1]) - 1 # SGR uses 1-based coordinates
       let y = parseInt(parts[2]) - 1
+      let isRelease = (ch == 'm')
 
-      let is_release = (ch == 'm')
-      let is_wheel = (button_code and 0x40) != 0
-      let button_info = button_code and 0x03
-
-      var button: MouseButton
-      var kind: MouseEventKind
-
-      if is_wheel:
-        # Wheel events: button_code 64 (0x40) = WheelUp, 65 (0x41) = WheelDown
-        if (button_code and 0x01) != 0:
-          button = WheelDown
-        else:
-          button = WheelUp
-        kind = Press
-      else:
-        case button_info
-        of 0:
-          button = Left
-        of 1:
-          button = Middle
-        of 2:
-          button = Right
-        else:
-          button = Left
-
-        if is_release:
-          kind = Release
-        elif (button_code and 0x20) != 0:
-          kind = Drag
-        else:
-          kind = Press
-
-      let modifiers = parseMouseModifiersSGR(button_code)
-
-      return Event(
-        kind: EventKind.Mouse,
-        mouse: MouseEvent(kind: kind, button: button, x: x, y: y, modifiers: modifiers),
-      )
+      # Use shared parsing logic - no duplication with async version!
+      return parseMouseDataSGR(buttonCode, x, y, isRelease).toEvent()
     except ValueError:
       return Event(kind: Unknown)
 
   return Event(kind: Unknown)
 
-# UTF-8 helper functions
-proc utf8ByteLength(firstByte: byte): int =
-  ## Determine the number of bytes in a UTF-8 character from its first byte
-  ## Returns 1 for ASCII, 2-4 for multi-byte characters, 0 for invalid
-  if (firstByte and 0x80) == 0:
-    return 1 # ASCII: 0xxxxxxx
-  elif (firstByte and 0xE0) == 0xC0:
-    return 2 # 110xxxxx
-  elif (firstByte and 0xF0) == 0xE0:
-    return 3 # 1110xxxx
-  elif (firstByte and 0xF8) == 0xF0:
-    # Valid 4-byte UTF-8 is 0xF0-0xF4 (U+10000 to U+10FFFF)
-    if firstByte >= 0xF0 and firstByte <= 0xF4:
-      return 4 # 11110xxx
-    else:
-      return 0 # Invalid (> 0xF4 or pattern mismatch)
-  else:
-    return 0 # Invalid UTF-8 start byte
-
+# UTF-8 helper functions (using shared logic from utf8_utils module)
 proc readUtf8Char(firstByte: byte): string =
-  ## Read a complete UTF-8 character given its first byte
-  ## Returns the complete UTF-8 character as a string
+  ## Read a complete UTF-8 character given its first byte (blocking mode)
+  ## Uses shared UTF-8 validation logic from utf8_utils
   let byteLen = utf8ByteLength(firstByte)
   if byteLen == 0:
     return ""
 
-  result = newString(byteLen)
-  result[0] = char(firstByte)
-
   if byteLen == 1:
-    return result
+    return $char(firstByte)
 
-  # Read remaining bytes
+  # Read continuation bytes
+  var continuationBytes: seq[byte] = @[]
   for i in 1 ..< byteLen:
     var nextByte: char
     let bytesRead = tryRecover(
@@ -284,59 +136,71 @@ proc readUtf8Char(firstByte: byte): string =
       fallback = 0,
     )
     if bytesRead != 1:
-      # Failed to read continuation byte, return what we have
-      result.setLen(i)
-      return result
+      # Failed to read, return what we have
+      if continuationBytes.len > 0:
+        return buildUtf8String(firstByte, continuationBytes)
+      else:
+        return $char(firstByte)
 
-    # Validate continuation byte (should be 10xxxxxx)
-    if (nextByte.byte and 0xC0) != 0x80:
-      # Invalid continuation byte, return what we have
-      result.setLen(i)
-      return result
+    # Validate using shared logic
+    if not isUtf8ContinuationByte(nextByte.byte):
+      # Invalid, return what we have
+      if continuationBytes.len > 0:
+        return buildUtf8String(firstByte, continuationBytes)
+      else:
+        return $char(firstByte)
 
-    result[i] = nextByte
+    continuationBytes.add(nextByte.byte)
+
+  return buildUtf8String(firstByte, continuationBytes)
 
 proc readUtf8CharNonBlocking(firstByte: byte): string =
   ## Read a complete UTF-8 character in non-blocking mode
-  ## Returns the complete UTF-8 character as a string
+  ## Uses shared UTF-8 validation logic from utf8_utils
   let byteLen = utf8ByteLength(firstByte)
   if byteLen == 0:
     return ""
 
-  result = newString(byteLen)
-  result[0] = char(firstByte)
-
   if byteLen == 1:
-    return result
+    return $char(firstByte)
 
-  # Read remaining bytes in non-blocking mode
+  # Read continuation bytes in non-blocking mode
+  var continuationBytes: seq[byte] = @[]
   for i in 1 ..< byteLen:
     var nextByte: char
     let bytesRead = read(STDIN_FILENO, addr nextByte, 1)
     if bytesRead == -1:
       let err = errno
       if err == EAGAIN or err == EWOULDBLOCK:
-        # No more data available, return what we have
-        result.setLen(i)
-        return result
+        # No more data, return what we have
+        if continuationBytes.len > 0:
+          return buildUtf8String(firstByte, continuationBytes)
+        else:
+          return $char(firstByte)
       else:
         # Other error, return what we have
-        result.setLen(i)
-        return result
+        if continuationBytes.len > 0:
+          return buildUtf8String(firstByte, continuationBytes)
+        else:
+          return $char(firstByte)
     elif bytesRead != 1:
-      # Failed to read continuation byte, return what we have
-      result.setLen(i)
-      return result
+      # Failed to read, return what we have
+      if continuationBytes.len > 0:
+        return buildUtf8String(firstByte, continuationBytes)
+      else:
+        return $char(firstByte)
 
-    # Validate continuation byte (should be 10xxxxxx)
-    if (nextByte.byte and 0xC0) != 0x80:
-      # Invalid continuation byte, return what we have
-      result.setLen(i)
-      return result
+    # Validate using shared logic
+    if not isUtf8ContinuationByte(nextByte.byte):
+      # Invalid, return what we have
+      if continuationBytes.len > 0:
+        return buildUtf8String(firstByte, continuationBytes)
+      else:
+        return $char(firstByte)
 
-    result[i] = nextByte
+    continuationBytes.add(nextByte.byte)
 
-  return result
+  return buildUtf8String(firstByte, continuationBytes)
 
 # Advanced key reading with escape sequence support
 proc readKey*(): Event =
@@ -351,184 +215,79 @@ proc readKey*(): Event =
     )
 
     if bytesRead == 1:
-      # Handle Ctrl+letter combinations (excluding special keys)
-      # \x01-\x1a = Ctrl-A to Ctrl-Z, but exclude already-handled keys:
-      # \x03 = Ctrl-C (Quit), \x08 = Ctrl-H (Backspace), \x09 = Ctrl-I (Tab)
-      # \x0a = Ctrl-J (Line Feed), \x0d = Ctrl-M (Enter), \x1b = Ctrl-[ (Escape)
-      if ch >= '\x01' and ch <= '\x1a' and
-          ch notin {'\x03', '\x08', '\x09', '\x0a', '\x0d', '\x1b'}:
-        let letter = chr(ch.ord + ord('a') - 1)
-        return
-          Event(kind: Key, key: KeyEvent(code: Char, char: $letter, modifiers: {Ctrl}))
+      # Handle Ctrl+letter combinations using shared logic
+      let ctrlLetterResult = mapCtrlLetterKey(ch)
+      if ctrlLetterResult.isCtrlKey:
+        return Event(kind: Key, key: ctrlLetterResult.keyEvent)
 
-      # Handle Ctrl-number and special control characters
-      # Following crossterm's mapping:
-      # \x00 = Ctrl-Space, \x1c = Ctrl-4, \x1d = Ctrl-5, \x1e = Ctrl-6, \x1f = Ctrl-7
-      if ch == '\x00':
-        return
-          Event(kind: Key, key: KeyEvent(code: Space, char: " ", modifiers: {Ctrl}))
-      elif ch >= '\x1c' and ch <= '\x1f':
-        let digit = chr(ch.ord - 0x1c + ord('4'))
-        return
-          Event(kind: Key, key: KeyEvent(code: Char, char: $digit, modifiers: {Ctrl}))
+      # Handle Ctrl+number using shared logic
+      let ctrlNumberResult = mapCtrlNumberKey(ch)
+      if ctrlNumberResult.isCtrlKey:
+        return Event(kind: Key, key: ctrlNumberResult.keyEvent)
 
+      # Handle basic keys using shared logic
       case ch
-      of '\r', '\n':
-        return Event(kind: Key, key: KeyEvent(code: Enter, char: $ch))
-      of '\t':
-        return Event(kind: Key, key: KeyEvent(code: Tab, char: $ch))
-      of ' ':
-        return Event(kind: Key, key: KeyEvent(code: Space, char: $ch))
-      of '\x08', '\x7f': # Backspace or DEL
-        return Event(kind: Key, key: KeyEvent(code: Backspace, char: $ch))
+      of '\r', '\n', '\t', ' ', '\x08', '\x7f':
+        return Event(kind: Key, key: mapBasicKey(ch))
       of '\x1b': # Escape or start of escape sequence
         # Try to read escape sequence in blocking mode
         var next: char
         if stdin.readBuffer(addr next, 1) == 1 and next == '[':
           var final: char
           if stdin.readBuffer(addr final, 1) == 1:
-            case final
-            of 'A': # Arrow Up
-              return Event(kind: Key, key: KeyEvent(code: ArrowUp, char: ""))
-            of 'B': # Arrow Down
-              return Event(kind: Key, key: KeyEvent(code: ArrowDown, char: ""))
-            of 'C': # Arrow Right
-              return Event(kind: Key, key: KeyEvent(code: ArrowRight, char: ""))
-            of 'D': # Arrow Left
-              return Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: ""))
-            of 'H': # Home
-              return Event(kind: Key, key: KeyEvent(code: Home, char: ""))
-            of 'F': # End
-              return Event(kind: Key, key: KeyEvent(code: End, char: ""))
-            of 'Z': # Shift+Tab (BackTab)
-              return Event(kind: Key, key: KeyEvent(code: BackTab, char: ""))
-            of 'M': # Mouse event (X10 format)
+            # Handle arrow keys using shared logic
+            if final in {'A', 'B', 'C', 'D'}:
+              return Event(kind: Key, key: mapArrowKey(final))
+
+            # Handle navigation keys using shared logic
+            if final in {'H', 'F', 'Z'}:
+              return Event(kind: Key, key: mapNavigationKey(final))
+
+            # Mouse events (not shared logic)
+            if final == 'M':
               return parseMouseEventX10()
-            of '<': # SGR mouse format
+            if final == '<':
               return parseMouseEventSGR()
-            of '1' .. '6':
-              # Could be function key or special key with modifiers
-              var seq: string = $final
+
+            # Numeric key codes
+            if final in {'1' .. '6'}:
               var nextChar: char
               if stdin.readBuffer(addr nextChar, 1) == 1:
-                seq.add(nextChar)
                 if nextChar == '~':
-                  # Special keys with numeric codes
-                  case final
-                  of '1': # Home (alternative)
-                    return Event(kind: Key, key: KeyEvent(code: Home, char: ""))
-                  of '2': # Insert
-                    return Event(kind: Key, key: KeyEvent(code: Insert, char: ""))
-                  of '3': # Delete
-                    return Event(kind: Key, key: KeyEvent(code: Delete, char: ""))
-                  of '4': # End (alternative)
-                    return Event(kind: Key, key: KeyEvent(code: End, char: ""))
-                  of '5': # PageUp
-                    return Event(kind: Key, key: KeyEvent(code: PageUp, char: ""))
-                  of '6': # PageDown
-                    return Event(kind: Key, key: KeyEvent(code: PageDown, char: ""))
-                  else:
-                    return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
+                  # Use shared logic for numeric key codes
+                  return Event(kind: Key, key: mapNumericKeyCode(final))
                 elif nextChar == ';':
                   # Modified key sequence ESC[1;modifierX where X is the key
-                  var modSeq: string = seq & nextChar
                   var modChar: char
                   if stdin.readBuffer(addr modChar, 1) == 1:
-                    modSeq.add(modChar)
-                    # Parse modifier (2=Shift, 3=Alt, 4=Shift+Alt, 5=Ctrl, 6=Ctrl-Shift, 7=Ctrl-Alt, 8=Ctrl-Shift-Alt)
-                    let modifier = parseInt($modChar)
-                    var modifiers: set[KeyModifier] = {}
-                    if (modifier and 1) != 0:
-                      modifiers.incl(Shift)
-                    if (modifier and 2) != 0:
-                      modifiers.incl(Alt)
-                    if (modifier and 4) != 0:
-                      modifiers.incl(Ctrl)
+                    # Parse modifier using shared logic
+                    let modifiers = parseModifierCode(modChar)
 
                     var keyChar: char
                     if stdin.readBuffer(addr keyChar, 1) == 1:
-                      case keyChar
-                      of 'A': # Modified Arrow Up
-                        return Event(
-                          kind: Key,
-                          key: KeyEvent(code: ArrowUp, char: "", modifiers: modifiers),
-                        )
-                      of 'B': # Modified Arrow Down
-                        return Event(
-                          kind: Key,
-                          key: KeyEvent(code: ArrowDown, char: "", modifiers: modifiers),
-                        )
-                      of 'C': # Modified Arrow Right
-                        return Event(
-                          kind: Key,
-                          key:
-                            KeyEvent(code: ArrowRight, char: "", modifiers: modifiers),
-                        )
-                      of 'D': # Modified Arrow Left
-                        return Event(
-                          kind: Key,
-                          key: KeyEvent(code: ArrowLeft, char: "", modifiers: modifiers),
-                        )
-                      of 'H': # Modified Home
-                        return Event(
-                          kind: Key,
-                          key: KeyEvent(code: Home, char: "", modifiers: modifiers),
-                        )
-                      of 'F': # Modified End
-                        return Event(
-                          kind: Key,
-                          key: KeyEvent(code: End, char: "", modifiers: modifiers),
-                        )
-                      of '~':
-                        # Modified special keys
-                        case final
-                        of '1': # Modified Home
-                          return Event(
-                            kind: Key,
-                            key: KeyEvent(code: Home, char: "", modifiers: modifiers),
-                          )
-                        of '2': # Modified Insert
-                          return Event(
-                            kind: Key,
-                            key: KeyEvent(code: Insert, char: "", modifiers: modifiers),
-                          )
-                        of '3': # Modified Delete
-                          return Event(
-                            kind: Key,
-                            key: KeyEvent(code: Delete, char: "", modifiers: modifiers),
-                          )
-                        of '4': # Modified End
-                          return Event(
-                            kind: Key,
-                            key: KeyEvent(code: End, char: "", modifiers: modifiers),
-                          )
-                        of '5': # Modified PageUp
-                          return Event(
-                            kind: Key,
-                            key: KeyEvent(code: PageUp, char: "", modifiers: modifiers),
-                          )
-                        of '6': # Modified PageDown
-                          return Event(
-                            kind: Key,
-                            key:
-                              KeyEvent(code: PageDown, char: "", modifiers: modifiers),
-                          )
+                      # Map the key using shared logic and apply modifiers
+                      let baseKey =
+                        if keyChar in {'A', 'B', 'C', 'D'}:
+                          mapArrowKey(keyChar)
+                        elif keyChar in {'H', 'F'}:
+                          mapNavigationKey(keyChar)
+                        elif keyChar == '~':
+                          mapNumericKeyCode(final)
                         else:
-                          return
-                            Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
-                      else:
-                        return
-                          Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
+                          KeyEvent(code: Escape, char: "\x1b")
+
+                      return Event(kind: Key, key: applyModifiers(baseKey, modifiers))
                 else:
-                  # Might be function key, but we'll skip for now
+                  # Unknown sequence
                   return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
-              else:
-                return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
             else:
+              # Unknown escape sequence
               return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
           else:
+            # No final character
             return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
         else:
+          # No '[' after ESC
           return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
       of '\x03': # Ctrl-C
         return Event(kind: Quit)
@@ -613,21 +372,18 @@ proc readKeyInput*(): Option[Event] =
           # Restore non-blocking mode
           discard fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK)
 
+          # Try arrow keys first
+          let arrowKey = mapArrowKey(final)
+          if arrowKey.code != Escape:
+            return some(Event(kind: Key, key: arrowKey))
+
+          # Try navigation keys
+          let navKey = mapNavigationKey(final)
+          if navKey.code != Escape:
+            return some(Event(kind: Key, key: navKey))
+
+          # Handle mouse events and numeric sequences
           case final
-          of 'A': # Arrow Up
-            return some(Event(kind: Key, key: KeyEvent(code: ArrowUp, char: "")))
-          of 'B': # Arrow Down
-            return some(Event(kind: Key, key: KeyEvent(code: ArrowDown, char: "")))
-          of 'C': # Arrow Right
-            return some(Event(kind: Key, key: KeyEvent(code: ArrowRight, char: "")))
-          of 'D': # Arrow Left
-            return some(Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: "")))
-          of 'H': # Home
-            return some(Event(kind: Key, key: KeyEvent(code: Home, char: "")))
-          of 'F': # End
-            return some(Event(kind: Key, key: KeyEvent(code: End, char: "")))
-          of 'Z': # Shift+Tab (BackTab)
-            return some(Event(kind: Key, key: KeyEvent(code: BackTab, char: "")))
           of 'M': # Mouse event (X10 format)
             let mouseEvent = parseMouseEventX10()
             return some(mouseEvent)
@@ -644,23 +400,9 @@ proc readKeyInput*(): Option[Event] =
 
             if nextCharRead == 1:
               if nextChar == '~':
-                # Special keys with numeric codes
-                case final
-                of '1': # Home (alternative)
-                  return some(Event(kind: Key, key: KeyEvent(code: Home, char: "")))
-                of '2': # Insert
-                  return some(Event(kind: Key, key: KeyEvent(code: Insert, char: "")))
-                of '3': # Delete
-                  return some(Event(kind: Key, key: KeyEvent(code: Delete, char: "")))
-                of '4': # End (alternative)
-                  return some(Event(kind: Key, key: KeyEvent(code: End, char: "")))
-                of '5': # PageUp
-                  return some(Event(kind: Key, key: KeyEvent(code: PageUp, char: "")))
-                of '6': # PageDown
-                  return some(Event(kind: Key, key: KeyEvent(code: PageDown, char: "")))
-                else:
-                  return
-                    some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
+                # Special keys with numeric codes - use shared logic
+                let numKey = mapNumericKeyCode(final)
+                return some(Event(kind: Key, key: numKey))
               elif nextChar == ';':
                 # Modified key sequence
                 var modChar: char
@@ -671,15 +413,8 @@ proc readKeyInput*(): Option[Event] =
                     some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
 
                 if modCharRead == 1:
-                  # Parse modifier
-                  let modifier = parseInt($modChar)
-                  var modifiers: set[KeyModifier] = {}
-                  if (modifier and 1) != 0:
-                    modifiers.incl(Shift)
-                  if (modifier and 2) != 0:
-                    modifiers.incl(Alt)
-                  if (modifier and 4) != 0:
-                    modifiers.incl(Ctrl)
+                  # Parse modifier using shared logic
+                  let modifiers = parseModifierCode(modChar)
 
                   var keyChar: char
                   let keyCharRead = read(STDIN_FILENO, addr keyChar, 1)
@@ -689,100 +424,24 @@ proc readKeyInput*(): Option[Event] =
                       some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
 
                   if keyCharRead == 1:
-                    case keyChar
-                    of 'A': # Modified Arrow Up
-                      return some(
-                        Event(
-                          kind: Key,
-                          key: KeyEvent(code: ArrowUp, char: "", modifiers: modifiers),
-                        )
-                      )
-                    of 'B': # Modified Arrow Down
-                      return some(
-                        Event(
-                          kind: Key,
-                          key: KeyEvent(code: ArrowDown, char: "", modifiers: modifiers),
-                        )
-                      )
-                    of 'C': # Modified Arrow Right
-                      return some(
-                        Event(
-                          kind: Key,
-                          key:
-                            KeyEvent(code: ArrowRight, char: "", modifiers: modifiers),
-                        )
-                      )
-                    of 'D': # Modified Arrow Left
-                      return some(
-                        Event(
-                          kind: Key,
-                          key: KeyEvent(code: ArrowLeft, char: "", modifiers: modifiers),
-                        )
-                      )
-                    of 'H': # Modified Home
-                      return some(
-                        Event(
-                          kind: Key,
-                          key: KeyEvent(code: Home, char: "", modifiers: modifiers),
-                        )
-                      )
-                    of 'F': # Modified End
-                      return some(
-                        Event(
-                          kind: Key,
-                          key: KeyEvent(code: End, char: "", modifiers: modifiers),
-                        )
-                      )
-                    of '~':
-                      # Modified special keys
-                      case final
-                      of '1': # Modified Home
-                        return some(
-                          Event(
-                            kind: Key,
-                            key: KeyEvent(code: Home, char: "", modifiers: modifiers),
-                          )
-                        )
-                      of '2': # Modified Insert
-                        return some(
-                          Event(
-                            kind: Key,
-                            key: KeyEvent(code: Insert, char: "", modifiers: modifiers),
-                          )
-                        )
-                      of '3': # Modified Delete
-                        return some(
-                          Event(
-                            kind: Key,
-                            key: KeyEvent(code: Delete, char: "", modifiers: modifiers),
-                          )
-                        )
-                      of '4': # Modified End
-                        return some(
-                          Event(
-                            kind: Key,
-                            key: KeyEvent(code: End, char: "", modifiers: modifiers),
-                          )
-                        )
-                      of '5': # Modified PageUp
-                        return some(
-                          Event(
-                            kind: Key,
-                            key: KeyEvent(code: PageUp, char: "", modifiers: modifiers),
-                          )
-                        )
-                      of '6': # Modified PageDown
-                        return some(
-                          Event(
-                            kind: Key,
-                            key:
-                              KeyEvent(code: PageDown, char: "", modifiers: modifiers),
-                          )
-                        )
-                      else:
-                        return some(
-                          Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
-                        )
+                    # Try arrow keys with modifiers
+                    let arrowKey = mapArrowKey(keyChar)
+                    if arrowKey.code != Escape:
+                      return
+                        some(Event(kind: Key, key: applyModifiers(arrowKey, modifiers)))
+
+                    # Try navigation keys with modifiers
+                    let navKey = mapNavigationKey(keyChar)
+                    if navKey.code != Escape:
+                      return
+                        some(Event(kind: Key, key: applyModifiers(navKey, modifiers)))
+
+                    # Handle modified special keys (numeric codes with ~)
+                    if keyChar == '~':
+                      let numKey = mapNumericKeyCode(final)
+                      if numKey.code != Escape:
+                        return
+                          some(Event(kind: Key, key: applyModifiers(numKey, modifiers)))
                     else:
                       return some(
                         Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
@@ -810,67 +469,35 @@ proc readKeyInput*(): Option[Event] =
       # Restore non-blocking mode
       discard fcntl(STDIN_FILENO, F_SETFL, flags)
 
-      # Handle Ctrl-letter combinations (excluding special keys)
-      if ch >= '\x01' and ch <= '\x1a' and
-          ch notin {'\x03', '\x08', '\x09', '\x0a', '\x0d', '\x1b'}:
-        let letter = chr(ch.ord + ord('a') - 1)
-        return some(
-          Event(
-            kind: EventKind.Key,
-            key: KeyEvent(code: KeyCode.Char, char: $letter, modifiers: {Ctrl}),
-          )
-        )
+      # Handle Ctrl-letter combinations using shared logic
+      let ctrlLetterResult = mapCtrlLetterKey(ch)
+      if ctrlLetterResult.isCtrlKey:
+        return some(Event(kind: Key, key: ctrlLetterResult.keyEvent))
 
-      # Handle Ctrl-number and special control characters
-      if ch == '\x00':
-        return some(
-          Event(
-            kind: EventKind.Key,
-            key: KeyEvent(code: KeyCode.Space, char: " ", modifiers: {Ctrl}),
-          )
-        )
-      elif ch >= '\x1c' and ch <= '\x1f':
-        let digit = chr(ch.ord - 0x1c + ord('4'))
-        return some(
-          Event(
-            kind: EventKind.Key,
-            key: KeyEvent(code: KeyCode.Char, char: $digit, modifiers: {Ctrl}),
-          )
-        )
+      # Handle Ctrl-number and special control characters using shared logic
+      let ctrlNumberResult = mapCtrlNumberKey(ch)
+      if ctrlNumberResult.isCtrlKey:
+        return some(Event(kind: Key, key: ctrlNumberResult.keyEvent))
 
-      # Handle special control characters
-      case ch
-      of '\r', '\n':
-        return some(
-          Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Enter, char: $ch))
-        )
-      of '\x08', '\x7f':
-        return some(
-          Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Backspace, char: $ch))
-        )
-      of '\t':
-        return
-          some(Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Tab, char: $ch)))
-      of ' ':
-        return some(
-          Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Space, char: $ch))
-        )
-      of '\x03':
+      # Handle special quit signal
+      if ch == '\x03':
         return some(Event(kind: Quit))
+
+      # Use shared basic key mapping for common keys
+      let basicKey = mapBasicKey(ch)
+      if basicKey.code in {Enter, Tab, Space, Backspace}:
+        return some(Event(kind: Key, key: basicKey))
+
+      # For regular characters, read complete UTF-8 character in non-blocking mode
+      let utf8Char = readUtf8CharNonBlocking(ch.byte)
+      if utf8Char.len > 0:
+        return some(
+          Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Char, char: utf8Char))
+        )
       else:
-        # Read complete UTF-8 character in non-blocking mode
-        let utf8Char = readUtf8CharNonBlocking(ch.byte)
-        if utf8Char.len > 0:
-          return some(
-            Event(
-              kind: EventKind.Key, key: KeyEvent(code: KeyCode.Char, char: utf8Char)
-            )
-          )
-        else:
-          # Invalid UTF-8, treat as single byte
-          return some(
-            Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Char, char: $ch))
-          )
+        # Invalid UTF-8, treat as single byte
+        return
+          some(Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Char, char: $ch)))
   else:
     # Restore non-blocking mode
     discard fcntl(STDIN_FILENO, F_SETFL, flags)
