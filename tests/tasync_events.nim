@@ -2,6 +2,7 @@
 
 import std/unittest
 
+import ../celina/core/events
 import ../celina/async/[async_backend, async_io]
 import ../celina/async/async_events {.all.}
 
