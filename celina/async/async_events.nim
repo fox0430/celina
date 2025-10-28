@@ -6,7 +6,14 @@
 import std/[posix, options, strutils]
 
 import async_backend, async_io
-import ../core/events
+import ../core/[events, mouse_logic, utf8_utils, key_logic]
+
+type
+  AsyncEventError* = object of CatchableError
+
+  AsyncEventStream* = ref object
+    running*: bool
+    eventCallback*: proc(event: Event): Future[bool] {.async.}
 
 # Define SIGWINCH if not available
 when not declared(SIGWINCH):
@@ -18,8 +25,6 @@ var resizeDetected* = false
 # Signal handler for SIGWINCH
 proc sigwinchHandler(sig: cint) {.noconv.} =
   resizeDetected = true
-
-type AsyncEventError* = object of CatchableError
 
 # Initialize async event system
 proc initAsyncEventSystem*() =
@@ -38,78 +43,49 @@ proc cleanupAsyncEventSystem*() =
   except CatchableError:
     discard # Ignore cleanup errors
 
-# Async mouse event parsing
+# Async mouse event parsing (using shared logic from mouse_logic module)
+
+proc toEvent(data: mouse_logic.MouseEventData): Event =
+  ## Convert MouseEventData to Event
+  Event(
+    kind: EventKind.Mouse,
+    mouse: MouseEvent(
+      kind: data.kind,
+      button: data.button,
+      x: data.x,
+      y: data.y,
+      modifiers: data.modifiers,
+    ),
+  )
+
 proc parseMouseEventX10(): Future[Event] {.async.} =
   ## Parse X10 mouse format: ESC[Mbxy
   ## where b is button byte, x,y are coordinate bytes
+  ##
+  ## This async function handles I/O and delegates parsing to shared mouse_logic module
   var data: array[3, char]
 
-  # Read 3 bytes for X10 format
+  # Read 3 bytes for X10 format (async I/O)
   for i in 0 .. 2:
     let ch = await readCharAsync()
     if ch == '\0':
       return Event(kind: Unknown)
     data[i] = ch
 
-  let button_byte = data[0].ord
-  let x = data[1].ord - 33 # X10 uses offset 33
-  let y = data[2].ord - 33 # X10 uses offset 33
-
-  let button_info = button_byte and 0x03
-  let is_drag = (button_byte and 0x20) != 0
-  let is_wheel = (button_byte and 0x40) != 0
-
-  var button: MouseButton
-  var kind: MouseEventKind
-
-  if is_wheel:
-    # X10 wheel events: bit 0 indicates direction
-    if (button_byte and 0x01) != 0:
-      button = WheelDown
-    else:
-      button = WheelUp
-    kind = Press
-  else:
-    case button_info
-    of 0:
-      button = Left
-    of 1:
-      button = Middle
-    of 2:
-      button = Right
-    else:
-      button = Left
-
-    if is_drag:
-      kind = Drag
-    elif (button_byte and 0x03) == 3:
-      kind = Release
-    else:
-      kind = Press
-
-  # Parse modifiers
-  var modifiers: set[KeyModifier] = {}
-  if (button_byte and 0x04) != 0:
-    modifiers.incl(Shift)
-  if (button_byte and 0x08) != 0:
-    modifiers.incl(Alt)
-  if (button_byte and 0x10) != 0:
-    modifiers.incl(Ctrl)
-
-  return Event(
-    kind: EventKind.Mouse,
-    mouse: MouseEvent(kind: kind, button: button, x: x, y: y, modifiers: modifiers),
-  )
+  # Use shared parsing logic - no duplication with sync version!
+  return parseMouseDataX10(data).toEvent()
 
 proc parseMouseEventSGR(): Future[Event] {.async.} =
   ## Parse SGR mouse format: ESC[<button;x;y;M/m
   ## M for press, m for release
+  ##
+  ## This async function handles I/O and delegates parsing to shared mouse_logic module
   var buffer: string
   var ch: char
   var readCount = 0
   const maxReadCount = 20 # Prevent infinite loops
 
-  # Read until we get M or m, with safety limits
+  # Read until we get M or m, with safety limits (async I/O)
   while readCount < maxReadCount:
     ch = await readCharAsync()
     readCount.inc()
@@ -127,108 +103,52 @@ proc parseMouseEventSGR(): Future[Event] {.async.} =
   let parts = buffer.split(';')
   if parts.len >= 3:
     try:
-      let button_code = parseInt(parts[0])
+      let buttonCode = parseInt(parts[0])
       let x = parseInt(parts[1]) - 1 # SGR uses 1-based coordinates
       let y = parseInt(parts[2]) - 1
+      let isRelease = (ch == 'm')
 
-      let is_release = (ch == 'm')
-      let is_wheel = (button_code and 0x40) != 0
-      let button_info = button_code and 0x03
-
-      var button: MouseButton
-      var kind: MouseEventKind
-
-      if is_wheel:
-        # Wheel events: button_code 64 (0x40) = WheelUp, 65 (0x41) = WheelDown
-        if (button_code and 0x01) != 0:
-          button = WheelDown
-        else:
-          button = WheelUp
-        kind = Press
-      else:
-        case button_info
-        of 0:
-          button = Left
-        of 1:
-          button = Middle
-        of 2:
-          button = Right
-        else:
-          button = Left
-
-        if is_release:
-          kind = Release
-        elif (button_code and 0x20) != 0:
-          kind = Drag
-        else:
-          kind = Press
-
-      # Parse modifiers from SGR button code
-      var modifiers: set[KeyModifier] = {}
-      if (button_code and 0x04) != 0:
-        modifiers.incl(Shift)
-      if (button_code and 0x08) != 0:
-        modifiers.incl(Alt)
-      if (button_code and 0x10) != 0:
-        modifiers.incl(Ctrl)
-
-      return Event(
-        kind: EventKind.Mouse,
-        mouse: MouseEvent(kind: kind, button: button, x: x, y: y, modifiers: modifiers),
-      )
+      # Use shared parsing logic - no duplication with sync version!
+      return parseMouseDataSGR(buttonCode, x, y, isRelease).toEvent()
     except ValueError:
       return Event(kind: Unknown)
 
   return Event(kind: Unknown)
 
-# UTF-8 helper functions
-proc utf8ByteLength(firstByte: byte): int =
-  ## Determine the number of bytes in a UTF-8 character from its first byte
-  ## Returns 1 for ASCII, 2-4 for multi-byte characters, 0 for invalid
-  if (firstByte and 0x80) == 0:
-    return 1 # ASCII: 0xxxxxxx
-  elif (firstByte and 0xE0) == 0xC0:
-    return 2 # 110xxxxx
-  elif (firstByte and 0xF0) == 0xE0:
-    return 3 # 1110xxxx
-  elif (firstByte and 0xF8) == 0xF0:
-    # Valid 4-byte UTF-8 is 0xF0-0xF4 (U+10000 to U+10FFFF)
-    if firstByte >= 0xF0 and firstByte <= 0xF4:
-      return 4 # 11110xxx
-    else:
-      return 0 # Invalid (> 0xF4 or pattern mismatch)
-  else:
-    return 0 # Invalid UTF-8 start byte
-
+# UTF-8 helper functions (using shared logic from utf8_utils module)
 proc readUtf8CharAsync(firstByte: byte): Future[string] {.async.} =
   ## Read a complete UTF-8 character asynchronously
-  ## Returns the complete UTF-8 character as a string
+  ## Uses shared UTF-8 validation logic from utf8_utils
   let byteLen = utf8ByteLength(firstByte)
   if byteLen == 0:
     return ""
 
-  result = newString(byteLen)
-  result[0] = char(firstByte)
-
   if byteLen == 1:
-    return result
+    return $char(firstByte)
 
-  # Read remaining bytes asynchronously
+  # Read continuation bytes asynchronously
+  var continuationBytes: seq[byte] = @[]
   for i in 1 ..< byteLen:
     let nextByte = await readCharAsync()
 
     if nextByte == '\0':
-      # Failed to read continuation byte, return what we have
-      result.setLen(i)
-      return result
+      # Failed to read, return what we have
+      if continuationBytes.len > 0:
+        return buildUtf8String(firstByte, continuationBytes)
+      else:
+        return $char(firstByte)
 
-    # Validate continuation byte (should be 10xxxxxx)
-    if (nextByte.byte and 0xC0) != 0x80:
-      # Invalid continuation byte, return what we have
-      result.setLen(i)
-      return result
+    # Validate using shared logic
+    if not isUtf8ContinuationByte(nextByte.byte):
+      # Invalid, return what we have
+      if continuationBytes.len > 0:
+        return buildUtf8String(firstByte, continuationBytes)
+      else:
+        return $char(firstByte)
 
-    result[i] = nextByte
+    continuationBytes.add(nextByte.byte)
+
+  return buildUtf8String(firstByte, continuationBytes)
 
 # Async key reading with escape sequence support
 proc readKeyAsync*(): Future[Event] {.async.} =
@@ -240,16 +160,27 @@ proc readKeyAsync*(): Future[Event] {.async.} =
     if ch == '\0':
       return Event(kind: Unknown)
 
-    case ch
-    of '\r', '\n':
-      return Event(kind: Key, key: KeyEvent(code: Enter, char: $ch))
-    of '\t':
-      return Event(kind: Key, key: KeyEvent(code: Tab, char: $ch))
-    of ' ':
-      return Event(kind: Key, key: KeyEvent(code: Space, char: $ch))
-    of '\x08', '\x7f': # Backspace or DEL
-      return Event(kind: Key, key: KeyEvent(code: Backspace, char: $ch))
-    of '\x1b': # Escape or start of escape sequence
+    # Handle Ctrl+C quit first
+    if ch == '\x03':
+      return Event(kind: Quit)
+
+    # Handle Ctrl-letter combinations using shared logic
+    let ctrlLetterResult = mapCtrlLetterKey(ch)
+    if ctrlLetterResult.isCtrlKey:
+      return Event(kind: Key, key: ctrlLetterResult.keyEvent)
+
+    # Handle Ctrl-number and special control characters using shared logic
+    let ctrlNumberResult = mapCtrlNumberKey(ch)
+    if ctrlNumberResult.isCtrlKey:
+      return Event(kind: Key, key: ctrlNumberResult.keyEvent)
+
+    # Use shared basic key mapping for common keys
+    let basicKey = mapBasicKey(ch)
+    if basicKey.code in {Enter, Tab, Space, Backspace}:
+      return Event(kind: Key, key: basicKey)
+
+    # Handle escape sequences
+    if ch == '\x1b':
       # Check if more data is available with 20ms timeout
       let hasMoreData = await hasInputAsync(20)
 
@@ -264,21 +195,18 @@ proc readKeyAsync*(): Future[Event] {.async.} =
         let final = await readCharAsync()
 
         if final != '\0':
+          # Try arrow keys first
+          let arrowKey = mapArrowKey(final)
+          if arrowKey.code != Escape:
+            return Event(kind: Key, key: arrowKey)
+
+          # Try navigation keys
+          let navKey = mapNavigationKey(final)
+          if navKey.code != Escape:
+            return Event(kind: Key, key: navKey)
+
+          # Handle mouse events and numeric sequences
           case final
-          of 'A': # Arrow Up
-            return Event(kind: Key, key: KeyEvent(code: ArrowUp, char: ""))
-          of 'B': # Arrow Down
-            return Event(kind: Key, key: KeyEvent(code: ArrowDown, char: ""))
-          of 'C': # Arrow Right
-            return Event(kind: Key, key: KeyEvent(code: ArrowRight, char: ""))
-          of 'D': # Arrow Left
-            return Event(kind: Key, key: KeyEvent(code: ArrowLeft, char: ""))
-          of 'H': # Home
-            return Event(kind: Key, key: KeyEvent(code: Home, char: ""))
-          of 'F': # End
-            return Event(kind: Key, key: KeyEvent(code: End, char: ""))
-          of 'Z': # Shift+Tab (BackTab)
-            return Event(kind: Key, key: KeyEvent(code: BackTab, char: ""))
           of 'M': # Mouse event (X10 format)
             return await parseMouseEventX10()
           of '<': # SGR mouse format
@@ -289,22 +217,9 @@ proc readKeyAsync*(): Future[Event] {.async.} =
 
             if nextChar != '\0':
               if nextChar == '~':
-                # Special keys with numeric codes
-                case final
-                of '1': # Home (alternative)
-                  return Event(kind: Key, key: KeyEvent(code: Home, char: ""))
-                of '2': # Insert
-                  return Event(kind: Key, key: KeyEvent(code: Insert, char: ""))
-                of '3': # Delete
-                  return Event(kind: Key, key: KeyEvent(code: Delete, char: ""))
-                of '4': # End (alternative)
-                  return Event(kind: Key, key: KeyEvent(code: End, char: ""))
-                of '5': # PageUp
-                  return Event(kind: Key, key: KeyEvent(code: PageUp, char: ""))
-                of '6': # PageDown
-                  return Event(kind: Key, key: KeyEvent(code: PageDown, char: ""))
-                else:
-                  return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
+                # Special keys with numeric codes - use shared logic
+                let numKey = mapNumericKeyCode(final)
+                return Event(kind: Key, key: numKey)
               else:
                 # Complex escape sequence - return escape for now
                 return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
@@ -316,16 +231,14 @@ proc readKeyAsync*(): Future[Event] {.async.} =
           return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
       else:
         return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
-    of '\x03': # Ctrl+C
-      return Event(kind: Quit)
+
+    # For regular characters, read complete UTF-8 character asynchronously
+    let utf8Char = await readUtf8CharAsync(ch.byte)
+    if utf8Char.len > 0:
+      return Event(kind: Key, key: KeyEvent(code: Char, char: utf8Char))
     else:
-      # Read complete UTF-8 character asynchronously
-      let utf8Char = await readUtf8CharAsync(ch.byte)
-      if utf8Char.len > 0:
-        return Event(kind: Key, key: KeyEvent(code: Char, char: utf8Char))
-      else:
-        # Invalid UTF-8, treat as single byte
-        return Event(kind: Key, key: KeyEvent(code: Char, char: $ch))
+      # Invalid UTF-8, treat as single byte
+      return Event(kind: Key, key: KeyEvent(code: Char, char: $ch))
   except Exception as e:
     raise newException(AsyncEventError, "Async key reading failed: " & e.msg)
   except CatchableError:
@@ -409,10 +322,6 @@ proc waitForMultipleEventsAsync*(): Future[Event] {.async.} =
     await sleepMs(16) # ~60 FPS
 
 # Async event stream
-type AsyncEventStream* = ref object
-  running*: bool
-  eventCallback*: proc(event: Event): Future[bool] {.async.}
-
 proc newAsyncEventStream*(
     callback: proc(event: Event): Future[bool] {.async.}
 ): AsyncEventStream =

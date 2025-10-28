@@ -51,9 +51,7 @@ proc closeAsyncInputReader*(reader: AsyncInputReader) =
     except Exception:
       discard
 
-# ============================================================================
 # Non-blocking I/O Operations
-# ============================================================================
 
 proc hasDataAvailable*(reader: AsyncInputReader, timeoutMs: int = 0): bool =
   ## Check if data is available for reading (non-blocking)
@@ -109,9 +107,7 @@ proc readCharNonBlocking*(reader: AsyncInputReader): char =
 
   result = '\0'
 
-# ============================================================================
 # Async Wrapper Functions
-# ============================================================================
 
 proc initAsyncIO*() {.raises: [].} =
   ## Initialize async I/O system
@@ -212,9 +208,7 @@ proc readStdinAsync*(timeoutMs: int = 10): Future[string] {.async.} =
   else:
     return ""
 
-# ============================================================================
 # Async Output Functions
-# ============================================================================
 
 proc writeStdoutAsync*(data: string): Future[int] {.async.} =
   ## Write data to stdout asynchronously
@@ -230,9 +224,7 @@ proc flushStdoutAsync*(): Future[void] {.async.} =
   await sleepMs(0)
   stdout.flushFile()
 
-# ============================================================================
 # Terminal Control (Async)
-# ============================================================================
 
 proc writeEscapeAsync*(sequence: string): Future[void] {.async.} =
   ## Write ANSI escape sequence asynchronously
@@ -254,9 +246,7 @@ proc showCursorAsync*(): Future[void] {.async.} =
   ## Show cursor asynchronously
   await writeEscapeAsync("[?25h")
 
-# ============================================================================
 # Buffer Management
-# ============================================================================
 
 proc clearInputBuffer*() =
   ## Clear the input buffer
@@ -269,9 +259,7 @@ proc getInputBufferStats*(): tuple[size: int, available: bool] =
     return (0, false)
   return (globalInputReader.buffer.len, globalInputReader.hasDataAvailable(0))
 
-# ============================================================================
 # Testing and Validation
-# ============================================================================
 
 proc testAsyncIO*(): Future[bool] {.async.} =
   ## Test async I/O functionality
@@ -289,9 +277,7 @@ proc testAsyncIO*(): Future[bool] {.async.} =
   except CatchableError:
     return false
 
-# ============================================================================
 # Backwards Compatibility Functions
-# ============================================================================
 
 # Export the same interface as async_io.nim for drop-in replacement
 export hasInputAsync, readCharAsync, peekCharAsync, readStdinAsync

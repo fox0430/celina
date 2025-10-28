@@ -1,6 +1,10 @@
-## Synchronous backend helper.
+## Async backend configuration module.
+##
+## This module provides the async backend configuration and exports the appropriate
+## async framework (asyncdispatch or chronos) based on compile-time flags.
 
 # Async backend configuration. `-d:asyncBackend=none|asyncdispatch|chronos|`
+# This constant is automatically exported via the * marker
 const asyncBackend* {.strdefine.} = "none"
 
 when asyncBackend == "none":
@@ -49,8 +53,3 @@ when hasAsyncSupport:
 
     template unregisterFD*(fd: AsyncFD): untyped =
       discard
-
-  import async_app as asyncApp
-  import async_terminal, async_events, async_io, async_buffer, async_windows
-
-  export async_app, async_terminal, async_events, async_io, async_buffer, async_windows
