@@ -10,8 +10,7 @@ export key_logic.mapVT100FunctionKey, key_logic.mapFunctionKey
 export key_logic.mapNumericKeyCode, key_logic.parseModifierCode
 export key_logic.applyModifiers, key_logic.mapArrowKey, key_logic.mapNavigationKey
 
-type EscapeResult* = object
-  ## Result of escape sequence processing
+type EscapeResult* = object ## Result of escape sequence processing
   isValid*: bool
   keyEvent*: KeyEvent
 
