@@ -232,62 +232,82 @@ proc readKey*(): Event =
       of '\x1b': # Escape or start of escape sequence
         # Try to read escape sequence in blocking mode
         var next: char
-        if stdin.readBuffer(addr next, 1) == 1 and next == '[':
-          var final: char
-          if stdin.readBuffer(addr final, 1) == 1:
-            # Handle arrow keys using shared logic
-            if final in {'A', 'B', 'C', 'D'}:
-              return Event(kind: Key, key: mapArrowKey(final))
+        if stdin.readBuffer(addr next, 1) == 1:
+          if next == '[':
+            var final: char
+            if stdin.readBuffer(addr final, 1) == 1:
+              # Handle arrow keys using shared logic
+              if final in {'A', 'B', 'C', 'D'}:
+                return Event(kind: Key, key: mapArrowKey(final))
 
-            # Handle navigation keys using shared logic
-            if final in {'H', 'F', 'Z'}:
-              return Event(kind: Key, key: mapNavigationKey(final))
+              # Handle navigation keys using shared logic
+              if final in {'H', 'F', 'Z'}:
+                return Event(kind: Key, key: mapNavigationKey(final))
 
-            # Mouse events (not shared logic)
-            if final == 'M':
-              return parseMouseEventX10()
-            if final == '<':
-              return parseMouseEventSGR()
+              # Mouse events (not shared logic)
+              if final == 'M':
+                return parseMouseEventX10()
+              if final == '<':
+                return parseMouseEventSGR()
 
-            # Numeric key codes
-            if final in {'1' .. '6'}:
-              var nextChar: char
-              if stdin.readBuffer(addr nextChar, 1) == 1:
-                if nextChar == '~':
-                  # Use shared logic for numeric key codes
-                  return Event(kind: Key, key: mapNumericKeyCode(final))
-                elif nextChar == ';':
-                  # Modified key sequence ESC[1;modifierX where X is the key
-                  var modChar: char
-                  if stdin.readBuffer(addr modChar, 1) == 1:
-                    # Parse modifier using shared logic
-                    let modifiers = parseModifierCode(modChar)
+              # Numeric key codes (single digit and multi-digit)
+              if final in {'1' .. '6'}:
+                var nextChar: char
+                if stdin.readBuffer(addr nextChar, 1) == 1:
+                  if nextChar == '~':
+                    # Use shared logic for numeric key codes
+                    return Event(kind: Key, key: mapNumericKeyCode(final))
+                  elif nextChar in {'0' .. '9'}:
+                    # Multi-digit sequence for function keys (e.g., 11~, 15~, etc.)
+                    let twoDigitSeq = $final & $nextChar
+                    var tilde: char
+                    if stdin.readBuffer(addr tilde, 1) == 1 and tilde == '~':
+                      return Event(kind: Key, key: mapFunctionKey(twoDigitSeq))
+                    else:
+                      # Invalid sequence
+                      return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
+                  elif nextChar == ';':
+                    # Modified key sequence ESC[1;modifierX where X is the key
+                    var modChar: char
+                    if stdin.readBuffer(addr modChar, 1) == 1:
+                      # Parse modifier using shared logic
+                      let modifiers = parseModifierCode(modChar)
 
-                    var keyChar: char
-                    if stdin.readBuffer(addr keyChar, 1) == 1:
-                      # Map the key using shared logic and apply modifiers
-                      let baseKey =
-                        if keyChar in {'A', 'B', 'C', 'D'}:
-                          mapArrowKey(keyChar)
-                        elif keyChar in {'H', 'F'}:
-                          mapNavigationKey(keyChar)
-                        elif keyChar == '~':
-                          mapNumericKeyCode(final)
-                        else:
-                          KeyEvent(code: Escape, char: "\x1b")
+                      var keyChar: char
+                      if stdin.readBuffer(addr keyChar, 1) == 1:
+                        # Map the key using shared logic and apply modifiers
+                        let baseKey =
+                          if keyChar in {'A', 'B', 'C', 'D'}:
+                            mapArrowKey(keyChar)
+                          elif keyChar in {'H', 'F'}:
+                            mapNavigationKey(keyChar)
+                          elif keyChar == '~':
+                            mapNumericKeyCode(final)
+                          else:
+                            KeyEvent(code: Escape, char: "\x1b")
 
-                      return Event(kind: Key, key: applyModifiers(baseKey, modifiers))
-                else:
-                  # Unknown sequence
-                  return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
+                        return Event(kind: Key, key: applyModifiers(baseKey, modifiers))
+                  else:
+                    # Unknown sequence
+                    return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
+              else:
+                # Unknown escape sequence
+                return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
             else:
-              # Unknown escape sequence
+              # No final character
+              return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
+          elif next == 'O':
+            # VT100-style function keys: ESC O P/Q/R/S
+            var funcKey: char
+            if stdin.readBuffer(addr funcKey, 1) == 1:
+              return Event(kind: Key, key: mapVT100FunctionKey(funcKey))
+            else:
               return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
           else:
-            # No final character
+            # No '[' or 'O' after ESC
             return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
         else:
-          # No '[' after ESC
+          # No character after ESC
           return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
       of '\x03': # Ctrl-C
         return Event(kind: Quit)
@@ -403,6 +423,20 @@ proc readKeyInput*(): Option[Event] =
                 # Special keys with numeric codes - use shared logic
                 let numKey = mapNumericKeyCode(final)
                 return some(Event(kind: Key, key: numKey))
+              elif nextChar in {'0' .. '9'}:
+                # Multi-digit sequence for function keys
+                let twoDigitSeq = $final & $nextChar
+                var tilde: char
+                let tildeRead = read(STDIN_FILENO, addr tilde, 1)
+                if tildeRead == -1 and (errno == EAGAIN or errno == EWOULDBLOCK):
+                  discard fcntl(STDIN_FILENO, F_SETFL, flags)
+                  return
+                    some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
+                if tildeRead == 1 and tilde == '~':
+                  return some(Event(kind: Key, key: mapFunctionKey(twoDigitSeq)))
+                else:
+                  return
+                    some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
               elif nextChar == ';':
                 # Modified key sequence
                 var modChar: char
@@ -462,8 +496,19 @@ proc readKeyInput*(): Option[Event] =
         else:
           # Not an escape sequence we recognize
           return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
+      elif nextRead == 1 and next == 'O':
+        # VT100-style function keys: ESC O P/Q/R/S
+        var funcKey: char
+        let funcKeyRead = read(STDIN_FILENO, addr funcKey, 1)
+        if funcKeyRead == -1 and (errno == EAGAIN or errno == EWOULDBLOCK):
+          discard fcntl(STDIN_FILENO, F_SETFL, flags)
+          return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
+        if funcKeyRead == 1:
+          return some(Event(kind: Key, key: mapVT100FunctionKey(funcKey)))
+        else:
+          return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
       else:
-        # Not an escape sequence (no '[' after ESC)
+        # Not an escape sequence (no '[' or 'O' after ESC)
         return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
     else:
       # Restore non-blocking mode

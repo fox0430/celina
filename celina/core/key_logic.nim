@@ -186,6 +186,69 @@ proc mapNumericKeyCode*(numChar: char): KeyEvent =
   else:
     KeyEvent(code: Escape, char: "\x1b")
 
+proc mapFunctionKey*(sequence: string): KeyEvent =
+  ## Map multi-digit escape sequences for function keys
+  ##
+  ## Function keys use ESC [ nn ~ format:
+  ## F1-F4: ESC [ 11~, 12~, 13~, 14~ (alternative to ESC O P/Q/R/S)
+  ## F5-F12: ESC [ 15~, 17~, 18~, 19~, 20~, 21~, 23~, 24~
+  ##
+  ## Example:
+  ## ```nim
+  ## assert mapFunctionKey("11").code == F1
+  ## assert mapFunctionKey("15").code == F5
+  ## ```
+  case sequence
+  of "11":
+    KeyEvent(code: F1, char: "")
+  of "12":
+    KeyEvent(code: F2, char: "")
+  of "13":
+    KeyEvent(code: F3, char: "")
+  of "14":
+    KeyEvent(code: F4, char: "")
+  of "15":
+    KeyEvent(code: F5, char: "")
+  of "17":
+    KeyEvent(code: F6, char: "")
+  of "18":
+    KeyEvent(code: F7, char: "")
+  of "19":
+    KeyEvent(code: F8, char: "")
+  of "20":
+    KeyEvent(code: F9, char: "")
+  of "21":
+    KeyEvent(code: F10, char: "")
+  of "23":
+    KeyEvent(code: F11, char: "")
+  of "24":
+    KeyEvent(code: F12, char: "")
+  else:
+    KeyEvent(code: Escape, char: "\x1b")
+
+proc mapVT100FunctionKey*(ch: char): KeyEvent =
+  ## Map VT100-style function keys ESC O P/Q/R/S
+  ##
+  ## This is the older format for F1-F4:
+  ## P = F1, Q = F2, R = F3, S = F4
+  ##
+  ## Example:
+  ## ```nim
+  ## assert mapVT100FunctionKey('P').code == F1
+  ## assert mapVT100FunctionKey('Q').code == F2
+  ## ```
+  case ch
+  of 'P':
+    KeyEvent(code: F1, char: "")
+  of 'Q':
+    KeyEvent(code: F2, char: "")
+  of 'R':
+    KeyEvent(code: F3, char: "")
+  of 'S':
+    KeyEvent(code: F4, char: "")
+  else:
+    KeyEvent(code: Escape, char: "\x1b")
+
 proc parseModifierCode*(modChar: char): set[KeyModifier] =
   ## Parse modifier code from escape sequence
   ##
