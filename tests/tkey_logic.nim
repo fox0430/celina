@@ -219,3 +219,49 @@ suite "Apply Modifiers":
     check modified.code == Char
     check modified.char == "a"
     check modified.modifiers == {Shift}
+
+suite "Function Key Mapping":
+  test "Function keys F1-F4 (ESC [ nn ~ format)":
+    check mapFunctionKey("11").code == F1
+    check mapFunctionKey("11").char == ""
+    check mapFunctionKey("12").code == F2
+    check mapFunctionKey("13").code == F3
+    check mapFunctionKey("14").code == F4
+
+  test "Function keys F5-F12 (ESC [ nn ~ format)":
+    check mapFunctionKey("15").code == F5
+    check mapFunctionKey("17").code == F6
+    check mapFunctionKey("18").code == F7
+    check mapFunctionKey("19").code == F8
+    check mapFunctionKey("20").code == F9
+    check mapFunctionKey("21").code == F10
+    check mapFunctionKey("23").code == F11
+    check mapFunctionKey("24").code == F12
+
+  test "Invalid function key sequences":
+    # Non-existent codes should return Escape
+    let result16 = mapFunctionKey("16")
+    check result16.code == Escape
+    check result16.char == "\x1b"
+
+    let result22 = mapFunctionKey("22")
+    check result22.code == Escape
+
+    let result99 = mapFunctionKey("99")
+    check result99.code == Escape
+
+  test "VT100-style function keys F1-F4 (ESC O X format)":
+    check mapVT100FunctionKey('P').code == F1
+    check mapVT100FunctionKey('P').char == ""
+    check mapVT100FunctionKey('Q').code == F2
+    check mapVT100FunctionKey('R').code == F3
+    check mapVT100FunctionKey('S').code == F4
+
+  test "Invalid VT100 function key characters":
+    # Non-function key characters should return Escape
+    let resultA = mapVT100FunctionKey('A')
+    check resultA.code == Escape
+    check resultA.char == "\x1b"
+
+    let resultZ = mapVT100FunctionKey('Z')
+    check resultZ.code == Escape

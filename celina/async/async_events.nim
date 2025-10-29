@@ -220,6 +220,14 @@ proc readKeyAsync*(): Future[Event] {.async.} =
                 # Special keys with numeric codes - use shared logic
                 let numKey = mapNumericKeyCode(final)
                 return Event(kind: Key, key: numKey)
+              elif nextChar in {'0' .. '9'}:
+                # Multi-digit sequence for function keys
+                let twoDigitSeq = $final & $nextChar
+                let tilde = await readCharAsync()
+                if tilde == '~':
+                  return Event(kind: Key, key: mapFunctionKey(twoDigitSeq))
+                else:
+                  return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
               else:
                 # Complex escape sequence - return escape for now
                 return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
@@ -227,6 +235,13 @@ proc readKeyAsync*(): Future[Event] {.async.} =
               return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
           else:
             return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
+        else:
+          return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
+      elif next == 'O':
+        # VT100-style function keys: ESC O P/Q/R/S
+        let funcKey = await readCharAsync()
+        if funcKey != '\0':
+          return Event(kind: Key, key: mapVT100FunctionKey(funcKey))
         else:
           return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
       else:
