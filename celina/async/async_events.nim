@@ -6,7 +6,7 @@
 import std/[posix, options, strutils]
 
 import async_backend, async_io
-import ../core/[events, mouse_logic, utf8_utils, key_logic]
+import ../core/[events, mouse_logic, utf8_utils, key_logic, escape_sequence_logic]
 
 type
   AsyncEventError* = object of CatchableError
@@ -150,104 +150,120 @@ proc readUtf8CharAsync(firstByte: byte): Future[string] {.async.} =
 
   return buildUtf8String(firstByte, continuationBytes)
 
+# Async escape sequence parsing (ordered by dependencies)
+
+proc parseEscapeSequenceVT100Async(): Future[Event] {.async.} =
+  ## Parse VT100-style function keys: ESC O P/Q/R/S (async mode)
+  let funcKey = await readCharAsync()
+  let result = processVT100FunctionKey(funcKey, funcKey != '\0')
+  return Event(kind: Key, key: result.keyEvent)
+
+proc parseMultiDigitFunctionKeyAsync(
+    firstDigit, secondDigit: char
+): Future[Event] {.async.} =
+  ## Parse multi-digit function keys like ESC[15~ (async mode)
+  let tilde = await readCharAsync()
+  let result =
+    processMultiDigitFunctionKey(firstDigit, secondDigit, tilde, tilde != '\0')
+  return Event(kind: Key, key: result.keyEvent)
+
+proc parseModifiedKeySequenceAsync(digit: char): Future[Event] {.async.} =
+  ## Parse modified key sequences like ESC[1;2A (async mode)
+  let modChar = await readCharAsync()
+  let keyChar = await readCharAsync()
+  let result = processModifiedKeySequence(
+    digit, modChar, modChar != '\0', keyChar, keyChar != '\0'
+  )
+  return Event(kind: Key, key: result.keyEvent)
+
+proc parseNumericKeySequenceAsync(digit: char): Future[Event] {.async.} =
+  ## Parse numeric key sequences like ESC[1~, ESC[15~, ESC[1;2A, etc. (async mode)
+  let nextChar = await readCharAsync()
+  let seqKind = classifyNumericSequence(nextChar, nextChar != '\0')
+
+  case seqKind
+  of NskSingleDigitWithTilde:
+    let result = processSingleDigitNumeric(digit)
+    return Event(kind: Key, key: result.keyEvent)
+  of NskMultiDigit:
+    return await parseMultiDigitFunctionKeyAsync(digit, nextChar)
+  of NskModifiedKey:
+    return await parseModifiedKeySequenceAsync(digit)
+  of NskInvalid:
+    return Event(kind: Key, key: escapeKey())
+
+proc parseEscapeSequenceBracketAsync(): Future[Event] {.async.} =
+  ## Parse ESC [ sequences (CSI sequences) (async mode)
+  let final = await readCharAsync()
+  let seqKind = classifyBracketSequence(final)
+
+  case seqKind
+  of BskArrowKey, BskNavigationKey:
+    let result = processSimpleBracketSequence(final, final != '\0')
+    return Event(kind: Key, key: result.keyEvent)
+  of BskMouseX10:
+    return await parseMouseEventX10()
+  of BskMouseSGR:
+    return await parseMouseEventSGR()
+  of BskNumeric:
+    return await parseNumericKeySequenceAsync(final)
+  of BskInvalid:
+    return Event(kind: Key, key: escapeKey())
+
+proc parseEscapeSequenceAsync(): Future[Event] {.async.} =
+  ## Parse escape sequences in async mode
+  ## Assumes ESC has already been read
+
+  # Check if more data is available with 20ms timeout
+  let hasMoreData = await hasInputAsync(20)
+
+  if not hasMoreData:
+    # No more data after timeout - standalone ESC key
+    return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
+
+  # Try to read escape sequence
+  let next = await readCharAsync()
+
+  if next == '[':
+    return await parseEscapeSequenceBracketAsync()
+  elif next == 'O':
+    return await parseEscapeSequenceVT100Async()
+  else:
+    return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
+
 # Async key reading with escape sequence support
 proc readKeyAsync*(): Future[Event] {.async.} =
   ## Read a key event asynchronously using non-blocking I/O
   try:
-    # Use non-blocking AsyncFD read instead of blocking POSIX read
     let ch = await readCharAsync()
 
     if ch == '\0':
       return Event(kind: Unknown)
 
-    # Handle Ctrl+C quit first
+    # Handle Ctrl+C (quit signal)
     if ch == '\x03':
       return Event(kind: Quit)
 
-    # Handle Ctrl-letter combinations using shared logic
+    # Handle Ctrl-letter combinations
     let ctrlLetterResult = mapCtrlLetterKey(ch)
     if ctrlLetterResult.isCtrlKey:
       return Event(kind: Key, key: ctrlLetterResult.keyEvent)
 
-    # Handle Ctrl-number and special control characters using shared logic
+    # Handle Ctrl-number combinations
     let ctrlNumberResult = mapCtrlNumberKey(ch)
     if ctrlNumberResult.isCtrlKey:
       return Event(kind: Key, key: ctrlNumberResult.keyEvent)
 
-    # Use shared basic key mapping for common keys
+    # Handle basic keys (Enter, Tab, Space, Backspace)
     let basicKey = mapBasicKey(ch)
     if basicKey.code in {Enter, Tab, Space, Backspace}:
       return Event(kind: Key, key: basicKey)
 
     # Handle escape sequences
     if ch == '\x1b':
-      # Check if more data is available with 20ms timeout
-      let hasMoreData = await hasInputAsync(20)
+      return await parseEscapeSequenceAsync()
 
-      if not hasMoreData:
-        # No more data after timeout - standalone ESC key
-        return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
-
-      # Try to read escape sequence
-      let next = await readCharAsync()
-
-      if next == '[':
-        let final = await readCharAsync()
-
-        if final != '\0':
-          # Try arrow keys first
-          let arrowKey = mapArrowKey(final)
-          if arrowKey.code != Escape:
-            return Event(kind: Key, key: arrowKey)
-
-          # Try navigation keys
-          let navKey = mapNavigationKey(final)
-          if navKey.code != Escape:
-            return Event(kind: Key, key: navKey)
-
-          # Handle mouse events and numeric sequences
-          case final
-          of 'M': # Mouse event (X10 format)
-            return await parseMouseEventX10()
-          of '<': # SGR mouse format
-            return await parseMouseEventSGR()
-          of '1' .. '6':
-            # Could be function key or special key with modifiers
-            let nextChar = await readCharAsync()
-
-            if nextChar != '\0':
-              if nextChar == '~':
-                # Special keys with numeric codes - use shared logic
-                let numKey = mapNumericKeyCode(final)
-                return Event(kind: Key, key: numKey)
-              elif nextChar in {'0' .. '9'}:
-                # Multi-digit sequence for function keys
-                let twoDigitSeq = $final & $nextChar
-                let tilde = await readCharAsync()
-                if tilde == '~':
-                  return Event(kind: Key, key: mapFunctionKey(twoDigitSeq))
-                else:
-                  return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
-              else:
-                # Complex escape sequence - return escape for now
-                return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
-            else:
-              return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
-          else:
-            return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
-        else:
-          return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
-      elif next == 'O':
-        # VT100-style function keys: ESC O P/Q/R/S
-        let funcKey = await readCharAsync()
-        if funcKey != '\0':
-          return Event(kind: Key, key: mapVT100FunctionKey(funcKey))
-        else:
-          return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
-      else:
-        return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
-
-    # For regular characters, read complete UTF-8 character asynchronously
+    # Handle regular UTF-8 characters
     let utf8Char = await readUtf8CharAsync(ch.byte)
     if utf8Char.len > 0:
       return Event(kind: Key, key: KeyEvent(code: Char, char: utf8Char))
