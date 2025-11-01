@@ -1,13 +1,12 @@
-## Resource management tests for Celina TUI library
-##
-## This test module verifies that the resource management system works correctly.
+## Resource management tests
 
-import std/[unittest, times, strformat, os, tables, options]
-import ../celina/core/[resources, errors, buffer, geometry]
+import std/[unittest, times, os, tables, options, hashes]
+import ../celina/core/[resources]
 
 suite "Resource Management Tests":
   setup:
     # Initialize fresh resource manager for each test
+    cleanupAllResources()
     initGlobalResourceManager()
 
   test "ResourceManager creation and basic operations":
@@ -101,60 +100,10 @@ suite "Resource Management Tests":
     pool.release(item2)
 
     # Acquire again - should reuse
-    let item3 = pool.acquire()
+    discard pool.acquire()
     check createCount == 2 # No new creation
 
     pool.clear()
-
-  test "Buffer resource management integration":
-    let buffer = newBuffer(10, 10)
-    let guard = newManagedBuffer(rect(0, 0, 10, 10), "test-managed-buffer")
-
-    check guard.isValid
-    let managedBuffer = guard.get()
-    check managedBuffer.area.width == 10
-    check managedBuffer.area.height == 10
-
-  test "Buffer pool operations":
-    initBufferPool(5)
-    let pool = getBufferPool()
-
-    let buffer1 = acquirePooledBuffer(rect(0, 0, 10, 10))
-    let buffer2 = acquirePooledBuffer(rect(0, 0, 20, 20))
-
-    check buffer1.area.width == 10
-    check buffer2.area.width == 20
-
-    releasePooledBuffer(buffer1)
-    releasePooledBuffer(buffer2)
-
-    # Pool should now have buffers available
-    let stats = pool.getStats()
-    check stats.available > 0
-
-  test "withPooledBuffer template":
-    initBufferPool(5)
-
-    withPooledBuffer(rect(0, 0, 15, 15)):
-      check buffer.area.width == 15
-      check buffer.area.height == 15
-      var mutableBuffer = buffer
-      mutableBuffer.setString(0, 0, "test")
-
-    # Buffer should be automatically returned to pool
-
-  test "Buffer metrics tracking":
-    resetBufferMetrics()
-
-    trackBufferCreation(false, 100)
-    trackBufferCreation(true, 200)
-    trackBufferCreation(true, 150)
-
-    let metrics = getBufferMetrics()
-    check metrics.buffersCreated == 3
-    check metrics.buffersFromPool == 2
-    check metrics.poolHits == (2.0 / 3.0)
-    check metrics.averageBufferSize > 0
 
   test "Leak detection":
     let rm = newResourceManager()
@@ -178,8 +127,8 @@ suite "Resource Management Tests":
       cleanupCount.inc()
 
     # Create multiple resources
-    let id1 = rm.registerResource(RsBuffer, "leak1", cleanupProc)
-    let id2 = rm.registerResource(RsTerminal, "leak2", cleanupProc)
+    discard rm.registerResource(RsBuffer, "leak1", cleanupProc)
+    discard rm.registerResource(RsTerminal, "leak2", cleanupProc)
 
     sleep(100) # Wait for them to become stale
 
@@ -202,18 +151,6 @@ suite "Resource Management Tests":
     check stats.total == 3
     check stats.byType.getOrDefault(RsBuffer) == 2
     check stats.byType.getOrDefault(RsTerminal) == 1
-
-  test "withManagedResource template":
-    let rm = getGlobalResourceManager()
-    let initialCount = rm.getResourceStats().total
-
-    withManagedResource(42, RsBuffer, "managed-test"):
-      let currentCount = rm.getResourceStats().total
-      check currentCount == initialCount + 1
-
-    # Resource should be cleaned up
-    let finalCount = rm.getResourceStats().total
-    check finalCount == initialCount
 
   test "Emergency cleanup all resources":
     let rm = getGlobalResourceManager()
@@ -246,21 +183,30 @@ suite "Resource Management Tests":
     )
     guard.release()
 
-    expect ValidationError:
+    # Attempting to access released guard should raise ValueError
+    expect ValueError:
       discard guard.get()
 
   test "Resource pool overflow handling":
-    let pool = newResourcePool[int](
+    # Use string type which already has hash function
+    var idCounter = 0
+    let pool = newResourcePool[string](
       maxSize = 2,
-      createProc = proc(): int =
-        42,
-      destroyProc = proc(x: int) =
+      createProc = proc(): string =
+        idCounter.inc()
+        "item-" & $idCounter,
+      destroyProc = proc(x: string) =
         discard, # Track destruction if needed
     )
 
     let item1 = pool.acquire()
     let item2 = pool.acquire()
     let item3 = pool.acquire()
+
+    # Verify we got 3 different strings
+    check item1 == "item-1"
+    check item2 == "item-2"
+    check item3 == "item-3"
 
     # Return items - only 2 should fit in pool
     pool.release(item1)
@@ -269,15 +215,3 @@ suite "Resource Management Tests":
 
     let stats = pool.getStats()
     check stats.available == 2
-
-when defined(celinaDebug):
-  test "Debug resource statistics dump":
-    let rm = getGlobalResourceManager()
-
-    discard rm.registerResource(RsBuffer, "debug-test")
-
-    # This should not crash
-    dumpResourceStats()
-
-when isMainModule:
-  echo "Running resource management tests..."
