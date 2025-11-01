@@ -30,27 +30,36 @@ suite "Celina Main Module Tests":
   suite "Cursor Control API":
     test "App cursor state initialization":
       var app = newApp()
-      let (x, y) = app.getCursorPos()
+      let (x, y) = app.getCursorPosition()
       check x == -1 # Not set initially
       check y == -1
       check app.isCursorVisible() == false # Hidden by default
 
-    test "setCursor with coordinates":
+    test "showCursorAt with coordinates":
       var app = newApp()
-      app.setCursor(10, 20)
-      let (x, y) = app.getCursorPos()
+      app.showCursorAt(10, 20)
+      let (x, y) = app.getCursorPosition()
       check x == 10
       check y == 20
       check app.isCursorVisible() == true # Should become visible
 
-    test "setCursor with Position":
+    test "showCursorAt with Position":
       var app = newApp()
       let pos = Position(x: 15, y: 25)
-      app.setCursor(pos)
-      let (x, y) = app.getCursorPos()
+      app.showCursorAt(pos)
+      let (x, y) = app.getCursorPosition()
       check x == 15
       check y == 25
       check app.isCursorVisible() == true
+
+    test "setCursorPosition preserves visibility":
+      var app = newApp()
+      app.hideCursor()
+      app.setCursorPosition(10, 20)
+      let (x, y) = app.getCursorPosition()
+      check x == 10
+      check y == 20
+      check app.isCursorVisible() == false # Should remain hidden
 
     test "cursor visibility control":
       var app = newApp()

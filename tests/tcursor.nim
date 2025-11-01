@@ -55,10 +55,16 @@ suite "Cursor Module Tests":
       manager.hide()
       check manager.isVisible() == false
 
-    test "setPosition makes cursor visible by default":
+    test "setPosition does not change visibility":
       let manager = newCursorManager()
       manager.setPosition(10, 10)
+      check manager.isVisible() == false # Visibility unchanged
+
+    test "showAt makes cursor visible":
+      let manager = newCursorManager()
+      manager.showAt(10, 10)
       check manager.isVisible() == true
+      check manager.getPosition() == (10, 10)
 
   suite "Style Management":
     test "Set cursor style":
@@ -88,7 +94,7 @@ suite "Cursor Module Tests":
   suite "State Management":
     test "Get full cursor state":
       let manager = newCursorManager()
-      manager.setPosition(15, 25)
+      manager.showAt(15, 25)
       manager.setStyle(CursorStyle.SteadyBlock)
 
       let state = manager.getState()
