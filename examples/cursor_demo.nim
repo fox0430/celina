@@ -23,11 +23,8 @@ proc main() =
   var app = newApp()
 
   # Configure initial cursor
-  app.setCursor(cursorX, cursorY)
+  app.showCursorAt(cursorX, cursorY)
   app.setCursorStyle(styles[styleIndex])
-
-  # By default, the cursor is hidden
-  app.showCursor()
 
   app.onRender(
     proc(buf: var Buffer) =
@@ -66,9 +63,9 @@ proc main() =
 
       # Update cursor position only (don't override visibility or style)
       # Position will be applied automatically after buffer rendering
-      let (oldX, oldY) = app.getCursorPos()
+      let (oldX, oldY) = app.getCursorPosition()
       if oldX != cursorX or oldY != cursorY:
-        app.setCursorPos(cursorX, cursorY) # Use position-only method
+        app.setCursorPosition(cursorX, cursorY) # Use position-only method
   )
 
   app.onEvent(

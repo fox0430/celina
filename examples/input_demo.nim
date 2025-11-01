@@ -103,7 +103,7 @@ proc main() =
       if i == focusedInput:
         let (cursorX, cursorY, visible) = input.getCursorPosition(inputRect)
         if visible:
-          app.setCursor(cursorX, cursorY)
+          app.showCursorAt(cursorX, cursorY)
         else:
           app.hideCursor()
 
