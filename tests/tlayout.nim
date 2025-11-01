@@ -240,3 +240,225 @@ suite "Layout System Tests":
       check areas.len == 3
       # Min constraint should get at least its minimum if space allows
       check areas[0].width >= 0 # May be 0 if no space, but not negative
+
+  suite "Nested Layout Tests":
+    test "Horizontal inside vertical":
+      let outer = vertical(@[length(10), fill(), length(10)])
+      let outerArea = rect(0, 0, 100, 50)
+      let outerAreas = outer.split(outerArea)
+
+      # Split the middle area horizontally
+      let inner = horizontal(@[fill(), fill()])
+      let innerAreas = inner.split(outerAreas[1])
+
+      check innerAreas.len == 2
+      check innerAreas[0].width == 50 # Half of 100
+      check innerAreas[1].width == 50
+      check innerAreas[0].y == 10 # Started after first row
+      check innerAreas[0].height == 30 # 50 - 10 - 10
+
+    test "Vertical inside horizontal":
+      let outer = horizontal(@[percentage(30), fill()])
+      let outerArea = rect(0, 0, 100, 50)
+      let outerAreas = outer.split(outerArea)
+
+      # Split the second area vertically
+      let inner = vertical(@[fill(), fill(), fill()])
+      let innerAreas = inner.split(outerAreas[1])
+
+      check innerAreas.len == 3
+      check innerAreas[0].x == 30 # Started after first column
+      check innerAreas[0].width == 70 # 100 - 30
+      # Each should get roughly 1/3 of 50
+      check innerAreas[0].height >= 16
+      check innerAreas[1].height >= 16
+      check innerAreas[2].height >= 16
+
+    test "Triple nesting":
+      let l1 = vertical(@[fill(), fill()])
+      let a1 = l1.split(rect(0, 0, 100, 60))
+
+      let l2 = horizontal(@[fill(), fill()])
+      let a2 = l2.split(a1[0])
+
+      let l3 = vertical(@[length(5), fill()])
+      let a3 = l3.split(a2[0])
+
+      check a3.len == 2
+      check a3[0].height == 5
+      check a3[1].height == 25 # 30 - 5
+
+  suite "Complex Constraint Combinations":
+    test "Min with Fill priority":
+      let l = horizontal(@[min(20), fill(2), fill(1)])
+      let area = rect(0, 0, 100, 50)
+      let areas = l.split(area)
+
+      check areas.len == 3
+      check areas[0].width >= 20 or areas[0].width == 0 # Min respected when possible
+
+    test "Max with Length":
+      let l = horizontal(@[max(30), length(40)])
+      let area = rect(0, 0, 100, 50)
+      let areas = l.split(area)
+
+      check areas.len == 2
+      check areas[1].width == 40 # Length takes precedence
+
+    test "Multiple Fill with different priorities":
+      let l = horizontal(@[fill(1), fill(2), fill(3), fill(2)])
+      let area = rect(0, 0, 80, 50)
+      let areas = l.split(area)
+
+      check areas.len == 4
+      # Total priority: 1+2+3+2 = 8
+      # Area 0: 80 * 1/8 = 10
+      # Area 1: 80 * 2/8 = 20
+      # Area 2: 80 * 3/8 = 30
+      # Area 3: 80 * 2/8 = 20
+      check areas[0].width == 10
+      check areas[1].width == 20
+      check areas[2].width == 30
+      check areas[3].width == 20
+
+    test "Percentage with Ratio":
+      let l = horizontal(@[percentage(25), ratio(1, 2), fill()])
+      let area = rect(0, 0, 100, 50)
+      let areas = l.split(area)
+
+      check areas.len == 3
+      check areas[0].width == 25 # 25% of 100
+      check areas[1].width == 50 # 1/2 of 100
+      check areas[2].width == 25 # Remaining
+
+    test "Length + Percentage + Fill":
+      let l = horizontal(@[length(10), percentage(20), fill()])
+      let area = rect(0, 0, 100, 50)
+      let areas = l.split(area)
+
+      check areas.len == 3
+      check areas[0].width == 10
+      check areas[1].width == 20 # 20% of 100
+      check areas[2].width == 70 # 100 - 10 - 20
+
+  suite "Edge Cases and Error Handling":
+    test "Zero available space":
+      let l = horizontal(@[fill(), fill()])
+      let area = rect(0, 0, 0, 50)
+      let areas = l.split(area)
+
+      check areas.len == 2
+      check areas[0].width == 0
+      check areas[1].width == 0
+
+    test "Single pixel space":
+      let l = horizontal(@[fill(), fill()])
+      let area = rect(0, 0, 1, 50)
+      let areas = l.split(area)
+
+      check areas.len == 2
+      # Space should be distributed (may round)
+      check areas[0].width + areas[1].width <= 1
+
+    test "Very large space":
+      let l = horizontal(@[fill(), fill()])
+      let area = rect(0, 0, 10000, 50)
+      let areas = l.split(area)
+
+      check areas.len == 2
+      check areas[0].width == 5000
+      check areas[1].width == 5000
+
+    test "Many constraints":
+      var constraints: seq[Constraint] = @[]
+      for i in 0 ..< 100:
+        constraints.add(fill())
+
+      let l = horizontal(constraints)
+      let area = rect(0, 0, 1000, 50)
+      let areas = l.split(area)
+
+      check areas.len == 100
+      # Each should get 10 pixels
+      for a in areas:
+        check a.width == 10
+
+    test "Asymmetric margins":
+      let l = vertical(@[fill(), fill()]).withMargins(10, 5)
+      let area = rect(0, 0, 100, 50)
+      let areas = l.split(area)
+
+      check areas.len == 2
+      check areas[0].x == 10 # Horizontal margin
+      check areas[0].y == 5 # Vertical margin
+      check areas[0].width == 80 # 100 - 2*10
+      check areas[0].height == 20 # (50 - 2*5) / 2
+
+    test "Negative area dimensions":
+      let l = horizontal(@[fill()])
+      let area = rect(10, 10, -5, 20)
+      let areas = l.split(area)
+
+      # Should handle gracefully without crashing
+      check areas.len >= 0
+
+    test "All zero-sized constraints":
+      let l = horizontal(@[length(0), length(0), length(0)])
+      let area = rect(0, 0, 100, 50)
+      let areas = l.split(area)
+
+      check areas.len == 3
+      check areas[0].width == 0
+      check areas[1].width == 0
+      check areas[2].width == 0
+
+  suite "Layout Direction Tests":
+    test "Horizontal preserves height":
+      let l = horizontal(@[fill(), fill(), fill()])
+      let area = rect(5, 10, 100, 30)
+      let areas = l.split(area)
+
+      check areas.len == 3
+      for a in areas:
+        check a.height == 30
+        check a.y == 10
+
+    test "Vertical preserves width":
+      let l = vertical(@[fill(), fill(), fill()])
+      let area = rect(5, 10, 100, 30)
+      let areas = l.split(area)
+
+      check areas.len == 3
+      for a in areas:
+        check a.width == 100
+        check a.x == 5
+
+  suite "Margin Behavior Tests":
+    test "Margin reduces available space":
+      let l = horizontal(@[fill()]).withMargin(10)
+      let area = rect(0, 0, 100, 50)
+      let areas = l.split(area)
+
+      check areas.len == 1
+      check areas[0].width == 80 # 100 - 2*10
+      check areas[0].height == 30 # 50 - 2*10
+
+    test "Large margin":
+      let l = horizontal(@[fill()]).withMargin(30)
+      let area = rect(0, 0, 100, 50)
+      let areas = l.split(area)
+
+      check areas.len == 1
+      check areas[0].width == 40 # 100 - 2*30
+      # Height may be 0 if margin exceeds space
+
+    test "Zero margin has no effect":
+      let l = horizontal(@[fill(), fill()]).withMargin(0)
+      let area = rect(0, 0, 100, 50)
+      let areas = l.split(area)
+
+      check areas.len == 2
+      check areas[0].x == 0
+      check areas[0].y == 0
+      check areas[0].width == 50
+      check areas[0].height == 50
