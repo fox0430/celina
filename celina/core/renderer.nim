@@ -70,16 +70,24 @@ proc forceRender*(renderer: Renderer) =
   renderer.render(force = true)
 
 # Cursor control delegation
-proc setCursor*(renderer: Renderer, x, y: int) =
-  ## Set cursor position
+proc setCursorPosition*(renderer: Renderer, x, y: int) =
+  ## Set cursor position without changing visibility
   renderer.cursorManager.setPosition(x, y)
 
-proc setCursor*(renderer: Renderer, pos: Position) =
-  ## Set cursor position using Position type
+proc setCursorPosition*(renderer: Renderer, pos: Position) =
+  ## Set cursor position using Position type without changing visibility
   renderer.cursorManager.setPosition(pos.x, pos.y)
 
+proc showCursorAt*(renderer: Renderer, x, y: int) =
+  ## Set cursor position and make it visible
+  renderer.cursorManager.showAt(x, y)
+
+proc showCursorAt*(renderer: Renderer, pos: Position) =
+  ## Set cursor position using Position type and make it visible
+  renderer.cursorManager.showAt(pos.x, pos.y)
+
 proc showCursor*(renderer: Renderer) =
-  ## Show cursor
+  ## Show cursor at current position
   renderer.cursorManager.show()
 
 proc hideCursor*(renderer: Renderer) =
@@ -90,7 +98,7 @@ proc setCursorStyle*(renderer: Renderer, style: CursorStyle) =
   ## Set cursor style
   renderer.cursorManager.setStyle(style)
 
-proc getCursorPos*(renderer: Renderer): (int, int) =
+proc getCursorPosition*(renderer: Renderer): (int, int) =
   ## Get current cursor position
   renderer.cursorManager.getPosition()
 

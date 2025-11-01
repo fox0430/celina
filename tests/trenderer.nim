@@ -106,9 +106,9 @@ suite "Renderer Module Tests":
         let term = newTerminal()
         let rend = newRenderer(term)
 
-        rend.setCursor(10, 20)
+        rend.showCursorAt(10, 20)
 
-        let (x, y) = rend.getCursorPos()
+        let (x, y) = rend.getCursorPosition()
         check x == 10
         check y == 20
       except TerminalError:
@@ -120,9 +120,9 @@ suite "Renderer Module Tests":
         let rend = newRenderer(term)
 
         let pos = Position(x: 15, y: 25)
-        rend.setCursor(pos)
+        rend.showCursorAt(pos)
 
-        let (x, y) = rend.getCursorPos()
+        let (x, y) = rend.getCursorPosition()
         check x == 15
         check y == 25
       except TerminalError:
@@ -202,8 +202,7 @@ suite "Renderer Module Tests":
         rend.setString(0, 2, "Line 3", style(Blue))
 
         # Set cursor
-        rend.setCursor(0, 3)
-        rend.showCursor()
+        rend.showCursorAt(0, 3)
 
         # Render
         rend.render()
@@ -264,7 +263,7 @@ suite "Renderer Module Tests":
         let rend = newRenderer(term)
 
         var buf = rend.getBuffer()
-        rend.setCursor(buf.area.width + 10, buf.area.height + 10)
+        rend.setCursorPosition(buf.area.width + 10, buf.area.height + 10)
 
         # Should not crash even with invalid cursor position
         rend.render()

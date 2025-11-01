@@ -30,16 +30,21 @@ proc newCursorManager*(): CursorManager =
   )
 
 proc setPosition*(manager: CursorManager, x, y: int) =
-  ## Set cursor position
+  ## Set cursor position without changing visibility state
   manager.state.x = x
   manager.state.y = y
-  manager.state.visible = true
 
 proc setPosition*(manager: CursorManager, x, y: int, visible: bool) =
-  ## Set cursor position with explicit visibility
+  ## Set cursor position with explicit visibility control
   manager.state.x = x
   manager.state.y = y
   manager.state.visible = visible
+
+proc showAt*(manager: CursorManager, x, y: int) =
+  ## Set cursor position and make it visible
+  manager.state.x = x
+  manager.state.y = y
+  manager.state.visible = true
 
 proc show*(manager: CursorManager) =
   ## Show the cursor

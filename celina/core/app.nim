@@ -219,33 +219,42 @@ proc getCurrentFps*(app: App): float =
   app.fpsMonitor.getCurrentFps()
 
 # Cursor control delegation
-proc setCursor*(app: App, x, y: int) =
-  ## Set cursor position for next render
-  app.renderer.setCursor(x, y)
+proc setCursorPosition*(app: App, x, y: int) =
+  ## Set cursor position without changing visibility state
+  app.renderer.setCursorPosition(x, y)
 
-proc setCursor*(app: App, pos: Position) =
-  ## Set cursor position using Position type
-  app.renderer.setCursor(pos)
+proc setCursorPosition*(app: App, pos: Position) =
+  ## Set cursor position using Position type without changing visibility
+  app.renderer.setCursorPosition(pos)
 
-proc setCursorPos*(app: App, x, y: int) =
-  ## Set cursor position without affecting visibility
-  app.renderer.getCursorManager().setPosition(x, y, app.renderer.isCursorVisible())
+proc showCursorAt*(app: App, x, y: int) =
+  ## Set cursor position and make it visible
+  app.renderer.showCursorAt(x, y)
+
+proc showCursorAt*(app: App, pos: Position) =
+  ## Set cursor position using Position type and make it visible
+  app.renderer.showCursorAt(pos)
 
 proc showCursor*(app: App) =
-  ## Show cursor in next render
+  ## Show cursor at current position
   app.renderer.showCursor()
 
 proc hideCursor*(app: App) =
-  ## Hide cursor in next render
+  ## Hide cursor
   app.renderer.hideCursor()
 
 proc setCursorStyle*(app: App, style: CursorStyle) =
   ## Set cursor style for next render
   app.renderer.setCursorStyle(style)
 
-proc getCursorPos*(app: App): (int, int) =
+proc getCursorPosition*(app: App): (int, int) =
   ## Get current cursor position
-  app.renderer.getCursorPos()
+  app.renderer.getCursorPosition()
+
+proc moveCursorBy*(app: App, dx, dy: int) =
+  ## Move cursor relatively by dx, dy
+  let (x, y) = app.getCursorPosition()
+  app.setCursorPosition(x + dx, y + dy)
 
 proc isCursorVisible*(app: App): bool =
   ## Check if cursor is visible
