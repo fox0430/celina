@@ -155,26 +155,25 @@ proc readUtf8CharAsync(firstByte: byte): Future[string] {.async.} =
 proc parseEscapeSequenceVT100Async(): Future[Event] {.async.} =
   ## Parse VT100-style function keys: ESC O P/Q/R/S (async mode)
   let funcKey = await readCharAsync()
-  let result = processVT100FunctionKey(funcKey, funcKey != '\0')
-  return Event(kind: Key, key: result.keyEvent)
+  let r = processVT100FunctionKey(funcKey, funcKey != '\0')
+  return Event(kind: Key, key: r.keyEvent)
 
 proc parseMultiDigitFunctionKeyAsync(
     firstDigit, secondDigit: char
 ): Future[Event] {.async.} =
   ## Parse multi-digit function keys like ESC[15~ (async mode)
   let tilde = await readCharAsync()
-  let result =
-    processMultiDigitFunctionKey(firstDigit, secondDigit, tilde, tilde != '\0')
-  return Event(kind: Key, key: result.keyEvent)
+  let r = processMultiDigitFunctionKey(firstDigit, secondDigit, tilde, tilde != '\0')
+  return Event(kind: Key, key: r.keyEvent)
 
 proc parseModifiedKeySequenceAsync(digit: char): Future[Event] {.async.} =
   ## Parse modified key sequences like ESC[1;2A (async mode)
   let modChar = await readCharAsync()
   let keyChar = await readCharAsync()
-  let result = processModifiedKeySequence(
+  let r = processModifiedKeySequence(
     digit, modChar, modChar != '\0', keyChar, keyChar != '\0'
   )
-  return Event(kind: Key, key: result.keyEvent)
+  return Event(kind: Key, key: r.keyEvent)
 
 proc parseNumericKeySequenceAsync(digit: char): Future[Event] {.async.} =
   ## Parse numeric key sequences like ESC[1~, ESC[15~, ESC[1;2A, etc. (async mode)
@@ -183,8 +182,8 @@ proc parseNumericKeySequenceAsync(digit: char): Future[Event] {.async.} =
 
   case seqKind
   of NskSingleDigitWithTilde:
-    let result = processSingleDigitNumeric(digit)
-    return Event(kind: Key, key: result.keyEvent)
+    let r = processSingleDigitNumeric(digit)
+    return Event(kind: Key, key: r.keyEvent)
   of NskMultiDigit:
     return await parseMultiDigitFunctionKeyAsync(digit, nextChar)
   of NskModifiedKey:
@@ -199,8 +198,8 @@ proc parseEscapeSequenceBracketAsync(): Future[Event] {.async.} =
 
   case seqKind
   of BskArrowKey, BskNavigationKey:
-    let result = processSimpleBracketSequence(final, final != '\0')
-    return Event(kind: Key, key: result.keyEvent)
+    let r = processSimpleBracketSequence(final, final != '\0')
+    return Event(kind: Key, key: r.keyEvent)
   of BskMouseX10:
     return await parseMouseEventX10()
   of BskMouseSGR:
@@ -357,7 +356,7 @@ proc newAsyncEventStream*(
     callback: proc(event: Event): Future[bool] {.async.}
 ): AsyncEventStream =
   ## Create a new async event stream with callback
-  result = AsyncEventStream(running: false, eventCallback: callback)
+  return AsyncEventStream(running: false, eventCallback: callback)
 
 proc startAsync*(stream: AsyncEventStream) {.async.} =
   ## Start the async event stream

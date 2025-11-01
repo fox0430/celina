@@ -106,14 +106,26 @@ proc showCursor*() {.async.} =
   stdout.write(ShowCursorSeq)
   stdout.flushFile()
 
-proc setCursorPos*(x, y: int) {.async.} =
+proc setCursorPosition*(x, y: int) {.async.} =
   ## Set cursor position asynchronously (1-based coordinates)
   stdout.write(makeCursorPositionSeq(x, y))
   stdout.flushFile()
 
-proc setCursorPos*(pos: Position) {.async.} =
+proc setCursorPosition*(pos: Position) {.async.} =
   ## Set cursor position asynchronously
   stdout.write(makeCursorPositionSeq(pos))
+  stdout.flushFile()
+
+proc showCursorAt*(x, y: int) {.async.} =
+  ## Set cursor position and show it asynchronously
+  stdout.write(makeCursorPositionSeq(x, y))
+  stdout.write(ShowCursorSeq)
+  stdout.flushFile()
+
+proc showCursorAt*(pos: Position) {.async.} =
+  ## Set cursor position and show it asynchronously
+  stdout.write(makeCursorPositionSeq(pos))
+  stdout.write(ShowCursorSeq)
   stdout.flushFile()
 
 # Async screen control
@@ -130,7 +142,7 @@ proc clearLine*() {.async.} =
 # Async buffer rendering
 proc renderCell*(cell: Cell, x, y: int) {.async.} =
   ## Render a single cell at the specified position asynchronously
-  await setCursorPos(x, y)
+  await setCursorPosition(x, y)
 
   let styleSeq = cell.style.toAnsiSequence()
   var output = ""
