@@ -814,33 +814,25 @@ suite "Window State Edge Cases":
 
     check window.contentArea == window.area
 
-  test "Window destruction cleanup":
-    var window = newWindow(rect(10, 10, 30, 20), "Test")
-    let originalTitle = window.title
-
-    check window.title == originalTitle
-
-    window.destroyWindow()
-
-    check window.title == ""
-    check window.border.isNone()
-
-  test "WindowManager destruction cleanup":
+  test "Window memory management - automatic cleanup":
+    # Windows are automatically freed by Nim's GC when removed
+    # This test verifies that removeWindow properly removes the window
     let wm = newWindowManager()
     let window1 = newWindow(rect(10, 10, 30, 20), "Test1")
     let window2 = newWindow(rect(20, 20, 30, 20), "Test2")
 
-    discard wm.addWindow(window1)
-    discard wm.addWindow(window2)
+    let id1 = wm.addWindow(window1)
+    let id2 = wm.addWindow(window2)
 
     check wm.windows.len == 2
 
-    wm.destroyWindowManager()
+    # Remove windows - GC will handle cleanup automatically
+    wm.removeWindow(id1)
+    wm.removeWindow(id2)
 
     check:
       wm.windows.len == 0
       wm.focusedWindow.isNone()
-      wm.modalWindow.isNone()
 
 suite "Complex Integration Tests":
   test "Multiple overlapping windows with events":

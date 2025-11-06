@@ -399,24 +399,6 @@ proc render*(window: Window, destBuffer: var Buffer) =
 # WindowManager implementation
 # ============================================================================
 
-proc destroyWindow*(window: Window) =
-  ## Clean up window resources to prevent memory leaks
-  if not window.isNil():
-    # Clear buffer contents
-    window.buffer.clear()
-    # Reset references
-    window.title = ""
-    window.border = none(WindowBorder)
-
-proc destroyWindowManager*(wm: WindowManager) =
-  ## Clean up all windows and resources in the manager
-  if not wm.isNil():
-    for window in wm.windows:
-      window.destroyWindow()
-    wm.windows.setLen(0)
-    wm.focusedWindow = none(WindowId)
-    wm.modalWindow = none(WindowId)
-
 proc newWindowManager*(): WindowManager =
   ## Create a new window manager
   WindowManager(
@@ -484,12 +466,8 @@ proc addWindow*(wm: WindowManager, window: Window): WindowId =
   return window.id
 
 proc removeWindow*(wm: WindowManager, windowId: WindowId) =
-  ## Remove a window from the manager with proper cleanup
-  let windowToRemove = wm.getWindow(windowId)
-  if windowToRemove.isSome():
-    # Clean up resources before removal
-    windowToRemove.get().destroyWindow()
-
+  ## Remove a window from the manager
+  ## All window resources (buffer, title, etc.) are automatically freed by Nim's GC
   wm.windows = wm.windows.filterIt(it.id != windowId)
 
   # Update focus if the focused window was removed
