@@ -53,20 +53,6 @@ proc newAsyncWindowManager*(): AsyncWindowManager =
   result.focusedWindow = none(WindowId)
   result.lock.store(false)
 
-proc destroyAsyncWindowManager*(awm: AsyncWindowManager) {.async.} =
-  ## Clean up all windows and resources in the manager asynchronously
-  if awm.isNil:
-    return
-
-  awm.withLock:
-    for window in awm.windows:
-      window.destroyWindow()
-    awm.windows = @[]
-    awm.focusedWindow = none(WindowId)
-
-  # Yield to allow cleanup to complete
-  await sleepMs(0)
-
 # Async Window Operations
 
 proc getWindowAsync*(
@@ -109,6 +95,7 @@ proc removeWindowAsync*(
     awm: AsyncWindowManager, windowId: WindowId
 ): Future[bool] {.async.} =
   ## Remove a window from the manager asynchronously
+  ## All window resources are automatically freed by Nim's GC
   await sleepMs(0)
 
   awm.withLock:
@@ -118,11 +105,6 @@ proc removeWindowAsync*(
         windowToRemove = some(window)
         break
     if windowToRemove.isSome():
-      let window = windowToRemove.get()
-
-      # Clean up the window
-      window.destroyWindow()
-
       # Remove from windows list
       awm.windows = awm.windows.filterIt(it.id != windowId)
 

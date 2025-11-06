@@ -263,7 +263,9 @@ suite "AsyncWindows Synchronous Rendering":
     check syncBuffer.area.height == asyncBuffer.getSize().height
 
 suite "AsyncWindows Async Operations":
-  test "destroyAsyncWindowManager functionality":
+  test "Async window memory management - automatic cleanup":
+    # Windows are automatically freed by Nim's GC when removed
+    # This test verifies that removeWindowAsync properly removes windows
     let awm = newAsyncWindowManager()
 
     # Add some windows first
@@ -271,14 +273,16 @@ suite "AsyncWindows Async Operations":
     let window2 = newWindow(rect(10, 10, 15, 15), "Window 2")
 
     let id1 = waitFor awm.addWindowAsync(window1)
-    discard waitFor awm.addWindowAsync(window2)
+    let id2 = waitFor awm.addWindowAsync(window2)
 
     # Verify windows were added
     let beforeStats = awm.getStats()
     check beforeStats.windowCount == 2
     check beforeStats.focusedId == id1.int # First window is auto-focused
 
-    waitFor awm.destroyAsyncWindowManager()
+    # Remove windows - GC will handle cleanup automatically
+    discard waitFor awm.removeWindowAsync(id1)
+    discard waitFor awm.removeWindowAsync(id2)
 
     # Verify cleanup
     let afterStats = awm.getStats()
