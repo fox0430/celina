@@ -114,7 +114,7 @@ proc rgb*(r, g, b: int): ColorValue {.inline.} =
 
 proc rgb*(hex: string): ColorValue =
   ## Create a ColorValue from hex string (e.g., "#FF0000" or "FF0000")
-  ## 
+  ##
   ## Parameters:
   ## - hex: Hex color string, with or without '#' prefix
   ##
@@ -134,12 +134,8 @@ proc rgb*(hex: string): ColorValue =
     let g = parseHexInt(hexStr[2 .. 3]).uint8
     let b = parseHexInt(hexStr[4 .. 5]).uint8
     ColorValue(kind: Rgb, rgb: RgbColor(r: r, g: g, b: b))
-  except ValueError:
-    # Return black on parsing error
-    ColorValue(kind: Rgb, rgb: RgbColor(r: 0, g: 0, b: 0))
-  except CatchableError:
-    # Return black on any other error
-    ColorValue(kind: Rgb, rgb: RgbColor(r: 0, g: 0, b: 0))
+  except CatchableError as e:
+    raise newException(ValueError, "Invalid hex color: " & e.msg)
 
 proc color256*(index: uint8): ColorValue {.inline.} =
   ## Create a ColorValue from 256-color palette index (0-255)
