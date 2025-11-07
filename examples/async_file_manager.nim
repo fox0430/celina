@@ -462,6 +462,36 @@ proc handleKeyEventAsync(fm: FileManagerApp, key: KeyEvent): Future[bool] {.asyn
 
   return true
 
+proc updateWindowLayout(fm: FileManagerApp): Future[void] {.async.} =
+  ## Update window layout based on current terminal size
+  let termSize = fm.app.getTerminalSize()
+
+  # Update directory list window (left side)
+  let dirWindowOpt = await fm.app.getWindowAsync(fm.dirListWindow)
+  if dirWindowOpt.isSome():
+    let dirWindow = dirWindowOpt.get()
+    dirWindow.resize(size(termSize.width * 2 div 3, termSize.height - 2))
+    dirWindow.move(pos(0, 0))
+
+  # Update preview window (right side)
+  let previewWindowOpt = await fm.app.getWindowAsync(fm.previewWindow)
+  if previewWindowOpt.isSome():
+    let previewWindow = previewWindowOpt.get()
+    previewWindow.resize(size(termSize.width div 3, termSize.height - 2))
+    previewWindow.move(pos(termSize.width * 2 div 3, 0))
+
+  # Update status window (bottom)
+  let statusWindowOpt = await fm.app.getWindowAsync(fm.statusWindow)
+  if statusWindowOpt.isSome():
+    let statusWindow = statusWindowOpt.get()
+    statusWindow.resize(size(termSize.width, 2))
+    statusWindow.move(pos(0, termSize.height - 2))
+
+  # Mark all windows for update
+  fm.updateFlags.directory = true
+  fm.updateFlags.preview = true
+  fm.updateFlags.status = true
+
 proc createFileManagerWindows(fm: FileManagerApp): Future[void] {.async.} =
   ## Create the file manager window layout
   let termSize = fm.app.getTerminalSize()
@@ -510,6 +540,11 @@ proc newFileManagerApp(): Future[FileManagerApp] {.async.} =
     case event.kind
     of Key:
       return await fm.handleKeyEventAsync(event.key)
+    of Resize:
+      # Handle terminal resize
+      await fm.updateWindowLayout()
+      await fm.updateWindowsAsync()
+      return true
     else:
       return true
 
