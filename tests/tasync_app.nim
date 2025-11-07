@@ -7,7 +7,7 @@ import ../celina/async/async_backend
 when hasAsyncSupport:
   import ../celina/async/async_app
   import ../celina/async/async_buffer as celina_async_buffer
-  import ../celina/core/[geometry, colors, events, windows]
+  import ../celina/core/[geometry, events, windows]
 
   # Alias for clarity
   type CelinaAsyncBuffer = celina_async_buffer.AsyncBuffer

@@ -14,17 +14,23 @@ type
   AsyncEventStream* = ref object
     running*: bool
     eventCallback*: proc(event: Event): Future[bool] {.async.}
+    lastResizeCounter: int ## Track last seen resize counter
 
 # Define SIGWINCH if not available
 when not declared(SIGWINCH):
   const SIGWINCH = 28
 
-# Global state for async event handling
-var resizeDetected* = false
+# Global counter for resize detection (async version)
+# Note: We use a counter instead of a bool to support multiple AsyncApp instances.
+# Each AsyncApp tracks the last counter value it saw, allowing all AsyncApps to
+# receive resize events independently without race conditions.
+var resizeCounter {.global.}: int = 0
 
 # Signal handler for SIGWINCH
 proc sigwinchHandler(sig: cint) {.noconv.} =
-  resizeDetected = true
+  # Increment counter on each resize signal
+  # This is safe in signal handlers as it's a simple increment
+  resizeCounter.inc()
 
 # Initialize async event system
 proc initAsyncEventSystem*() =
@@ -294,13 +300,19 @@ proc pollKeyAsync*(): Future[Option[Event]] {.async.} =
   except CatchableError:
     return none(Event)
 
-# Check for resize event
-proc checkResizeAsync*(): Future[Option[Event]] {.async.} =
-  ## Check if a resize event occurred asynchronously
-  if resizeDetected:
-    resizeDetected = false
-    return some(Event(kind: Resize))
-  return none(Event)
+# Get current resize counter value
+proc getResizeCounter*(): int =
+  ## Get the current resize counter value
+  ##
+  ## AsyncApps should track the last value they saw and compare with this
+  ## to detect resize events without race conditions.
+  return resizeCounter
+
+# Test helper: Increment resize counter (for testing only)
+proc incrementResizeCounter*() =
+  ## Increment the resize counter (for testing purposes)
+  ## This simulates a SIGWINCH signal being received
+  resizeCounter.inc()
 
 # Event polling with timeout
 proc pollEventsAsync*(timeoutMs: int): Future[bool] {.async.} =
@@ -335,28 +347,15 @@ proc waitForAnyKeyAsync*(): Future[bool] {.async.} =
   return event.kind != Quit
 
 # Multiple event source handling
-proc waitForMultipleEventsAsync*(): Future[Event] {.async.} =
-  ## Wait for events from multiple sources (keyboard, resize, etc.)
-  while true:
-    # Check resize first (highest priority)
-    let resizeEventOpt = await checkResizeAsync()
-    if resizeEventOpt.isSome():
-      return resizeEventOpt.get()
-
-    # Then check for keyboard events
-    let keyEventOpt = await pollKeyAsync()
-    if keyEventOpt.isSome():
-      return keyEventOpt.get()
-
-    # Small sleep to prevent busy waiting
-    await sleepMs(16) # ~60 FPS
 
 # Async event stream
 proc newAsyncEventStream*(
     callback: proc(event: Event): Future[bool] {.async.}
 ): AsyncEventStream =
   ## Create a new async event stream with callback
-  return AsyncEventStream(running: false, eventCallback: callback)
+  return AsyncEventStream(
+    running: false, eventCallback: callback, lastResizeCounter: getResizeCounter()
+  )
 
 proc startAsync*(stream: AsyncEventStream) {.async.} =
   ## Start the async event stream
@@ -364,10 +363,26 @@ proc startAsync*(stream: AsyncEventStream) {.async.} =
 
   while stream.running:
     try:
-      let event = await waitForMultipleEventsAsync()
+      # Check for events from multiple sources
+      var event: Option[Event]
 
-      if stream.eventCallback != nil:
-        let shouldContinue = await stream.eventCallback(event)
+      # Check resize first (highest priority)
+      let currentCounter = getResizeCounter()
+      if currentCounter != stream.lastResizeCounter:
+        stream.lastResizeCounter = currentCounter
+        event = some(Event(kind: Resize))
+      else:
+        # Check for keyboard events
+        let keyEventOpt = await pollKeyAsync()
+        if keyEventOpt.isSome():
+          event = keyEventOpt
+        else:
+          # Small sleep to prevent busy waiting
+          await sleepMs(16) # ~60 FPS
+          continue
+
+      if event.isSome() and stream.eventCallback != nil:
+        let shouldContinue = await stream.eventCallback(event.get())
         if not shouldContinue:
           stream.running = false
     except CatchableError:
