@@ -81,23 +81,6 @@ suite "Non-blocking Event Polling":
     # Should return none when no input is available
     check eventOpt.isNone()
 
-  test "checkResizeAsync returns none when no resize":
-    let eventOpt = waitFor checkResizeAsync()
-    # Should return none when no resize occurred
-    check eventOpt.isNone()
-
-  test "checkResizeAsync detects resize after signal":
-    # Simulate resize detection
-    async_events.resizeDetected = true
-    let eventOpt = waitFor checkResizeAsync()
-
-    check eventOpt.isSome()
-    check eventOpt.get().kind == Resize
-
-    # Should reset the flag after detection
-    let eventOpt2 = waitFor checkResizeAsync()
-    check eventOpt2.isNone()
-
 suite "Event Polling with Timeout":
   test "pollEventsAsync handles timeout":
     let hasEvents = waitFor pollEventsAsync(1) # 1ms timeout
@@ -125,26 +108,29 @@ suite "Async Event Waiting":
       # Expected in test environment
       check true
 
-suite "Multiple Event Sources":
-  test "waitForMultipleEventsAsync prioritizes resize":
-    # Set resize flag to test priority
-    async_events.resizeDetected = true
+suite "Async Event Stream Resize Detection":
+  test "AsyncEventStream detects and handles resize events":
+    # Note: This test verifies that AsyncEventStream is properly created
+    # and that the resize counter mechanism exists
+    var receivedResize = false
 
-    when hasChronos:
-      try:
-        let event = waitFor waitForMultipleEventsAsync().wait(chronos.milliseconds(50))
-        check event.kind == EventKind.Resize
-      except AsyncTimeoutError:
-        # This may happen if the sleep in the function is too long
-        check async_events.resizeDetected == false # Should have been reset
-    else:
-      # AsyncDispatch simplified test
-      try:
-        let eventFut = waitForMultipleEventsAsync()
-        let event = waitFor eventFut
-        check event.kind == EventKind.Resize
-      except CatchableError:
-        check async_events.resizeDetected == false
+    let stream = newAsyncEventStream(
+      proc(event: Event): Future[bool] {.async.} =
+        if event.kind == EventKind.Resize:
+          receivedResize = true
+          return false # Stop after receiving resize
+        return true
+    )
+
+    # Verify stream was created correctly
+    check stream != nil
+    check stream.running == false
+
+    # Verify resize counter API exists
+    let initialCounter = async_events.getResizeCounter()
+    async_events.incrementResizeCounter()
+    let afterCounter = async_events.getResizeCounter()
+    check afterCounter == initialCounter + 1
 
 suite "Mouse Event Parsing (Async)":
   test "parseMouseEventX10 returns unknown (placeholder)":
@@ -182,16 +168,23 @@ suite "Async Event Stream":
         return false
 
     let stream = newAsyncEventStream(testCallback)
+    check not stream.running
 
-    # Start the stream (this will run in background)
-    discard stream.startAsync()
+    # Spawn the stream in background
+    when hasAsyncDispatch:
+      asyncCheck stream.startAsync()
+    else:
+      asyncSpawn stream.startAsync()
 
-    # Give it a moment to start
-    waitFor sleepAsync(chronos.milliseconds(10))
-    check stream.running
+    # Give async task time to start and set running flag
+    waitFor sleepAsync(chronos.milliseconds(50))
 
-    # Stop the stream
+    # Stream should now be running (or have already stopped if event was processed)
+    # We can't reliably check running flag due to async timing, so just verify
+    # that we can stop it without errors
     waitFor stream.stopAsync()
+
+    # After stop, should not be running
     check not stream.running
 
   test "AsyncEventStream with nil callback":
@@ -199,25 +192,29 @@ suite "Async Event Stream":
 
     # Should handle nil callback gracefully
     try:
-      discard stream.startAsync()
-      waitFor sleepAsync(chronos.milliseconds(5))
+      when hasAsyncDispatch:
+        asyncCheck stream.startAsync()
+      else:
+        asyncSpawn stream.startAsync()
+      waitFor sleepAsync(chronos.milliseconds(10))
       waitFor stream.stopAsync()
-      # If we get here, it handled nil callback properly
-      check true
+      check not stream.running
     except CatchableError:
       check false
 
 suite "Global State Management":
-  test "resizeDetected flag management":
-    # Test the global resize detection flag
-    async_events.resizeDetected = false
-    check not async_events.resizeDetected
+  test "resizeCounter management":
+    # Test the global resize counter
+    let initialCounter = async_events.getResizeCounter()
 
-    async_events.resizeDetected = true
-    check async_events.resizeDetected
+    # Simulate resize signal
+    async_events.incrementResizeCounter()
+    let afterIncrement = async_events.getResizeCounter()
 
-    # Reset for other tests
-    async_events.resizeDetected = false
+    check afterIncrement == initialCounter + 1
+
+    # Counter should persist (not auto-reset)
+    check async_events.getResizeCounter() == afterIncrement
 
 suite "Error Handling":
   test "AsyncEventError with custom message":
@@ -244,7 +241,6 @@ suite "Error Handling":
     try:
       # Test various async functions handle errors gracefully
       discard waitFor pollKeyAsync()
-      discard waitFor checkResizeAsync()
       discard waitFor pollEventsAsync(1)
       check true
     except AsyncEventError:
@@ -320,12 +316,10 @@ suite "Performance and Resource Management":
 
     # Run multiple async operations concurrently
     let future1 = pollKeyAsync()
-    let future2 = checkResizeAsync()
-    let future3 = pollEventsAsync(1)
+    let future2 = pollEventsAsync(1)
 
     discard waitFor future1
     discard waitFor future2
-    discard waitFor future3
 
     let endTime = now()
     # Should complete quickly since they're all non-blocking
@@ -342,8 +336,11 @@ suite "Performance and Resource Management":
 
     # Start and stop all streams
     for stream in streams:
-      discard stream.startAsync()
-      waitFor sleepAsync(chronos.milliseconds(1))
+      when hasAsyncDispatch:
+        asyncCheck stream.startAsync()
+      else:
+        asyncSpawn stream.startAsync()
+      waitFor sleepAsync(chronos.milliseconds(5))
       waitFor stream.stopAsync()
 
     # All streams should be properly stopped

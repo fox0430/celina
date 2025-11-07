@@ -5,11 +5,7 @@
 
 import std/[os, posix, options, strutils]
 
-import errors
-import mouse_logic
-import utf8_utils
-import key_logic
-import escape_sequence_logic
+import errors, mouse_logic, utf8_utils, key_logic, escape_sequence_logic
 
 # Re-export types to maintain API compatibility
 export mouse_logic.MouseButton, mouse_logic.MouseEventKind, mouse_logic.KeyModifier
@@ -20,12 +16,17 @@ export utf8_utils
 when not declared(SIGWINCH):
   const SIGWINCH = 28
 
-# Global flag for resize detection
-var resizeDetected* = false
+# Global counter for resize detection
+# Note: We use a counter instead of a bool to support multiple App instances.
+# Each App tracks the last counter value it saw, allowing all Apps to receive
+# resize events independently without race conditions.
+var resizeCounter {.global.}: int = 0
 
 # Signal handler for SIGWINCH
 proc sigwinchHandler(sig: cint) {.noconv.} =
-  resizeDetected = true
+  # Increment counter on each resize signal
+  # This is safe in signal handlers as it's a simple increment
+  resizeCounter.inc()
 
 type
   EventKind* = enum
@@ -573,13 +574,19 @@ proc initSignalHandling*() =
   ## Initialize signal handling for terminal resize
   signal(SIGWINCH, sigwinchHandler)
 
-# Check for resize event
-proc checkResize*(): Option[Event] =
-  ## Check if a resize event occurred
-  if resizeDetected:
-    resizeDetected = false
-    return some(Event(kind: Resize))
-  return none(Event)
+# Get current resize counter value
+proc getResizeCounter*(): int =
+  ## Get the current resize counter value
+  ##
+  ## Apps should track the last value they saw and compare with this
+  ## to detect resize events without race conditions.
+  return resizeCounter
+
+# Test helper: Increment resize counter (for testing only)
+proc incrementResizeCounter*() =
+  ## Increment the resize counter (for testing purposes)
+  ## This simulates a SIGWINCH signal being received
+  resizeCounter.inc()
 
 # Event polling with timeout
 proc pollEvents*(timeoutMs: int): bool =
