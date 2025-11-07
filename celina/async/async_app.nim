@@ -25,6 +25,8 @@ type
     windowMode: bool ## Whether to use window management
     frameCounter: int
     lastFrameTime: MonoTime
+    lastResizeCounter: int
+      ## Track last seen resize counter for independent resize detection
 
   ## Async application configuration options
   AsyncAppConfig* = object
@@ -71,6 +73,7 @@ proc newAsyncApp*(
     windowMode: config.windowMode,
     frameCounter: 0,
     lastFrameTime: getMonoTime(),
+    lastResizeCounter: async_events.getResizeCounter(),
   )
 
   # Initialize async buffer based on terminal size (GC-safe version)
@@ -194,10 +197,13 @@ proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
     let now = getMonoTime()
     let targetFrameTime = 1000 div targetFps # Target frame time in milliseconds
 
-    # Check for resize event first
-    let resizeOpt = await checkResizeAsync()
-    if resizeOpt.isSome():
-      let resizeEvent = resizeOpt.get()
+    # Check for resize event using counter-based detection
+    # This approach supports multiple AsyncApp instances without race conditions
+    let currentResizeCounter = async_events.getResizeCounter()
+    if currentResizeCounter != app.lastResizeCounter:
+      # Resize occurred since last check
+      app.lastResizeCounter = currentResizeCounter
+      let resizeEvent = Event(kind: Resize)
       await app.handleResizeAsync()
 
       # Also pass resize event to user handler

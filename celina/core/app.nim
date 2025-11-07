@@ -29,6 +29,8 @@ type
     renderHandler: proc(buffer: var Buffer)
     windowMode: bool
     config: AppConfig
+    lastResizeCounter: int
+      ## Track last seen resize counter for independent resize detection
 
 proc newApp*(
     config: AppConfig = AppConfig(
@@ -51,6 +53,7 @@ proc newApp*(
     renderHandler: nil,
     windowMode: config.windowMode,
     config: config,
+    lastResizeCounter: events.getResizeCounter(),
   )
 
   # Initialize window manager if enabled
@@ -124,10 +127,13 @@ proc tick(app: App): bool =
   try:
     app.fpsMonitor.startFrame()
 
-    # Check for resize event first
-    let resizeOpt = events.checkResize()
-    if resizeOpt.isSome():
-      let resizeEvent = resizeOpt.get
+    # Check for resize event using counter-based detection
+    # This approach supports multiple App instances without race conditions
+    let currentResizeCounter = events.getResizeCounter()
+    if currentResizeCounter != app.lastResizeCounter:
+      # Resize occurred since last check
+      app.lastResizeCounter = currentResizeCounter
+      let resizeEvent = Event(kind: Resize)
       app.handleResize()
 
       # Pass resize event to user handler
