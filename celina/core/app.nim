@@ -123,10 +123,32 @@ proc render(app: App) =
   app.renderer.render()
 
 proc tick(app: App): bool =
-  ## Process one application tick (events + render)
+  ## Process one application tick (events + render).
+  ##
+  ## This method:
+  ##   1. Checks for resize events
+  ##   2. Calculates time remaining until next render
+  ##   3. Polls for input events with timeout = remaining time
+  ##   4. Processes events (max 5 per tick)
+  ##   5. Renders only if target FPS interval reached
+  ##
+  ## CPU Efficiency:
+  ##   The key to low CPU usage is the dynamic timeout for `pollEvents()`.
+  ##   Instead of polling rapidly, we calculate exactly when the next
+  ##   render should occur and use that as the timeout. This means:
+  ##   - The process sleeps (blocked in select()) until an event arrives
+  ##   - OR until it's time to render the next frame
+  ##   - At 60 FPS with no input, the loop runs only 60 times/second
+  ##   - CPU usage during idle is minimal (<1%)
+  ##
+  ## FPS Control:
+  ##   The `shouldRender()` check ensures rendering occurs at the target
+  ##   FPS rate. Combined with the dynamic timeout, this provides both
+  ##   responsive event handling and efficient CPU usage.
+  ##
+  ## Returns:
+  ##   true to continue running, false to exit the application loop
   try:
-    app.fpsMonitor.startFrame()
-
     # Check for resize event using counter-based detection
     # This approach supports multiple App instances without race conditions
     let currentResizeCounter = events.getResizeCounter()
@@ -141,10 +163,13 @@ proc tick(app: App): bool =
         if not app.eventHandler(resizeEvent):
           return false
 
-    # Event polling with dynamic timeout based on FPS
-    let frameTimeout = app.fpsMonitor.getFrameTimeout()
+    # Calculate remaining time until next render
+    # This is used as timeout for event polling to minimize CPU usage
+    let remainingTime = app.fpsMonitor.getRemainingFrameTime()
 
-    if events.pollEvents(frameTimeout):
+    # Poll for events with timeout based on when next render is needed
+    # This blocks until an event arrives OR timeout expires
+    if events.pollEvents(remainingTime):
       # Process events in batch
       var eventCount = 0
       const maxEventsPerTick = 5
@@ -168,9 +193,11 @@ proc tick(app: App): bool =
         else:
           break
 
-    # Always render
-    app.render()
-    app.fpsMonitor.endFrame()
+    # Render only if enough time has passed for target FPS
+    if app.fpsMonitor.shouldRender():
+      app.fpsMonitor.startFrame() # Update render timing
+      app.render()
+      app.fpsMonitor.endFrame()
 
     return not app.shouldQuit
   except TerminalError:

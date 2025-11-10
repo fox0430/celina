@@ -160,7 +160,7 @@ when hasAsyncSupport:
       let window2 = newWindow(rect(20, 20, 25, 12), "Window 2")
 
       let id1 = waitFor app.addWindowAsync(window1)
-      let id2 = waitFor app.addWindowAsync(window2)
+      discard waitFor app.addWindowAsync(window2)
 
       # Focus first window
       let focused = waitFor app.focusWindowAsync(id1)
@@ -179,7 +179,7 @@ when hasAsyncSupport:
       let window2 = newWindow(rect(20, 20, 25, 12), "Window 2")
 
       let id1 = waitFor app.addWindowAsync(window1)
-      let id2 = waitFor app.addWindowAsync(window2)
+      discard waitFor app.addWindowAsync(window2)
 
       # First window should be focused (async behavior differs from sync)
       let focusedOpt = waitFor app.getFocusedWindowAsync()

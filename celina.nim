@@ -47,9 +47,7 @@ export
 
 export async_backend, hasAsyncSupport, hasChronos, hasAsyncDispatch
 
-# ============================================================================
 # Convenience Functions
-# ============================================================================
 
 proc quickRun*(
     eventHandler: proc(event: Event): bool,
@@ -87,9 +85,7 @@ proc quickRun*(
   app.onRender(renderHandler)
   app.run()
 
-# ============================================================================
 # Async API (when Chronos is available)
-# ============================================================================
 
 when hasAsyncSupport and hasChronos:
   import celina/async/[async_app, async_terminal, async_buffer, async_events]
@@ -101,9 +97,7 @@ when hasAsyncSupport and hasChronos:
     ## Convert async procedure to synchronous (blocks until complete)
     return waitFor asyncProc
 
-# ============================================================================
 # Version Information
-# ============================================================================
 
 const
   celinaVersionMajor* = 0
