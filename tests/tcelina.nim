@@ -1,6 +1,6 @@
 # Test suite for main celina module
 
-import std/[unittest, options, re]
+import std/[unittest, options, pegs]
 
 import ../celina {.all.}
 
@@ -10,7 +10,7 @@ suite "Celina Main Module Tests":
       check celinaVersionMajor > 0 or celinaVersionMinor > 0 or celinaVersionPatch > 0
 
     test "version returns valid version string":
-      check celinaVersion.match(re"^\d+\.\d+\.\d+$") # Semantic versioning
+      check celinaVersion.match(peg"\d+ '.' \d+ '.' \d+ !.") # Semantic versioning
 
     test "sync app creation":
       let app = newApp()
