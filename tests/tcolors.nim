@@ -1,8 +1,9 @@
+# Test suite for Colors module
+
 import std/[unittest, strutils]
 
 import ../celina/core/colors
 
-# Test suite for Colors module
 suite "Colors Module Tests":
   suite "Color Enum Tests":
     test "Basic color enum values":
@@ -600,7 +601,7 @@ suite "Colors Module Tests":
     test "cubeColor() function - boundary values clamping":
       # Test that out of bounds values are clamped instead of throwing
       let cube_neg_r = cubeColor(-1, 0, 0) # Should clamp r to 0
-      let cube_neg_g = cubeColor(0, -1, 0) # Should clamp g to 0  
+      let cube_neg_g = cubeColor(0, -1, 0) # Should clamp g to 0
       let cube_neg_b = cubeColor(0, 0, -1) # Should clamp b to 0
       let cube_high_r = cubeColor(6, 0, 0) # Should clamp r to 5
       let cube_high_g = cubeColor(0, 6, 0) # Should clamp g to 5

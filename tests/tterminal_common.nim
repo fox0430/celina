@@ -841,3 +841,91 @@ suite "Terminal Common Module Tests":
       check output.contains("*")
       check duration < 0.05 # Should complete in < 50ms
       check output.count("*") >= 90 # Most changes should be present
+
+  suite "Background Color Rendering (Regression Tests)":
+    # These tests prevent regression of the bug where background-only colors
+    # were not rendered in initial frames
+
+    test "buildDifferentialOutput applies style when buffer size changes":
+      # This was the first bug: when oldBuffer and newBuffer have different sizes,
+      # styles were not applied at all
+      var oldBuf = newBuffer(0, 0) # Empty initial buffer
+      var newBuf = newBuffer(5, 2)
+
+      # Set cells with RGB background colors only
+      newBuf.setString(0, 0, " ", Style(bg: rgb(255, 0, 0))) # Red background
+      newBuf.setString(1, 0, " ", Style(bg: rgb(0, 255, 0))) # Green background
+      newBuf.setString(0, 1, "A", Style(fg: rgb(0, 0, 255))) # Blue foreground
+
+      let output = buildDifferentialOutput(oldBuf, newBuf)
+
+      # Verify RGB sequences are present
+      check "48;2;255;0;0" in output # Red background ANSI code
+      check "48;2;0;255;0" in output # Green background ANSI code
+      check "38;2;0;0;255" in output # Blue foreground ANSI code
+
+      # Verify reset sequences are present
+      check output.contains("\e[0m")
+
+    test "buildOutputWithCursor renders background-only colored cells":
+      # This was the main bug: cells with only background color (no foreground)
+      # were completely skipped in the rendering condition
+      var oldBuf = newBuffer(0, 0)
+      var newBuf = newBuffer(10, 3)
+
+      # Set various color combinations
+      newBuf.setString(0, 0, " ", Style(bg: rgb(10, 10, 20))) # BG only
+      newBuf.setString(1, 0, " ", Style(bg: rgb(255, 0, 0))) # BG only (red)
+      newBuf.setString(2, 0, "X", Style(fg: rgb(0, 255, 0))) # FG only (green)
+      newBuf.setString(3, 0, "Y", Style(fg: rgb(255, 255, 255), bg: rgb(0, 0, 255)))
+        # Both
+
+      var lastCursorStyle = CursorStyle.Default
+      let output = buildOutputWithCursor(
+        oldBuf, newBuf, 0, 0, false, CursorStyle.Default, lastCursorStyle, force = false
+      )
+
+      # All color types should be present in output
+      check "48;2;10;10;20" in output # Dark background
+      check "48;2;255;0;0" in output # Red background
+      check "38;2;0;255;0" in output # Green foreground
+      check "48;2;0;0;255" in output # Blue background
+
+    test "buildOutputWithCursor with 256-color backgrounds":
+      # Also test 256-color mode to ensure the fix works for all color types
+      var oldBuf = newBuffer(0, 0)
+      var newBuf = newBuffer(5, 1)
+
+      # Mix of 256-color backgrounds
+      newBuf.setString(0, 0, " ", Style(bg: color256(196))) # Red
+      newBuf.setString(1, 0, " ", Style(bg: grayscale(12))) # Gray
+      newBuf.setString(2, 0, " ", Style(bg: color(BrightYellow))) # 16-color
+
+      var lastCursorStyle = CursorStyle.Default
+      let output = buildOutputWithCursor(
+        oldBuf, newBuf, 0, 0, false, CursorStyle.Default, lastCursorStyle, force = false
+      )
+
+      # Verify 256-color codes
+      check "48;5;196" in output # 256-color red background
+      check "48;5;244" in output # Grayscale background
+      check "103" in output or "48;5;11" in output # Bright yellow (16-color or 256)
+
+    test "buildDifferentialOutput with only background colors":
+      # Edge case: entire buffer is spaces with different background colors
+      var oldBuf = newBuffer(5, 2)
+      var newBuf = newBuffer(5, 2)
+
+      # Fill with background colors only (simulating a color bar)
+      for x in 0 ..< 5:
+        let color = rgb(x * 50, 0, 0) # Gradient of red
+        newBuf.setString(x, 0, " ", Style(bg: color))
+
+      let output = buildDifferentialOutput(oldBuf, newBuf)
+
+      # Should contain RGB background codes for all positions
+      check "48;2;0;0;0" in output # rgb(0,0,0)
+      check "48;2;50;0;0" in output # rgb(50,0,0)
+      check "48;2;100;0;0" in output # rgb(100,0,0)
+      check "48;2;150;0;0" in output # rgb(150,0,0)
+      check "48;2;200;0;0" in output # rgb(200,0,0)
