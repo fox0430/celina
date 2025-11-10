@@ -3,10 +3,10 @@
 ## This module provides the main AsyncApp type and async event loop
 ## implementation using either Chronos or std/asyncdispatch.
 
-import std/[options, unicode, times, monotimes]
+import std/[options, unicode, monotimes]
 
 import async_backend, async_terminal, async_events, async_buffer, async_windows
-import ../core/[geometry, colors, buffer, events]
+import ../core/[geometry, colors, buffer, events, fps]
 import ../widgets/[text, base]
 
 export
@@ -19,6 +19,7 @@ type
     terminal: AsyncTerminal
     buffer: async_buffer.AsyncBuffer
     windowManager: AsyncWindowManager
+    fpsMonitor: FpsMonitor
     running: bool
     eventHandler: proc(event: Event): Future[bool] {.async.}
     renderHandler: proc(buffer: async_buffer.AsyncBuffer): Future[void] {.async.}
@@ -39,9 +40,7 @@ type
 
   AsyncAppError* = object of CatchableError
 
-# ============================================================================
 # AsyncApp Creation and Configuration
-# ============================================================================
 
 proc newAsyncApp*(
     config: AsyncAppConfig = AsyncAppConfig(
@@ -67,6 +66,7 @@ proc newAsyncApp*(
   ## ```
   result = AsyncApp(
     terminal: newAsyncTerminal(),
+    fpsMonitor: newFpsMonitor(if config.targetFps > 0: config.targetFps else: 60),
     running: false,
     eventHandler: nil,
     renderHandler: nil,
@@ -124,9 +124,7 @@ proc onRenderAsync*(
   ## ```
   app.renderHandler = handler
 
-# ============================================================================
 # AsyncApp Lifecycle Management
-# ============================================================================
 
 proc setupAsync(app: AsyncApp, config: AsyncAppConfig) {.async.} =
   ## Internal async setup procedure to initialize terminal state
@@ -190,13 +188,23 @@ proc renderAsync(app: AsyncApp) {.async.} =
   await app.terminal.drawAsync(renderBuffer, force = false)
 
 proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
-  ## Process one async application tick (events + render)
-  ## Returns false if application should quit
+  ## Process one async application tick (events + render).
+  ##
+  ## This method implements efficient FPS control using dynamic timeouts,
+  ## matching the synchronous version's approach for minimal CPU usage.
+  ##
+  ## CPU Efficiency Strategy:
+  ##   1. Calculate remaining time until next render should occur
+  ##   2. Use this as timeout for event polling (blocks process)
+  ##   3. Process events when they arrive
+  ##   4. Render only when target FPS interval is reached
+  ##
+  ## At 60 FPS with no input, the loop runs only 60 times/second,
+  ## keeping CPU usage minimal during idle periods.
+  ##
+  ## Returns:
+  ##   false if application should quit, true to continue
   try:
-    # Calculate frame timing
-    let now = getMonoTime()
-    let targetFrameTime = 1000 div targetFps # Target frame time in milliseconds
-
     # Check for resize event using counter-based detection
     # This approach supports multiple AsyncApp instances without race conditions
     let currentResizeCounter = async_events.getResizeCounter()
@@ -211,8 +219,16 @@ proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
         if not (await app.eventHandler(resizeEvent)):
           return false
 
-    # Poll for events with short timeout
-    let eventsAvailable = await pollEventsAsync(1) # 1ms timeout
+    # Calculate remaining time until next render
+    # This is used as timeout for event polling to minimize CPU usage
+    let remainingTime = app.fpsMonitor.getRemainingFrameTime()
+
+    # Use remaining time as timeout, minimum 1ms to avoid busy waiting
+    let timeout = if remainingTime > 0: remainingTime else: 1
+
+    # Poll for events with timeout based on when next render is needed
+    # This blocks until an event arrives OR timeout expires
+    let eventsAvailable = await pollEventsAsync(timeout)
 
     if eventsAvailable:
       # Events are available - process them
@@ -243,17 +259,14 @@ proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
         else:
           break # No more events available
 
-    # Always render - either after processing events or on timeout
-    await app.renderAsync()
-
-    # Frame timing control
-    let frameTime = (getMonoTime() - now).inMilliseconds()
-    if frameTime < targetFrameTime:
-      let sleepTime = int(targetFrameTime - frameTime)
-      await sleepMs(sleepTime)
-
-    app.frameCounter.inc()
-    app.lastFrameTime = now
+    # Render only if enough time has passed for target FPS
+    # This check is critical for efficient FPS control
+    if app.fpsMonitor.shouldRender():
+      app.fpsMonitor.startFrame() # Update render timing BEFORE rendering
+      await app.renderAsync()
+      app.fpsMonitor.endFrame() # Update statistics AFTER rendering
+      app.frameCounter.inc()
+      app.lastFrameTime = getMonoTime()
 
     return app.running
   except Exception:
@@ -320,9 +333,7 @@ proc quitAsync*(app: AsyncApp) {.async.} =
   ## Signal the async application to quit gracefully
   app.running = false
 
-# ============================================================================
 # Window Management Integration
-# ============================================================================
 
 proc enableWindowMode*(app: AsyncApp) =
   ## Enable window management mode
@@ -362,9 +373,7 @@ proc getFocusedWindowAsync*(app: AsyncApp): Future[Option[Window]] {.async.} =
     return await app.windowManager.getFocusedWindowAsync()
   return none(Window)
 
-# ============================================================================
 # Async Convenience Functions
-# ============================================================================
 
 proc quickRunAsync*(
     eventHandler: proc(event: Event): Future[bool] {.async.},
@@ -422,9 +431,21 @@ proc getTerminalSize*(app: AsyncApp): Size =
   ## Get current terminal size
   app.terminal.getSize()
 
-# ============================================================================
+# FPS Control Delegation
+
+proc setTargetFps*(app: AsyncApp, fps: int) =
+  ## Set the target FPS for the application
+  app.fpsMonitor.setTargetFps(fps)
+
+proc getTargetFps*(app: AsyncApp): int =
+  ## Get the current target FPS
+  app.fpsMonitor.getTargetFps()
+
+proc getCurrentFps*(app: AsyncApp): float =
+  ## Get the current actual FPS
+  app.fpsMonitor.getCurrentFps()
+
 # Version Information
-# ============================================================================
 
 proc asyncVersion*(): string =
   ## Get the async library version string

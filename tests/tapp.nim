@@ -68,7 +68,7 @@ suite "App FPS Control":
   test "setTargetFps with zero or negative raises error":
     let app = newApp()
 
-    # FPS must be between 1 and 120, so invalid values should raise ValueError
+    # FPS must be between 1 and 240, so invalid values should raise ValueError
     expect ValueError:
       app.setTargetFps(0)
 
@@ -76,7 +76,7 @@ suite "App FPS Control":
       app.setTargetFps(-10)
 
     expect ValueError:
-      app.setTargetFps(121) # Above maximum
+      app.setTargetFps(250) # Above maximum
 
 suite "App Cursor Control":
   test "setCursorPosition with coordinates":

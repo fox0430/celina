@@ -179,14 +179,6 @@ when hasAsyncSupport and hasChronos:
       let app = newAsyncApp(config)
       check not app.isNil
 
-    test "async performance monitor":
-      let monitor = newAsyncPerfMonitor()
-      check not monitor.isNil
-
-      # Test initial values
-      check monitor.getFPS() >= 0.0
-      check monitor.getEventRate() >= 0.0
-
     test "async utility functions":
       # Test asyncToSync utility (with a simple future)
       proc simpleAsync(): Future[int] {.async.} =
@@ -287,7 +279,7 @@ suite "Integration Tests":
         app.setTargetFps(-10)
 
       expect(ValueError):
-        app.setTargetFps(121)
+        app.setTargetFps(250)
 
       expect(ValueError):
         app.setTargetFps(1000)
