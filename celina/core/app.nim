@@ -31,6 +31,7 @@ type
     config: AppConfig
     lastResizeCounter: int
       ## Track last seen resize counter for independent resize detection
+    forceNextRender: bool ## Force full render on next frame (used after resize)
 
 proc newApp*(
     config: AppConfig = AppConfig(
@@ -54,6 +55,7 @@ proc newApp*(
     windowMode: config.windowMode,
     config: config,
     lastResizeCounter: events.getResizeCounter(),
+    forceNextRender: false,
   )
 
   # Initialize window manager if enabled
@@ -105,6 +107,10 @@ proc handleResize(app: App) =
   ## Handle terminal resize events
   app.terminal.updateSize()
   app.renderer.resize()
+  # Clear screen to avoid artifacts from old content
+  terminal.clearScreen()
+  # Force full render on next frame to ensure clean redraw
+  app.forceNextRender = true
 
 proc render(app: App) =
   ## Render the current frame
@@ -119,8 +125,12 @@ proc render(app: App) =
   if app.windowMode and not app.windowManager.isNil:
     app.windowManager.render(app.renderer.getBuffer())
 
-  # Render to terminal
-  app.renderer.render()
+  # Render to terminal (force if requested after resize)
+  if app.forceNextRender:
+    app.renderer.render(force = true)
+    app.forceNextRender = false
+  else:
+    app.renderer.render()
 
 proc tick(app: App): bool =
   ## Process one application tick (events + render)
