@@ -6,9 +6,7 @@
 import std/[strformat, termios, posix, strutils, os]
 import geometry, colors, buffer
 
-# ============================================================================
 # ANSI Escape Sequences
-# ============================================================================
 
 type
   AnsiSequence* = distinct string
@@ -105,9 +103,7 @@ proc getCursorStyleSeq*(style: CursorStyle): string =
   of BlinkingBar: CursorStyleBlinkingBar
   of SteadyBar: CursorStyleSteadyBar
 
-# ============================================================================
 # Terminal Configuration
-# ============================================================================
 
 type TerminalConfig* = object ## Shared terminal configuration structure
   c_lflag_mask*: Cflag
@@ -137,9 +133,7 @@ proc applyTerminalConfig*(termios: var Termios, config: TerminalConfig) =
   termios.c_cc[VMIN] = config.vmin
   termios.c_cc[VTIME] = config.vtime
 
-# ============================================================================
 # Terminal Size Detection
-# ============================================================================
 
 proc getTerminalSizeFromSystem*(): tuple[width: int, height: int, success: bool] =
   ## Get terminal size from system, returns (width, height, success)
@@ -157,9 +151,7 @@ proc getTerminalSizeWithFallback*(defaultWidth = 80, defaultHeight = 24): Size =
   else:
     size(defaultWidth, defaultHeight)
 
-# ============================================================================
 # Render Optimization
-# ============================================================================
 
 type
   RenderCommandKind* = enum
@@ -297,9 +289,7 @@ proc buildOutputString*(batch: RenderBatch): string =
     of RckClearLine:
       result.add(ClearLineSeq)
 
-# ============================================================================
 # Differential Rendering
-# ============================================================================
 
 proc calculateSimpleDiff*(
     oldBuffer, newBuffer: Buffer
@@ -332,7 +322,17 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
     let changes = calculateSimpleDiff(oldBuffer, newBuffer)
     for change in changes:
       result.add(makeCursorPositionSeq(change.pos.x, change.pos.y))
+
+      # Apply style if present
+      let styleSeq = change.cell.style.toAnsiSequence()
+      if styleSeq.len > 0:
+        result.add(styleSeq)
+
       result.add(change.cell.symbol)
+
+      # Reset style if it was applied
+      if styleSeq.len > 0:
+        result.add(resetSequence())
     return result
 
   var lastCursorPos = (-1, -1) # Track cursor position to minimize cursor moves
@@ -422,9 +422,7 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
   if lastStyle != defaultStyle():
     result.add(resetSequence())
 
-# ============================================================================
 # Mouse Input Processing
-# ============================================================================
 
 proc enableMouseMode*(mode: MouseMode): string =
   ## Generate sequence to enable mouse mode
@@ -476,9 +474,7 @@ proc parseMouseEvent*(data: string): tuple[x: int, y: int, button: int, success:
 
   return (0, 0, 0, false)
 
-# ============================================================================
 # Performance Metrics
-# ============================================================================
 
 type RenderMetrics* = object ## Metrics for rendering performance analysis
   cellsChanged*: int
@@ -503,17 +499,13 @@ proc calculateRenderMetrics*(
         1.0,
   )
 
-# ============================================================================
 # Utility Functions
-# ============================================================================
 
 proc isTerminalInteractive*(): bool =
   ## Check if we're running in an interactive terminal
   isatty(STDIN_FILENO) == 1 and isatty(STDOUT_FILENO) == 1
 
-# ============================================================================
 # Cursor-aware rendering functions
-# ============================================================================
 
 proc buildOutputWithCursor*(
     oldBuffer, newBuffer: Buffer,
@@ -531,7 +523,9 @@ proc buildOutputWithCursor*(
     for y in 0 ..< newBuffer.area.height:
       for x in 0 ..< newBuffer.area.width:
         let cell = newBuffer[x, y]
-        if cell.symbol != " " or cell.style.fg.kind != Default:
+        # Render if cell has non-default symbol, foreground, or background
+        if cell.symbol != " " or cell.style.fg.kind != Default or
+            cell.style.bg.kind != Default:
           result.add(makeCursorPositionSeq(x, y))
           let styleSeq = cell.style.toAnsiSequence()
           if styleSeq.len > 0:

@@ -142,10 +142,11 @@ proc drawAnimatedGradientWave(buf: var Buffer, y: int, offset: float) =
 proc drawHints(buf: var Buffer, y: int) =
   let hint = "Press 'q' to quit | True color (24-bit RGB) terminal required"
   let hintX = (buf.area.width - hint.len) div 2
-  buf.setString(hintX, y, hint, Style(fg: rgb(150, 150, 150), bg: rgb(30, 30, 40)))
+  buf.setString(hintX, y, hint, Style(fg: rgb(150, 150, 150)))
 
 proc main() =
   var app = newApp()
+
   var animOffset = 0.0
   let startTime = epochTime()
 
@@ -154,10 +155,10 @@ proc main() =
       let currentTime = epochTime() - startTime
       animOffset = currentTime * 50.0 # Animation speed
 
-      # Clear buffer with dark background
+      # Clear buffer with terminal default background
       for y in 0 ..< buf.area.height:
         for x in 0 ..< buf.area.width:
-          buf.setString(x, y, " ", Style(bg: rgb(10, 10, 20)))
+          buf.setString(x, y, " ", defaultStyle())
 
       # Title with animated rainbow effect
       let title = "✨ Celina True Color Demo ✨"
