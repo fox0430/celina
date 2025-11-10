@@ -104,10 +104,10 @@ proc parseVersionFromNimble(): tuple[major, minor, patch: int] {.compileTime.} =
   const nimbleContent = staticRead("celina.nimble")
 
   for line in nimbleContent.splitLines():
-    if line.strip().startsWith("version"):
+    if strutils.strip(line).startsWith("version"):
       let
         parts = line.split("=")
-        versionStr = parts[1].strip().strip(chars = {'"', ' '})
+        versionStr = strutils.strip(strutils.strip(parts[1]), chars = {'"', ' '})
         versionParts = versionStr.split(".")
       return (
         major: parseInt(versionParts[0]),
