@@ -1,15 +1,16 @@
 # Test suite for main celina module
 
-import std/[unittest, strutils, options]
+import std/[unittest, options, re]
 
 import ../celina {.all.}
 
 suite "Celina Main Module Tests":
   suite "Basic API Tests":
+    test "version returns valid version":
+      check celinaVersionMajor > 0 or celinaVersionMinor > 0 or celinaVersionPatch > 0
+
     test "version returns valid version string":
-      let ver = celinaVersion()
-      check ver.len > 0
-      check "." in ver # Should contain at least one dot for semantic versioning
+      check celinaVersion.match(re"^\d+\.\d+\.\d+$") # Semantic versioning
 
     test "sync app creation":
       let app = newApp()
@@ -213,17 +214,6 @@ suite "Integration Tests":
       let _ = testRenderHandler
     else:
       fail("quickRun should be available")
-
-  suite "Module Documentation":
-    test "version is semantic":
-      let ver = celinaVersion()
-      let parts = ver.split('.')
-      check parts.len >= 2 # At least major.minor
-
-      # Check that parts are numeric (or at least start with numbers)
-      for part in parts:
-        check part.len > 0
-        check part[0].isDigit()
 
   suite "Error Handling":
     test "app creation doesn't crash":
