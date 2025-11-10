@@ -28,6 +28,7 @@ type
     lastFrameTime: MonoTime
     lastResizeCounter: int
       ## Track last seen resize counter for independent resize detection
+    forceNextRender: bool ## Force full render on next frame (used after resize)
 
   ## Async application configuration options
   AsyncAppConfig* = object
@@ -74,6 +75,7 @@ proc newAsyncApp*(
     frameCounter: 0,
     lastFrameTime: getMonoTime(),
     lastResizeCounter: async_events.getResizeCounter(),
+    forceNextRender: false,
   )
 
   # Initialize async buffer based on terminal size (GC-safe version)
@@ -169,6 +171,10 @@ proc handleResizeAsync(app: AsyncApp) {.async.} =
   let newSize = app.terminal.getSize()
   let newArea = Rect(x: 0, y: 0, width: newSize.width, height: newSize.height)
   await app.buffer.resizeAsync(newArea)
+  # Clear screen to avoid artifacts from old content
+  await clearScreen()
+  # Force full render on next frame to ensure clean redraw
+  app.forceNextRender = true
 
 proc renderAsync(app: AsyncApp) {.async.} =
   ## Render the current frame asynchronously
@@ -185,7 +191,12 @@ proc renderAsync(app: AsyncApp) {.async.} =
 
   # Use async terminal rendering - convert AsyncBuffer to Buffer (GC-safe version)
   let renderBuffer = app.buffer.toBufferAsync()
-  await app.terminal.drawAsync(renderBuffer, force = false)
+  # Force render if requested after resize
+  if app.forceNextRender:
+    await app.terminal.drawAsync(renderBuffer, force = true)
+    app.forceNextRender = false
+  else:
+    await app.terminal.drawAsync(renderBuffer, force = false)
 
 proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
   ## Process one async application tick (events + render).
