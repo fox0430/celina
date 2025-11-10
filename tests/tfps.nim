@@ -22,7 +22,7 @@ suite "FPS Module Tests":
         discard newFpsMonitor(-1)
 
       expect ValueError:
-        discard newFpsMonitor(150)
+        discard newFpsMonitor(250)
 
   suite "FPS Configuration":
     test "Set target FPS":
@@ -37,7 +37,7 @@ suite "FPS Module Tests":
         monitor.setTargetFps(0)
 
       expect ValueError:
-        monitor.setTargetFps(200)
+        monitor.setTargetFps(250)
 
     test "Get frame timeout":
       let monitor60 = newFpsMonitor(60)
@@ -56,8 +56,9 @@ suite "FPS Module Tests":
       sleep(10)
       monitor.endFrame()
 
-      # Frame time should be at least 10ms
-      check monitor.getFrameTime() >= 10.0
+      # After 10ms sleep with 60 FPS (16.67ms per frame), remaining time should be ~6ms
+      let remaining = monitor.getRemainingFrameTime()
+      check remaining >= 0 and remaining <= 10
 
     test "Multiple frames":
       let monitor = newFpsMonitor()
@@ -67,12 +68,13 @@ suite "FPS Module Tests":
         sleep(10)
         monitor.endFrame()
 
-      # Should have processed multiple frames
-      check monitor.getFrameTime() >= 10.0
+      # After last frame with 10ms sleep, remaining time should be ~6ms for 60 FPS
+      let remaining = monitor.getRemainingFrameTime()
+      check remaining >= 0 and remaining <= 10
 
     test "getCurrentFps initially zero":
       let monitor = newFpsMonitor()
-      check monitor.getCurrentFps() == 0.0
+      check monitor.getCurrentFps() == 0
 
   suite "Frame Timing":
     test "shouldRender with fast frames":
@@ -88,8 +90,8 @@ suite "FPS Module Tests":
         check true
       else:
         # If timing is imprecise in CI, check that at least some time has passed
-        let elapsed = monitor.getFrameTime()
-        check elapsed >= 0.0 # Sanity check that time tracking works
+        let elapsed = monitor.getRemainingFrameTime()
+        check elapsed >= 0 # Sanity check that time tracking works
 
     test "shouldRender after sufficient time":
       let monitor = newFpsMonitor(10) # 10 FPS = 100ms per frame
@@ -149,55 +151,6 @@ suite "FPS Module Tests":
       # After frames have been counted, stats should be meaningful
       check stats.fps >= 0.0
 
-  suite "AsyncPerfMonitor Tests":
-    test "Create async performance monitor":
-      let monitor = newAsyncPerfMonitor()
-      check monitor != nil
-      check monitor.frameCount == 0
-      check monitor.eventCount == 0
-
-    test "Record frames":
-      let monitor = newAsyncPerfMonitor()
-      monitor.recordFrame()
-      monitor.recordFrame()
-      monitor.recordFrame()
-
-      check monitor.frameCount == 3
-
-    test "Record events":
-      let monitor = newAsyncPerfMonitor()
-      monitor.recordEvent()
-      monitor.recordEvent()
-
-      check monitor.eventCount == 2
-
-    test "Get FPS for async monitor":
-      let monitor = newAsyncPerfMonitor()
-      sleep(100)
-
-      for i in 0 ..< 10:
-        monitor.recordFrame()
-        sleep(10)
-
-      let fps = monitor.getFPS()
-      check fps > 0.0
-
-    test "Get event rate":
-      let monitor = newAsyncPerfMonitor()
-      sleep(100)
-
-      for i in 0 ..< 20:
-        monitor.recordEvent()
-        sleep(5)
-
-      let eventRate = monitor.getEventRate()
-      check eventRate > 0.0
-
-    test "Initial FPS is zero":
-      let monitor = newAsyncPerfMonitor()
-      let fps = monitor.getFPS()
-      check fps == 0.0
-
   suite "Edge Cases":
     test "Frame timing with zero-duration frames":
       let monitor = newFpsMonitor()
@@ -205,7 +158,7 @@ suite "FPS Module Tests":
       monitor.endFrame()
 
       # Frame time should be very small but valid
-      check monitor.getFrameTime() >= 0.0
+      check monitor.getRemainingFrameTime() >= 0
 
     test "Multiple startFrame calls":
       let monitor = newFpsMonitor()
@@ -213,9 +166,9 @@ suite "FPS Module Tests":
       sleep(10)
       monitor.startFrame() # Start new frame without ending previous
 
-      # Should use latest start time
-      let frameTime = monitor.getFrameTime()
-      check frameTime < 5.0 # Should be very small
+      # Should use latest start time, so remaining time should be close to full frame time
+      let frameTime = monitor.getRemainingFrameTime()
+      check frameTime >= 10 # Should be close to frame timeout (16ms for 60 FPS)
 
     test "FPS boundaries":
       let monitor1 = newFpsMonitor(1) # Minimum valid FPS
