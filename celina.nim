@@ -29,7 +29,7 @@
 ##   waitFor main()
 ## ```
 
-import std/[unicode, strformat]
+import std/[unicode, strformat, strutils]
 
 import
   celina/core/[
@@ -99,14 +99,30 @@ when hasAsyncSupport and hasChronos:
 
 # Version Information
 
+proc parseVersionFromNimble(): tuple[major, minor, patch: int] {.compileTime.} =
+  ## Parse version information from celina.nimble at compile time
+  const nimbleContent = staticRead("celina.nimble")
+
+  for line in nimbleContent.splitLines():
+    if strutils.strip(line).startsWith("version"):
+      let
+        parts = line.split("=")
+        versionStr = strutils.strip(strutils.strip(parts[1]), chars = {'"', ' '})
+        versionParts = versionStr.split(".")
+      return (
+        major: parseInt(versionParts[0]),
+        minor: parseInt(versionParts[1]),
+        patch: parseInt(versionParts[2]),
+      )
+
+  assert false
+
 const
-  celinaVersionMajor* = 0
-  celinaVersionMinor* = 1
-  celinaVersionPatch* = 0
+  version = parseVersionFromNimble()
 
-proc versionStr(): string {.compileTime.} =
-  return fmt"{celinaVersionMajor}.{celinaVersionMinor}.{celinaVersionPatch}"
+  celinaVersionMajor* = version.major ## Major version number
+  celinaVersionMinor* = version.minor ## Minor version number
+  celinaVersionPatch* = version.patch ## Patch version number
 
-proc celinaVersion*(): string =
-  ## Get the library version string
-  return versionStr()
+  celinaVersion* = fmt"{celinaVersionMajor}.{celinaVersionMinor}.{celinaVersionPatch}"
+    ## Full version string

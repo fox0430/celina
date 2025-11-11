@@ -1,6 +1,6 @@
 ## Tests for AsyncApp
 
-import std/[unittest, options, strutils]
+import std/[unittest, options]
 
 import ../celina/async/async_backend
 
@@ -30,11 +30,6 @@ when hasAsyncSupport:
       let app = newAsyncApp(config)
       check app.isRunning() == false
       check app.getFrameCount() == 0
-
-    test "asyncVersion returns version string":
-      let version = asyncVersion()
-      check version.len > 0
-      check version.contains("async")
 
   suite "AsyncApp Event and Render Handlers":
     test "onEventAsync sets event handler":

@@ -455,9 +455,3 @@ proc getTargetFps*(app: AsyncApp): int =
 proc getCurrentFps*(app: AsyncApp): float =
   ## Get the current actual FPS
   app.fpsMonitor.getCurrentFps()
-
-# Version Information
-
-proc asyncVersion*(): string =
-  ## Get the async library version string
-  return "0.1.0-async"
