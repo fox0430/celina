@@ -404,10 +404,12 @@ proc draw*(terminal: Terminal, buffer: Buffer, force: bool = false) =
       # Only update lastBuffer if write was successful
       if writeWithRetry(output):
         terminal.lastBuffer = buffer
+        terminal.lastBuffer.clearDirty() # Clear dirty flag after successful render
       # else: keep lastBuffer unchanged so next frame can retry the diff
     else:
       # No output means no changes - safe to update lastBuffer
       terminal.lastBuffer = buffer
+      terminal.lastBuffer.clearDirty() # Clear dirty flag after successful render
   except CatchableError as e:
     # Silently ignore errors for rendering - next frame will retry
     # This prevents crashes from transient terminal I/O issues
@@ -441,10 +443,12 @@ proc drawWithCursor*(
       # Only update lastBuffer if write was successful
       if writeWithRetry(output):
         terminal.lastBuffer = buffer
+        terminal.lastBuffer.clearDirty() # Clear dirty flag after successful render
       # else: keep lastBuffer unchanged so next frame can retry the diff
     else:
       # No output means no changes - safe to update lastBuffer
       terminal.lastBuffer = buffer
+      terminal.lastBuffer.clearDirty() # Clear dirty flag after successful render
   except CatchableError as e:
     # Silently ignore errors for rendering - next frame will retry
     # This prevents crashes from transient terminal I/O issues
