@@ -19,9 +19,7 @@ type AsyncBufferMetrics* = object ## Performance monitoring
 
 var globalAsyncBufferMetrics* {.threadvar.}: AsyncBufferMetrics
 
-# ============================================================================
 # Metrics and tracking functions (defined early for use in other functions)
-# ============================================================================
 
 proc trackAsyncBufferCreation*() =
   globalAsyncBufferMetrics.totalCreated.inc()
@@ -47,9 +45,7 @@ type
 # Forward declarations
 proc destroyAsync*(asyncBuffer: AsyncBuffer)
 
-# ============================================================================
 # AsyncBuffer Creation and Management
-# ============================================================================
 
 proc newAsyncBuffer*(area: Rect): AsyncBuffer =
   ## Create a new async-safe buffer with the specified area
@@ -106,9 +102,7 @@ proc clone*(asyncBuffer: AsyncBuffer): AsyncBuffer =
         discard,
   )
 
-# ============================================================================
 # Thread-Safe Access Methods
-# ============================================================================
 
 template withBuffer*(asyncBuffer: AsyncBuffer, operation: untyped): untyped =
   ## Thread-safe template for accessing the internal buffer
@@ -144,9 +138,7 @@ proc getSize*(asyncBuffer: AsyncBuffer): Size =
   asyncBuffer.withBuffer:
     result = size(buffer.area.width, buffer.area.height)
 
-# ============================================================================
 # Async-Safe Buffer Operations
-# ============================================================================
 
 proc clearAsync*(asyncBuffer: AsyncBuffer, cell: Cell = cell()) {.async.} =
   ## Clear buffer asynchronously
@@ -197,9 +189,7 @@ proc resizeAsync*(asyncBuffer: AsyncBuffer, newArea: Rect) {.async.} =
 
   await sleepMs(0)
 
-# ============================================================================
 # Synchronous Access (when needed)
-# ============================================================================
 
 proc getCell*(asyncBuffer: AsyncBuffer, x, y: int): Cell =
   ## Get cell synchronously (thread-safe)
@@ -228,9 +218,34 @@ proc clear*(asyncBuffer: AsyncBuffer, cell: Cell = cell()) =
   asyncBuffer.withBuffer:
     buffer.clear(cell)
 
-# ============================================================================
+# Dirty Region Management (Optimization Integration)
+
+proc clearDirty*(asyncBuffer: AsyncBuffer) =
+  ## Clear the dirty region after rendering (thread-safe)
+  ## This should be called after the buffer has been successfully rendered
+  ## to reset the dirty tracking for the next frame
+  asyncBuffer.withBuffer:
+    buffer.clearDirty()
+
+proc clearDirtyAsync*(asyncBuffer: AsyncBuffer) {.async.} =
+  ## Clear the dirty region asynchronously
+  asyncBuffer.withBufferAsync:
+    buffer.clearDirty()
+
+  await sleepMs(0)
+
+proc isDirty*(asyncBuffer: AsyncBuffer): bool =
+  ## Check if the buffer has any dirty regions (thread-safe)
+  asyncBuffer.withBuffer:
+    result = buffer.dirty.isDirty
+
+proc getDirtyRegionSize*(asyncBuffer: AsyncBuffer): int =
+  ## Get the size of the dirty region (thread-safe)
+  ## Returns 0 if no changes have been made
+  asyncBuffer.withBuffer:
+    result = buffer.getDirtyRegionSize()
+
 # Buffer Conversion and Integration
-# ============================================================================
 
 proc toBuffer*(asyncBuffer: AsyncBuffer): Buffer =
   ## Convert AsyncBuffer to regular Buffer (creates copy)
@@ -263,9 +278,7 @@ proc mergeAsync*(
 
   await sleepMs(0)
 
-# ============================================================================
 # AsyncBuffer Pool for Performance
-# ============================================================================
 
 proc getBuffer*(pool: AsyncBufferPool, area: Rect): AsyncBuffer =
   ## Get a buffer from the pool or create new one
@@ -293,9 +306,7 @@ proc returnBuffer*(pool: AsyncBufferPool, asyncBuffer: AsyncBuffer) =
       asyncBuffer.destroyAsync()
       trackAsyncBufferDestroy()
 
-# ============================================================================
 # Async-Safe Rendering Utilities
-# ============================================================================
 
 proc toStringsAsync*(asyncBuffer: AsyncBuffer): Future[seq[string]] {.async.} =
   ## Convert buffer to strings asynchronously
@@ -314,9 +325,7 @@ proc diffAsync*(
   result = diff(oldBuffer, newBuffer)
   await sleepMs(0)
 
-# ============================================================================
 # Debugging and Utilities
-# ============================================================================
 
 proc `$`*(asyncBuffer: AsyncBuffer): string =
   ## String representation of AsyncBuffer
@@ -340,9 +349,7 @@ proc stats*(asyncBuffer: AsyncBuffer): tuple[area: Rect, resourceId: ResourceId]
   ## Get buffer statistics
   (area: asyncBuffer.getArea(), resourceId: asyncBuffer.resourceId)
 
-# ============================================================================
 # Resource Management Integration
-# ============================================================================
 
 proc newAsyncBufferPool*(maxSize: int = 10): AsyncBufferPool =
   ## Create a new async buffer pool for efficient memory management

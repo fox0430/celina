@@ -194,8 +194,9 @@ proc renderAsync*(terminal: AsyncTerminal, buffer: Buffer) {.async.} =
     stdout.write(output)
     stdout.flushFile()
 
-  # Update last buffer
+  # Update last buffer and clear dirty region for next frame
   terminal.lastBuffer = buffer
+  terminal.lastBuffer.clearDirty()
 
 proc renderFullAsync*(terminal: AsyncTerminal, buffer: Buffer) {.async.} =
   ## Force a full async render of the buffer
@@ -207,7 +208,9 @@ proc renderFullAsync*(terminal: AsyncTerminal, buffer: Buffer) {.async.} =
       if not cell.isEmpty or cell.style != defaultStyle():
         await renderCell(cell, buffer.area.x + x, buffer.area.y + y)
 
+  # Update last buffer and clear dirty region
   terminal.lastBuffer = buffer
+  terminal.lastBuffer.clearDirty()
 
 # Terminal setup and cleanup
 proc setupAsync*(terminal: AsyncTerminal) {.async.} =

@@ -450,3 +450,116 @@ suite "Buffer Module Tests":
       check not buffer[2, 0].isEmpty() # Tab is content
       check not buffer[3, 0].isEmpty() # Multiple spaces are content
       check not buffer[4, 0].isEmpty()
+
+  suite "Dirty Region Tracking":
+    test "New buffer has no dirty region":
+      let buf = newBuffer(80, 24)
+      check(not buf.dirty.isDirty)
+      check(buf.getDirtyRegionSize() == 0)
+
+    test "Single cell change marks dirty region":
+      var buf = newBuffer(80, 24)
+      buf[10, 5] = cell("X")
+
+      check(buf.dirty.isDirty)
+      check(buf.dirty.minX == 10)
+      check(buf.dirty.maxX == 10)
+      check(buf.dirty.minY == 5)
+      check(buf.dirty.maxY == 5)
+      check(buf.getDirtyRegionSize() == 1)
+
+    test "setString marks dirty region":
+      var buf = newBuffer(80, 24)
+      buf.setString(10, 5, "Hello")
+
+      check(buf.dirty.isDirty)
+      check(buf.dirty.minX == 10)
+      check(buf.dirty.maxX == 14) # "Hello" is 5 chars
+      check(buf.dirty.minY == 5)
+      check(buf.dirty.maxY == 5)
+
+    test "fill marks rectangular dirty region":
+      var buf = newBuffer(80, 24)
+      let fillArea = rect(10, 5, 20, 10)
+      buf.fill(fillArea, cell("#"))
+
+      check(buf.dirty.isDirty)
+      check(buf.dirty.minX == 10)
+      check(buf.dirty.maxX == 29) # 10 + 20 - 1
+      check(buf.dirty.minY == 5)
+      check(buf.dirty.maxY == 14) # 5 + 10 - 1
+
+    test "clearDirty resets region":
+      var buf = newBuffer(80, 24)
+      buf[10, 5] = cell("Test")
+      check(buf.dirty.isDirty)
+
+      buf.clearDirty()
+      check(not buf.dirty.isDirty)
+      check(buf.getDirtyRegionSize() == 0)
+
+    test "diff with no changes returns empty":
+      var buf1 = newBuffer(50, 20)
+      var buf2 = newBuffer(50, 20)
+
+      # Fill both with same content
+      buf1.setString(0, 0, "Same")
+      buf2.setString(0, 0, "Same")
+
+      # Clear dirty on buf2 to simulate no changes
+      buf2.clearDirty()
+
+      let changes = buf1.diff(buf2)
+      check(changes.len == 0)
+
+    test "diff with single change":
+      var buf1 = newBuffer(50, 20)
+      var buf2 = newBuffer(50, 20)
+
+      buf1.setString(10, 5, "A")
+      buf2.setString(10, 5, "B")
+
+      let changes = buf1.diff(buf2)
+      check(changes.len > 0)
+
+    test "diff benefits from dirty region optimization":
+      var oldBuf = newBuffer(300, 100)
+      var newBuf = newBuffer(300, 100)
+
+      # Fill both with same initial content
+      for y in 0 ..< 100:
+        oldBuf.setString(0, y, ".")
+        newBuf.setString(0, y, ".")
+
+      # Clear dirty on both to simulate previous frame
+      oldBuf.clearDirty()
+      newBuf.clearDirty()
+
+      # Make small change in new buffer
+      newBuf.setString(150, 50, "X")
+
+      # Should have small dirty region
+      check(newBuf.dirty.isDirty)
+      check(newBuf.getDirtyRegionSize() < 100)
+
+      let changes = oldBuf.diff(newBuf)
+      check(changes.len > 0)
+      check(changes.len < 50)
+
+    test "merge marks merged region as dirty":
+      var destBuf = newBuffer(80, 24)
+      var srcBuf = newBuffer(20, 10)
+
+      # Clear dest dirty region first
+      destBuf.clearDirty()
+      check(not destBuf.dirty.isDirty)
+
+      # Fill source with content
+      srcBuf.fill(rect(0, 0, 20, 10), cell("#"))
+
+      # Merge into destination
+      destBuf.merge(srcBuf, pos(10, 5))
+
+      # Destination should now be dirty
+      check(destBuf.dirty.isDirty)
+      check(destBuf.getDirtyRegionSize() > 0)
