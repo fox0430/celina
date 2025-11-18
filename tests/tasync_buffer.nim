@@ -421,3 +421,84 @@ suite "AsyncBuffer Module Tests":
       check asyncBuffer.getCell(4, 2).symbol == "3"
       check asyncBuffer.getCell(10, 5).symbol == "*"
       check asyncBuffer.getCell(14, 7).symbol == "*"
+
+  suite "Dirty Region Tracking":
+    test "New async buffer has no dirty region":
+      let asyncBuf = newAsyncBufferNoRM(80, 24)
+      check(not asyncBuf.isDirty())
+      check(asyncBuf.getDirtyRegionSize() == 0)
+      asyncBuf.destroyAsync()
+
+    test "setString marks dirty region":
+      let asyncBuf = newAsyncBufferNoRM(80, 24)
+      asyncBuf.setString(10, 5, "Hello")
+
+      check(asyncBuf.isDirty())
+      check(asyncBuf.getDirtyRegionSize() > 0)
+      asyncBuf.destroyAsync()
+
+    test "clearDirty resets region":
+      let asyncBuf = newAsyncBufferNoRM(80, 24)
+      asyncBuf.setString(10, 5, "Test")
+      check(asyncBuf.isDirty())
+
+      asyncBuf.clearDirty()
+      check(not asyncBuf.isDirty())
+      check(asyncBuf.getDirtyRegionSize() == 0)
+      asyncBuf.destroyAsync()
+
+    test "clearDirtyAsync resets region":
+      let asyncBuf = newAsyncBufferNoRM(80, 24)
+      waitFor asyncBuf.setStringAsync(10, 5, "Test")
+      check(asyncBuf.isDirty())
+
+      waitFor asyncBuf.clearDirtyAsync()
+      check(not asyncBuf.isDirty())
+      check(asyncBuf.getDirtyRegionSize() == 0)
+      asyncBuf.destroyAsync()
+
+    test "fillAsync marks rectangular dirty region":
+      let asyncBuf = newAsyncBufferNoRM(80, 24)
+      let fillArea = rect(10, 5, 20, 10)
+      waitFor asyncBuf.fillAsync(fillArea, cell("#"))
+
+      check(asyncBuf.isDirty())
+      let dirtySize = asyncBuf.getDirtyRegionSize()
+      check(dirtySize >= fillArea.area)
+      asyncBuf.destroyAsync()
+
+    test "toBuffer preserves dirty state":
+      let asyncBuf = newAsyncBufferNoRM(80, 24)
+      asyncBuf.setString(10, 5, "Test")
+      check(asyncBuf.isDirty())
+
+      let normalBuf = asyncBuf.toBuffer()
+      check(normalBuf.dirty.isDirty)
+      asyncBuf.destroyAsync()
+
+    test "diffAsync benefits from dirty region optimization":
+      let oldBuf = newAsyncBufferNoRM(300, 100)
+      let newBuf = newAsyncBufferNoRM(300, 100)
+
+      # Fill both with same initial content
+      for y in 0 ..< 100:
+        oldBuf.setString(0, y, ".")
+        newBuf.setString(0, y, ".")
+
+      # Clear dirty on both to simulate previous frame
+      oldBuf.clearDirty()
+      newBuf.clearDirty()
+
+      # Make small change in new buffer
+      newBuf.setString(150, 50, "X")
+
+      # Should have small dirty region
+      check(newBuf.isDirty())
+      check(newBuf.getDirtyRegionSize() < 100)
+
+      let changes = waitFor diffAsync(oldBuf, newBuf)
+      check(changes.len > 0)
+      check(changes.len < 50)
+
+      oldBuf.destroyAsync()
+      newBuf.destroyAsync()
