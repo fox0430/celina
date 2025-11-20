@@ -1,5 +1,5 @@
 ## FPS Monitoring Module
-## ====================
+## =====================
 ##
 ## Provides frame rate monitoring and performance tracking for terminal applications.
 ##
