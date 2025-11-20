@@ -17,8 +17,11 @@
 ##   main()
 ## ```
 ##
-## Async Usage (requires Chronos and `-d:asyncBackend=chronos`):
+## Async Usage:
+##
+## Celina supports asyncdispatch and Chronos. Requires `-d:asyncBackend` flag.
 ## ```nim
+## # async_app.nim
 ## import pkg/celina
 ##
 ## proc main() {.async.} =
@@ -27,6 +30,16 @@
 ##
 ## when isMainModule:
 ##   waitFor main()
+## ```
+##
+## Use asyncdispatch
+## ```
+## $ nim c -d:asyncBackend=asyncdispatch async_app.nim
+## ```
+##
+## Use Chronos
+## ```
+## $ nim c -d:asyncBackend=chronos async_app.nim
 ## ```
 
 import std/[unicode, strformat, strutils]

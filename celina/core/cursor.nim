@@ -1,6 +1,5 @@
 ## Cursor Management Module
-## ======================
-##
+## =========================
 ## Provides comprehensive cursor control and state management for terminal applications.
 ## Handles cursor positioning, visibility, and style changes.
 
