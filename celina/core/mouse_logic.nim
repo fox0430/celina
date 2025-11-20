@@ -45,7 +45,7 @@ proc parseMouseModifiers*(buttonByte: int): set[KeyModifier] =
 proc parseMouseDataX10*(data: array[3, char]): MouseEventData =
   ## Parse X10 mouse format data (pure function, no I/O)
   ##
-  ## Input: 3-byte array [button_byte, x_byte, y_byte]
+  ## Input: 3-byte array ``[button_byte, x_byte, y_byte]``
   ## Output: Structured mouse event data
   ##
   ## Example:
