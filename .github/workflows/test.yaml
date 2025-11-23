@@ -31,7 +31,7 @@ jobs:
           path: ~/.nimble
           key: ${{ runner.os }}-nimble-v2
           restore-keys: |
-            ${{ runner.os }}-nimble-
+            ${{ runner.os }}-nimble-v2
 
       - name: Setup Nim (stable/release)
         uses: jiro4989/setup-nim-action@v2
