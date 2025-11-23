@@ -1,24 +1,6 @@
 name: Unit tests
 
-on:
-  pull_request:
-    paths:
-      - '.github/workflows/test.yaml'
-      - 'celina.nim'
-      - 'celina.nimble'
-      - 'celina/**'
-      - 'examples/**'
-      - 'tests/**'
-  push:
-    paths:
-      - '.github/workflows/test.yaml'
-      - 'celina.nim'
-      - 'celina.nimble'
-      - 'celina/**'
-      - 'examples/**'
-      - 'tests/**'
-    branches:
-      - main
+on: push
 
 permissions:
   contents: read
