@@ -47,7 +47,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.nimble
-          key: ${{ runner.os }}-nimble-v2-${{ hashFiles('*.nimble') }}
+          key: ${{ runner.os }}-nimble-v2-${{ hashFiles('**/*.nimble') }}
           restore-keys: |
             ${{ runner.os }}-nimble-v2-
 
