@@ -1,24 +1,6 @@
 name: Unit tests
 
-on:
-  pull_request:
-    paths:
-      - '.github/workflows/test.yaml'
-      - 'celina.nim'
-      - 'celina.nimble'
-      - 'celina/**'
-      - 'examples/**'
-      - 'tests/**'
-  push:
-    paths:
-      - '.github/workflows/test.yaml'
-      - 'celina.nim'
-      - 'celina.nimble'
-      - 'celina/**'
-      - 'examples/**'
-      - 'tests/**'
-    branches:
-      - main
+on: push
 
 permissions:
   contents: read
@@ -43,9 +25,6 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Cache nimble
-        # TODO: Remove next line
-        #  temporarily work around: https://github.com/orgs/community/discussions/180160
-        if: runner.os != 'macOS'
         id: cache-nimble
         uses: actions/cache@v4
         with:
