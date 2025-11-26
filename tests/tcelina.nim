@@ -169,7 +169,7 @@ when hasAsyncSupport and hasChronos:
       check not app.isNil
 
     test "async app with config":
-      let config = AsyncAppConfig(
+      let config = AppConfig(
         title: "Async Test App",
         alternateScreen: true,
         mouseCapture: false,

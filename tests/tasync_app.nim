@@ -19,7 +19,7 @@ when hasAsyncSupport:
       check app.getFrameCount() == 0
 
     test "newAsyncApp with custom config":
-      let config = AsyncAppConfig(
+      let config = AppConfig(
         title: "Test App",
         alternateScreen: false,
         mouseCapture: true,
@@ -96,7 +96,7 @@ when hasAsyncSupport:
       # Window mode enabled successfully (no crash)
 
     test "addWindowAsync with window mode":
-      let config = AsyncAppConfig(windowMode: true)
+      let config = AppConfig(windowMode: true)
       let app = newAsyncApp(config)
 
       let window = newWindow(rect(10, 10, 30, 15), "Test Window")
@@ -111,7 +111,7 @@ when hasAsyncSupport:
       check windowId.int > 0
 
     test "getWindowAsync retrieves added window":
-      let config = AsyncAppConfig(windowMode: true)
+      let config = AppConfig(windowMode: true)
       let app = newAsyncApp(config)
 
       let window = newWindow(rect(10, 10, 30, 15), "Test Window")
@@ -122,14 +122,14 @@ when hasAsyncSupport:
       check retrievedOpt.get().title == "Test Window"
 
     test "getWindowAsync with invalid ID returns none":
-      let config = AsyncAppConfig(windowMode: true)
+      let config = AppConfig(windowMode: true)
       let app = newAsyncApp(config)
 
       let windowOpt = waitFor app.getWindowAsync(WindowId(999))
       check windowOpt.isNone()
 
     test "removeWindowAsync removes window":
-      let config = AsyncAppConfig(windowMode: true)
+      let config = AppConfig(windowMode: true)
       let app = newAsyncApp(config)
 
       let window = newWindow(rect(10, 10, 30, 15), "Test Window")
@@ -148,7 +148,7 @@ when hasAsyncSupport:
       check windowOpt.isNone()
 
     test "focusWindowAsync focuses window":
-      let config = AsyncAppConfig(windowMode: true)
+      let config = AppConfig(windowMode: true)
       let app = newAsyncApp(config)
 
       let window1 = newWindow(rect(10, 10, 30, 15), "Window 1")
@@ -167,7 +167,7 @@ when hasAsyncSupport:
       check focusedOpt.get().id == id1
 
     test "getFocusedWindowAsync with multiple windows":
-      let config = AsyncAppConfig(windowMode: true)
+      let config = AppConfig(windowMode: true)
       let app = newAsyncApp(config)
 
       let window1 = newWindow(rect(10, 10, 30, 15), "Window 1")
@@ -183,7 +183,7 @@ when hasAsyncSupport:
 
   suite "AsyncApp Integration Tests":
     test "multiple windows management":
-      let config = AsyncAppConfig(windowMode: true)
+      let config = AppConfig(windowMode: true)
       let app = newAsyncApp(config)
 
       let window1 = newWindow(rect(10, 10, 30, 15), "Window 1")
@@ -209,7 +209,7 @@ when hasAsyncSupport:
       check (waitFor app.getWindowAsync(id3)).isSome()
 
     test "window focus management with multiple windows":
-      let config = AsyncAppConfig(windowMode: true)
+      let config = AppConfig(windowMode: true)
       let app = newAsyncApp(config)
 
       let window1 = newWindow(rect(10, 10, 30, 15), "Window 1")
