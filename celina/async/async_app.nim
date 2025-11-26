@@ -6,7 +6,7 @@
 import std/[options, unicode, monotimes]
 
 import async_backend, async_terminal, async_events, async_buffer, async_windows
-import ../core/[geometry, colors, buffer, events, fps, config]
+import ../core/[geometry, colors, buffer, events, fps, config, tick_common]
 import ../widgets/[text, base]
 
 export
@@ -26,8 +26,7 @@ type
     windowMode: bool ## Whether to use window management
     frameCounter: int
     lastFrameTime: MonoTime
-    lastResizeCounter: int
-      ## Track last seen resize counter for independent resize detection
+    resizeState: ResizeState ## Shared resize detection state (from tick_common)
     forceNextRender: bool ## Force full render on next frame (used after resize)
 
   ## Deprecated: Use AppConfig instead
@@ -59,7 +58,7 @@ proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
     windowMode: config.windowMode,
     frameCounter: 0,
     lastFrameTime: getMonoTime(),
-    lastResizeCounter: async_events.getResizeCounter(),
+    resizeState: initResizeState(async_events.getResizeCounter()),
     forceNextRender: false,
   )
 
@@ -186,50 +185,39 @@ proc renderAsync(app: AsyncApp) {.async.} =
 proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
   ## Process one async application tick (events + render).
   ##
-  ## This method implements efficient FPS control using dynamic timeouts,
-  ## matching the synchronous version's approach for minimal CPU usage.
+  ## This method:
+  ##   1. Checks for resize events
+  ##   2. Calculates time remaining until next render
+  ##   3. Polls for input events with timeout = remaining time
+  ##   4. Processes events (max per tick defined in tick_common)
+  ##   5. Renders only if target FPS interval reached
   ##
-  ## CPU Efficiency Strategy:
-  ##   1. Calculate remaining time until next render should occur
-  ##   2. Use this as timeout for event polling (blocks process)
-  ##   3. Process events when they arrive
-  ##   4. Render only when target FPS interval is reached
-  ##
-  ## At 60 FPS with no input, the loop runs only 60 times/second,
-  ## keeping CPU usage minimal during idle periods.
+  ## See tick_common module for details on CPU efficiency and FPS control.
   ##
   ## Returns:
   ##   false if application should quit, true to continue
   try:
-    # Check for resize event using counter-based detection
-    # This approach supports multiple AsyncApp instances without race conditions
-    let currentResizeCounter = async_events.getResizeCounter()
-    if currentResizeCounter != app.lastResizeCounter:
-      # Resize occurred since last check
-      app.lastResizeCounter = currentResizeCounter
+    # Check for resize event using shared counter-based detection
+    if app.resizeState.checkResize(async_events.getResizeCounter()):
       let resizeEvent = Event(kind: Resize)
       await app.handleResizeAsync()
 
-      # Also pass resize event to user handler
+      # Pass resize event to user handler
       if app.eventHandler != nil:
         if not (await app.eventHandler(resizeEvent)):
           return false
 
-    # Calculate remaining time until next render
-    # This is used as timeout for event polling to minimize CPU usage
+    # Calculate remaining time until next render (used as poll timeout)
     let remainingTime = app.fpsMonitor.getRemainingFrameTime()
 
     # Use remaining time as timeout, minimum 1ms to avoid busy waiting
-    let timeout = if remainingTime > 0: remainingTime else: 1
+    let timeout = clampTimeout(remainingTime, 1)
 
-    # Poll for events with timeout based on when next render is needed
-    # This blocks until an event arrives OR timeout expires
+    # Poll for events with timeout - blocks until event arrives OR timeout expires
     let eventsAvailable = await pollEventsAsync(timeout)
 
     if eventsAvailable:
-      # Events are available - process them
       var eventCount = 0
-      const maxEventsPerTick = 5 # Limit events per frame for smooth rendering
 
       while eventCount < maxEventsPerTick:
         let eventOpt = await pollKeyAsync()
@@ -237,11 +225,9 @@ proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
           let event = eventOpt.get()
           eventCount.inc()
 
-          # Always call user event handler first for application-level control
-          var shouldContinue = true
+          # User event handler first
           if app.eventHandler != nil:
-            shouldContinue = await app.eventHandler(event)
-            if not shouldContinue:
+            if not (await app.eventHandler(event)):
               return false
 
           # Window manager event handling
@@ -249,25 +235,22 @@ proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
             try:
               let handled = await app.windowManager.handleEventAsync(event)
               if handled:
-                continue # Event was handled by window manager
+                continue
             except:
-              discard # Ignore window manager errors
+              discard
         else:
-          break # No more events available
+          break
 
     # Render only if enough time has passed for target FPS
-    # This check is critical for efficient FPS control
     if app.fpsMonitor.shouldRender():
-      app.fpsMonitor.startFrame() # Update render timing BEFORE rendering
+      app.fpsMonitor.startFrame()
       await app.renderAsync()
-      app.fpsMonitor.endFrame() # Update statistics AFTER rendering
+      app.fpsMonitor.endFrame()
       app.frameCounter.inc()
       app.lastFrameTime = getMonoTime()
 
     return app.running
   except Exception:
-    # Any errors in tick should not crash the application
-    # but indicate to quit
     return false
 
 proc runAsync*(app: AsyncApp, config: AppConfig = DefaultAppConfig) {.async.} =
