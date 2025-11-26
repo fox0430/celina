@@ -10,7 +10,7 @@ when not hasAsyncSupport and not hasAsyncDispatch and not hasChronos:
 
 proc main() {.async.} =
   # Configure the async app
-  let config = AsyncAppConfig(
+  let config = AppConfig(
     title: "Async Hello World",
     alternateScreen: true,
     mouseCapture: false,
