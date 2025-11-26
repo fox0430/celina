@@ -6,12 +6,12 @@
 import std/[options, unicode, monotimes]
 
 import async_backend, async_terminal, async_events, async_buffer, async_windows
-import ../core/[geometry, colors, buffer, events, fps]
+import ../core/[geometry, colors, buffer, events, fps, config]
 import ../widgets/[text, base]
 
 export
   geometry, colors, buffer, events, text, base, unicode, async_backend, async_terminal,
-  async_events, async_buffer, async_windows
+  async_events, async_buffer, async_windows, config
 
 type
   ## Main async application context for CLI applications
@@ -30,34 +30,19 @@ type
       ## Track last seen resize counter for independent resize detection
     forceNextRender: bool ## Force full render on next frame (used after resize)
 
-  ## Async application configuration options
-  AsyncAppConfig* = object
-    title*: string
-    alternateScreen*: bool
-    mouseCapture*: bool
-    rawMode*: bool
-    windowMode*: bool ## Enable window management
-    targetFps*: int ## Target FPS for rendering (default: 60)
+  ## Deprecated: Use AppConfig instead
+  AsyncAppConfig* {.deprecated: "Use AppConfig instead".} = AppConfig
 
   AsyncAppError* = object of CatchableError
 
 # AsyncApp Creation and Configuration
 
-proc newAsyncApp*(
-    config: AsyncAppConfig = AsyncAppConfig(
-      title: "Async Celina App",
-      alternateScreen: true,
-      mouseCapture: false,
-      rawMode: true,
-      windowMode: false,
-      targetFps: 60,
-    )
-): AsyncApp =
+proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
   ## Create a new async CLI application with the specified configuration
   ##
   ## Example:
   ## ```nim
-  ## let config = AsyncAppConfig(
+  ## let config = AppConfig(
   ##   title: "My Async App",
   ##   alternateScreen: true,
   ##   mouseCapture: true,
@@ -128,7 +113,7 @@ proc onRenderAsync*(
 
 # AsyncApp Lifecycle Management
 
-proc setupAsync(app: AsyncApp, config: AsyncAppConfig) {.async.} =
+proc setupAsync(app: AsyncApp, config: AppConfig) {.async.} =
   ## Internal async setup procedure to initialize terminal state
   await app.terminal.setupAsync()
 
@@ -147,7 +132,7 @@ proc setupAsync(app: AsyncApp, config: AsyncAppConfig) {.async.} =
   # Initialize async event system
   initAsyncEventSystem()
 
-proc cleanupAsync(app: AsyncApp, config: AsyncAppConfig) {.async.} =
+proc cleanupAsync(app: AsyncApp, config: AppConfig) {.async.} =
   ## Internal async cleanup procedure to restore terminal state
   await showCursor()
 
@@ -285,17 +270,7 @@ proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
     # but indicate to quit
     return false
 
-proc runAsync*(
-    app: AsyncApp,
-    config: AsyncAppConfig = AsyncAppConfig(
-      title: "Async Celina App",
-      alternateScreen: true,
-      mouseCapture: false,
-      rawMode: true,
-      windowMode: false,
-      targetFps: 60,
-    ),
-) {.async.} =
+proc runAsync*(app: AsyncApp, config: AppConfig = DefaultAppConfig) {.async.} =
   ## Run the async application main loop
   ##
   ## This will:
@@ -389,14 +364,7 @@ proc getFocusedWindowAsync*(app: AsyncApp): Future[Option[Window]] {.async.} =
 proc quickRunAsync*(
     eventHandler: proc(event: Event): Future[bool] {.async.},
     renderHandler: proc(buffer: async_buffer.AsyncBuffer): Future[void] {.async.},
-    config: AsyncAppConfig = AsyncAppConfig(
-      title: "Async Celina App",
-      alternateScreen: true,
-      mouseCapture: false,
-      rawMode: true,
-      windowMode: false,
-      targetFps: 60,
-    ),
+    config: AppConfig = DefaultAppConfig,
 ) {.async.} =
   ## Quick way to run a simple async CLI application
   ##

@@ -8,41 +8,25 @@ import std/options
 
 import
   terminal, buffer, events, renderer, fps, cursor, geometry, errors, terminal_common,
-  windows
+  windows, config
 
-type
-  AppConfig* = object ## Application configuration options
-    title*: string
-    alternateScreen*: bool
-    mouseCapture*: bool
-    rawMode*: bool
-    windowMode*: bool ## Enable window management
-    targetFps*: int ## Target FPS for rendering (default: 60)
+export config
 
-  App* = ref object ## Main application context for CLI applications
-    terminal: Terminal
-    renderer: Renderer
-    fpsMonitor: FpsMonitor
-    windowManager: WindowManager
-    shouldQuit: bool
-    eventHandler: proc(event: Event): bool
-    renderHandler: proc(buffer: var Buffer)
-    windowMode: bool
-    config: AppConfig
-    lastResizeCounter: int
-      ## Track last seen resize counter for independent resize detection
-    forceNextRender: bool ## Force full render on next frame (used after resize)
+type App* = ref object ## Main application context for CLI applications
+  terminal: Terminal
+  renderer: Renderer
+  fpsMonitor: FpsMonitor
+  windowManager: WindowManager
+  shouldQuit: bool
+  eventHandler: proc(event: Event): bool
+  renderHandler: proc(buffer: var Buffer)
+  windowMode: bool
+  config: AppConfig
+  lastResizeCounter: int
+    ## Track last seen resize counter for independent resize detection
+  forceNextRender: bool ## Force full render on next frame (used after resize)
 
-proc newApp*(
-    config: AppConfig = AppConfig(
-      title: "Celina App",
-      alternateScreen: true,
-      mouseCapture: false,
-      rawMode: true,
-      windowMode: false,
-      targetFps: 60,
-    )
-): App =
+proc newApp*(config: AppConfig = DefaultAppConfig): App =
   ## Create a new CLI application with the specified configuration
   let terminal = newTerminal()
   result = App(
