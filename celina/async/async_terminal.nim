@@ -3,7 +3,7 @@
 ## This module provides asynchronous terminal control and rendering capabilities
 ## using either Chronos or std/asyncdispatch for non-blocking I/O operations.
 
-import std/[termios, posix, strformat]
+import std/[termios, posix]
 
 import async_backend, async_buffer
 import ../core/[geometry, colors, buffer, terminal_common]
@@ -161,37 +161,9 @@ proc renderCell*(cell: Cell, x, y: int) {.async.} =
 
 proc renderAsync*(terminal: AsyncTerminal, buffer: Buffer) {.async.} =
   ## Render a buffer to the terminal asynchronously using differential updates
-  if terminal.lastBuffer.area != buffer.area:
-    # Size changed, full redraw needed
-    await clearScreen()
-    terminal.lastBuffer = newBuffer(buffer.area)
+  let output = buildDifferentialOutput(terminal.lastBuffer, buffer)
 
-  # Calculate differences and render only changed cells
-  let changes = terminal.lastBuffer.diff(buffer)
-
-  if changes.len > 0:
-    # Batch render changes efficiently
-    var output = ""
-
-    for change in changes:
-      let absolutePos = pos(buffer.area.x + change.pos.x, buffer.area.y + change.pos.y)
-
-      # Add cursor position
-      output.add(&"\e[{absolutePos.y + 1};{absolutePos.x + 1}H")
-
-      # Add style if needed
-      let styleSeq = change.cell.style.toAnsiSequence()
-      if styleSeq.len > 0:
-        output.add(styleSeq)
-
-      # Add the character
-      output.add(change.cell.symbol)
-
-      # Reset style if needed
-      if styleSeq.len > 0:
-        output.add(resetSequence())
-
-    # Write everything at once
+  if output.len > 0:
     stdout.write(output)
     stdout.flushFile()
 
@@ -201,13 +173,10 @@ proc renderAsync*(terminal: AsyncTerminal, buffer: Buffer) {.async.} =
 
 proc renderFullAsync*(terminal: AsyncTerminal, buffer: Buffer) {.async.} =
   ## Force a full async render of the buffer
-  await clearScreen()
+  let output = buildFullRenderOutput(buffer)
 
-  for y in 0 ..< buffer.area.height:
-    for x in 0 ..< buffer.area.width:
-      let cell = buffer[x, y]
-      if not cell.isEmpty or cell.style != defaultStyle():
-        await renderCell(cell, buffer.area.x + x, buffer.area.y + y)
+  stdout.write(output)
+  stdout.flushFile()
 
   # Update last buffer and clear dirty region
   terminal.lastBuffer = buffer
