@@ -17,6 +17,7 @@ type Terminal* = ref object ## Terminal interface for screen management
   lastBuffer*: Buffer
   rawModeEnabled: bool # Track raw mode state internally
   originalTermios: Termios # Store original terminal settings per instance
+  suspendState: SuspendState
 
 proc getTerminalSize*(): Size =
   ## Get current terminal size with error handling
@@ -376,6 +377,63 @@ proc cleanup*(terminal: Terminal) =
   terminal.disableMouse()
   terminal.disableRawMode()
   terminal.disableAlternateScreen()
+
+proc suspend*(terminal: Terminal) =
+  ## Suspend terminal to return to shell mode temporarily
+  ##
+  ## Saves current terminal state and restores normal shell mode.
+  ## Use `resume()` to return to program mode.
+  ##
+  ## Example:
+  ## ```nim
+  ## terminal.suspend()
+  ## discard execShellCmd("ls ./")
+  ## terminal.resume()
+  ## ```
+  if terminal.suspendState.isSuspended:
+    return # Already suspended
+
+  # Save current state
+  terminal.suspendState.suspendedRawMode = terminal.rawModeEnabled
+  terminal.suspendState.suspendedAlternateScreen = terminal.alternateScreen
+  terminal.suspendState.suspendedMouseEnabled = terminal.mouseEnabled
+
+  # Return to shell mode
+  try:
+    showCursor()
+  except CatchableError:
+    discard
+  terminal.disableMouse()
+  terminal.disableRawMode()
+  terminal.disableAlternateScreen()
+
+  terminal.suspendState.isSuspended = true
+
+proc resume*(terminal: Terminal) =
+  ## Resume terminal after suspend, restoring program mode
+  ##
+  ## Restores terminal state that was saved by `suspend()`.
+  ## After resume, call `draw(buffer, force = true)` to redraw the screen.
+  if not terminal.suspendState.isSuspended:
+    return # Not suspended
+
+  # Restore saved state
+  if terminal.suspendState.suspendedAlternateScreen:
+    terminal.enableAlternateScreen()
+  if terminal.suspendState.suspendedRawMode:
+    terminal.enableRawMode()
+  if terminal.suspendState.suspendedMouseEnabled:
+    terminal.enableMouse()
+  hideCursor()
+
+  # Clear lastBuffer to force full redraw on next draw()
+  terminal.lastBuffer = newBuffer(0, 0)
+
+  terminal.suspendState.isSuspended = false
+
+proc isSuspended*(terminal: Terminal): bool =
+  ## Check if terminal is currently suspended
+  terminal.suspendState.isSuspended
 
 # High-level rendering interface
 proc draw*(terminal: Terminal, buffer: Buffer, force: bool = false) =

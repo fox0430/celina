@@ -18,6 +18,7 @@ type
     stdinFd*: AsyncFD
     stdoutFd*: AsyncFD
     originalTermios: Termios # Store original terminal settings per instance
+    suspendState: SuspendState
 
   AsyncTerminalError* = object of CatchableError
 
@@ -235,6 +236,60 @@ proc cleanupAsync*(terminal: AsyncTerminal) {.async.} =
 
   # AsyncFD cleanup is handled automatically by Chronos
   # No manual unregistration needed
+
+proc suspendAsync*(terminal: AsyncTerminal) {.async.} =
+  ## Suspend terminal to return to shell mode temporarily
+  ##
+  ## Saves current terminal state and restores normal shell mode.
+  ## Use `resumeAsync()` to return to program mode.
+  ##
+  ## Example:
+  ## ```nim
+  ## await terminal.suspendAsync()
+  ## discard execShellCmd("ls ./")
+  ## await terminal.resumeAsync()
+  ## ```
+  if terminal.suspendState.isSuspended:
+    return # Already suspended
+
+  # Save current state
+  terminal.suspendState.suspendedRawMode = terminal.rawMode
+  terminal.suspendState.suspendedAlternateScreen = terminal.alternateScreen
+  terminal.suspendState.suspendedMouseEnabled = terminal.mouseEnabled
+
+  # Return to shell mode
+  await showCursor()
+  terminal.disableMouse()
+  terminal.disableRawMode()
+  terminal.disableAlternateScreen()
+
+  terminal.suspendState.isSuspended = true
+
+proc resumeAsync*(terminal: AsyncTerminal) {.async.} =
+  ## Resume terminal after suspend, restoring program mode
+  ##
+  ## Restores terminal state that was saved by `suspendAsync()`.
+  ## After resume, call `drawAsync(buffer, force = true)` to redraw the screen.
+  if not terminal.suspendState.isSuspended:
+    return # Not suspended
+
+  # Restore saved state
+  if terminal.suspendState.suspendedAlternateScreen:
+    terminal.enableAlternateScreen()
+  if terminal.suspendState.suspendedRawMode:
+    terminal.enableRawMode()
+  if terminal.suspendState.suspendedMouseEnabled:
+    terminal.enableMouse()
+  await hideCursor()
+
+  # Clear lastBuffer to force full redraw on next drawAsync()
+  terminal.lastBuffer = newBuffer(0, 0)
+
+  terminal.suspendState.isSuspended = false
+
+proc isSuspended*(terminal: AsyncTerminal): bool =
+  ## Check if terminal is currently suspended
+  terminal.suspendState.isSuspended
 
 # High-level async rendering interface
 proc drawAsync*(
