@@ -38,6 +38,12 @@ type
     style*: CursorStyle ## Current cursor style
     lastStyle*: CursorStyle ## Last applied cursor style (to avoid redundant updates)
 
+  SuspendState* = object ## Suspended state tracking (for suspend/resume)
+    isSuspended*: bool
+    suspendedRawMode*: bool
+    suspendedAlternateScreen*: bool
+    suspendedMouseEnabled*: bool
+
 const
   # Screen control sequences
   AlternateScreenEnter* = "\e[?1049h"
