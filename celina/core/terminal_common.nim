@@ -428,6 +428,38 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
   if lastStyle != defaultStyle():
     result.add(resetSequence())
 
+# Common terminal control templates
+# These work with both Terminal and AsyncTerminal types
+
+template writeAndFlush*(data: string) =
+  ## Write data to stdout and flush
+  stdout.write(data)
+  stdout.flushFile()
+
+template enableAlternateScreenImpl*(terminal: typed) =
+  ## Common logic for enabling alternate screen
+  if not terminal.alternateScreen:
+    writeAndFlush(AlternateScreenEnter)
+    terminal.alternateScreen = true
+
+template disableAlternateScreenImpl*(terminal: typed) =
+  ## Common logic for disabling alternate screen
+  if terminal.alternateScreen:
+    writeAndFlush(AlternateScreenExit)
+    terminal.alternateScreen = false
+
+template enableMouseImpl*(terminal: typed) =
+  ## Common logic for enabling mouse
+  if not terminal.mouseEnabled:
+    writeAndFlush(enableMouseMode(MouseSGR))
+    terminal.mouseEnabled = true
+
+template disableMouseImpl*(terminal: typed) =
+  ## Common logic for disabling mouse
+  if terminal.mouseEnabled:
+    writeAndFlush(disableMouseMode(MouseSGR))
+    terminal.mouseEnabled = false
+
 # Mouse Input Processing
 
 proc enableMouseMode*(mode: MouseMode): string =
@@ -580,3 +612,52 @@ proc getTerminalCapabilities*(): set[MouseMode] =
   elif term.len > 0:
     # Conservative: assume basic support
     result = {MouseX10, MouseButton}
+
+# Common terminal state query templates
+# These work with both Terminal and AsyncTerminal types
+
+template isRawMode*(terminal: typed): bool =
+  ## Check if terminal is in raw mode
+  terminal.rawMode
+
+template isAlternateScreen*(terminal: typed): bool =
+  ## Check if alternate screen is active
+  terminal.alternateScreen
+
+template isMouseEnabled*(terminal: typed): bool =
+  ## Check if mouse reporting is enabled
+  terminal.mouseEnabled
+
+template getSize*(terminal: typed): Size =
+  ## Get current terminal size
+  terminal.size
+
+template getArea*(terminal: typed): Rect =
+  ## Get terminal area as a Rect
+  rect(0, 0, terminal.size.width, terminal.size.height)
+
+# Suspend/Resume templates
+
+template isSuspended*(terminal: typed): bool =
+  ## Check if terminal is currently suspended
+  terminal.suspendState.isSuspended
+
+template saveSuspendState*(terminal: typed) =
+  ## Save current terminal state for suspend
+  terminal.suspendState.suspendedRawMode = terminal.rawMode
+  terminal.suspendState.suspendedAlternateScreen = terminal.alternateScreen
+  terminal.suspendState.suspendedMouseEnabled = terminal.mouseEnabled
+
+template restoreSuspendedFeatures*(terminal: typed) =
+  ## Restore terminal features from suspend state
+  if terminal.suspendState.suspendedAlternateScreen:
+    terminal.enableAlternateScreen()
+  if terminal.suspendState.suspendedRawMode:
+    terminal.enableRawMode()
+  if terminal.suspendState.suspendedMouseEnabled:
+    terminal.enableMouse()
+
+template clearLastBufferForResume*(terminal: typed) =
+  ## Clear lastBuffer to force full redraw after resume
+  terminal.lastBuffer = newBuffer(0, 0)
+  terminal.suspendState.isSuspended = false
