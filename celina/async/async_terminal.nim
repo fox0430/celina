@@ -69,32 +69,20 @@ proc disableRawMode*(terminal: AsyncTerminal) =
 # Alternate screen control
 proc enableAlternateScreen*(terminal: AsyncTerminal) =
   ## Switch to alternate screen buffer
-  if not terminal.alternateScreen:
-    stdout.write(AlternateScreenEnter)
-    stdout.flushFile()
-    terminal.alternateScreen = true
+  enableAlternateScreenImpl(terminal)
 
 proc disableAlternateScreen*(terminal: AsyncTerminal) =
   ## Switch back to main screen buffer
-  if terminal.alternateScreen:
-    stdout.write(AlternateScreenExit)
-    stdout.flushFile()
-    terminal.alternateScreen = false
+  disableAlternateScreenImpl(terminal)
 
 # Mouse control
 proc enableMouse*(terminal: AsyncTerminal) =
   ## Enable mouse reporting
-  if not terminal.mouseEnabled:
-    stdout.write(enableMouseMode(MouseSGR))
-    stdout.flushFile()
-    terminal.mouseEnabled = true
+  enableMouseImpl(terminal)
 
 proc disableMouse*(terminal: AsyncTerminal) =
   ## Disable mouse reporting
-  if terminal.mouseEnabled:
-    stdout.write(disableMouseMode(MouseSGR))
-    stdout.flushFile()
-    terminal.mouseEnabled = false
+  disableMouseImpl(terminal)
 
 # Async cursor control (using stdout for simplicity)
 proc hideCursor*() {.async.} =
@@ -218,13 +206,11 @@ proc suspendAsync*(terminal: AsyncTerminal) {.async.} =
   ## discard execShellCmd("ls ./")
   ## await terminal.resumeAsync()
   ## ```
-  if terminal.suspendState.isSuspended:
+  if terminal.isSuspended:
     return # Already suspended
 
   # Save current state
-  terminal.suspendState.suspendedRawMode = terminal.rawMode
-  terminal.suspendState.suspendedAlternateScreen = terminal.alternateScreen
-  terminal.suspendState.suspendedMouseEnabled = terminal.mouseEnabled
+  saveSuspendState(terminal)
 
   # Return to shell mode
   await showCursor()
@@ -239,26 +225,15 @@ proc resumeAsync*(terminal: AsyncTerminal) {.async.} =
   ##
   ## Restores terminal state that was saved by `suspendAsync()`.
   ## After resume, call `drawAsync(buffer, force = true)` to redraw the screen.
-  if not terminal.suspendState.isSuspended:
+  if not terminal.isSuspended:
     return # Not suspended
 
   # Restore saved state
-  if terminal.suspendState.suspendedAlternateScreen:
-    terminal.enableAlternateScreen()
-  if terminal.suspendState.suspendedRawMode:
-    terminal.enableRawMode()
-  if terminal.suspendState.suspendedMouseEnabled:
-    terminal.enableMouse()
+  restoreSuspendedFeatures(terminal)
   await hideCursor()
 
   # Clear lastBuffer to force full redraw on next drawAsync()
-  terminal.lastBuffer = newBuffer(0, 0)
-
-  terminal.suspendState.isSuspended = false
-
-proc isSuspended*(terminal: AsyncTerminal): bool =
-  ## Check if terminal is currently suspended
-  terminal.suspendState.isSuspended
+  clearLastBufferForResume(terminal)
 
 # High-level async rendering interface
 proc drawAsync*(
@@ -278,17 +253,8 @@ proc drawAsync*(
   await terminal.drawAsync(buffer, force)
 
 # Terminal state queries
-proc isRawMode*(terminal: AsyncTerminal): bool =
-  ## Check if terminal is in raw mode
-  terminal.rawMode
-
-proc isAlternateScreen*(terminal: AsyncTerminal): bool =
-  ## Check if alternate screen is active
-  terminal.alternateScreen
-
-proc isMouseEnabled*(terminal: AsyncTerminal): bool =
-  ## Check if mouse reporting is enabled
-  terminal.mouseEnabled
+# Note: getSize and getArea need explicit proc definitions to avoid conflicts
+# with async_buffer.getSize in async_app.nim.
 
 proc getSize*(terminal: AsyncTerminal): Size =
   ## Get current terminal size

@@ -390,10 +390,10 @@ proc suspend*(terminal: Terminal) =
   ## discard execShellCmd("ls ./")
   ## terminal.resume()
   ## ```
-  if terminal.suspendState.isSuspended:
+  if terminal.isSuspended:
     return # Already suspended
 
-  # Save current state
+  # Save current state (using rawModeEnabled for internal tracking)
   terminal.suspendState.suspendedRawMode = terminal.rawModeEnabled
   terminal.suspendState.suspendedAlternateScreen = terminal.alternateScreen
   terminal.suspendState.suspendedMouseEnabled = terminal.mouseEnabled
@@ -414,26 +414,15 @@ proc resume*(terminal: Terminal) =
   ##
   ## Restores terminal state that was saved by `suspend()`.
   ## After resume, call `draw(buffer, force = true)` to redraw the screen.
-  if not terminal.suspendState.isSuspended:
+  if not terminal.isSuspended:
     return # Not suspended
 
   # Restore saved state
-  if terminal.suspendState.suspendedAlternateScreen:
-    terminal.enableAlternateScreen()
-  if terminal.suspendState.suspendedRawMode:
-    terminal.enableRawMode()
-  if terminal.suspendState.suspendedMouseEnabled:
-    terminal.enableMouse()
+  restoreSuspendedFeatures(terminal)
   hideCursor()
 
   # Clear lastBuffer to force full redraw on next draw()
-  terminal.lastBuffer = newBuffer(0, 0)
-
-  terminal.suspendState.isSuspended = false
-
-proc isSuspended*(terminal: Terminal): bool =
-  ## Check if terminal is currently suspended
-  terminal.suspendState.isSuspended
+  clearLastBufferForResume(terminal)
 
 # High-level rendering interface
 proc draw*(terminal: Terminal, buffer: Buffer, force: bool = false) =
@@ -514,27 +503,6 @@ proc drawWithCursor*(
       stderr.writeLine("Warning: drawWithCursor() failed: " & e.msg)
     else:
       discard e # Avoid "declared but not used" warning
-
-# Terminal state queries
-proc isRawMode*(terminal: Terminal): bool =
-  ## Check if terminal is in raw mode
-  terminal.rawMode
-
-proc isAlternateScreen*(terminal: Terminal): bool =
-  ## Check if alternate screen is active
-  terminal.alternateScreen
-
-proc isMouseEnabled*(terminal: Terminal): bool =
-  ## Check if mouse reporting is enabled
-  terminal.mouseEnabled
-
-proc getSize*(terminal: Terminal): Size =
-  ## Get current terminal size
-  terminal.size
-
-proc getArea*(terminal: Terminal): Rect =
-  ## Get terminal area as a Rect
-  rect(0, 0, terminal.size.width, terminal.size.height)
 
 # Utility procedures
 proc withTerminal*[T](terminal: Terminal, body: proc(): T): T =
