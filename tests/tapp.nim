@@ -270,6 +270,24 @@ suite "App Window Management":
     check windows[0].id == id1
     check windows[1].id == id2
 
+suite "App Suspend/Resume":
+  test "isSuspended initially false":
+    let app = newApp()
+    check app.isSuspended() == false
+
+  test "onEvent with App context":
+    let app = newApp()
+    var handlerCalled = false
+    var receivedApp: App
+
+    app.onEvent proc(event: Event, app: App): bool =
+      handlerCalled = true
+      receivedApp = app
+      return true
+
+    # Handler is set but not called until run
+    check handlerCalled == false
+
 suite "App Integration Tests":
   test "quit sets shouldQuit flag":
     let app = newApp()

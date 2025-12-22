@@ -22,6 +22,7 @@ type
     fpsMonitor: FpsMonitor
     running: bool
     eventHandler: proc(event: Event): Future[bool] {.async.}
+    eventHandlerWithApp: proc(event: Event, app: AsyncApp): Future[bool] {.async.}
     renderHandler: proc(buffer: async_buffer.AsyncBuffer): Future[void] {.async.}
     windowMode: bool ## Whether to use window management
     frameCounter: int
@@ -54,6 +55,7 @@ proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
     fpsMonitor: newFpsMonitor(if config.targetFps > 0: config.targetFps else: 60),
     running: false,
     eventHandler: nil,
+    eventHandlerWithApp: nil,
     renderHandler: nil,
     windowMode: config.windowMode,
     frameCounter: 0,
@@ -76,6 +78,9 @@ proc onEventAsync*(app: AsyncApp, handler: proc(event: Event): Future[bool] {.as
   ## The handler should return true if the event was handled,
   ## false if the application should quit.
   ##
+  ## For access to the AsyncApp object (e.g., for suspend/resume), use the
+  ## overload that accepts `proc(event: Event, app: AsyncApp): Future[bool]` instead.
+  ##
   ## Example:
   ## ```nim
   ## app.onEventAsync proc(event: Event): Future[bool] {.async.} =
@@ -90,6 +95,29 @@ proc onEventAsync*(app: AsyncApp, handler: proc(event: Event): Future[bool] {.as
   ##   return true  # Continue running
   ## ```
   app.eventHandler = handler
+  app.eventHandlerWithApp = nil
+
+proc onEventAsync*(
+    app: AsyncApp, handler: proc(event: Event, app: AsyncApp): Future[bool] {.async.}
+) =
+  ## Set the async event handler with AsyncApp context for the application
+  ##
+  ## This overload provides access to the AsyncApp object, enabling features like
+  ## suspend/resume for shell command execution.
+  ##
+  ## Example:
+  ## ```nim
+  ## app.onEventAsync proc(event: Event, app: AsyncApp): Future[bool] {.async.} =
+  ##   if event.kind == Key and event.key.char == "!":
+  ##     app.withSuspendAsync:
+  ##       discard execShellCmd("ls -la")
+  ##       echo "Press Enter..."
+  ##       discard stdin.readLine()
+  ##     return true
+  ##   return true
+  ## ```
+  app.eventHandlerWithApp = handler
+  app.eventHandler = nil
 
 proc onRenderAsync*(
     app: AsyncApp,
@@ -182,6 +210,15 @@ proc renderAsync(app: AsyncApp) {.async.} =
   else:
     await app.terminal.drawAsync(renderBuffer, force = false)
 
+proc dispatchEventAsync(app: AsyncApp, event: Event): Future[bool] {.async.} =
+  ## Helper to dispatch event to the appropriate handler
+  if app.eventHandlerWithApp != nil:
+    return await app.eventHandlerWithApp(event, app)
+  elif app.eventHandler != nil:
+    return await app.eventHandler(event)
+  else:
+    return true
+
 proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
   ## Process one async application tick (events + render).
   ##
@@ -203,9 +240,8 @@ proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
       await app.handleResizeAsync()
 
       # Pass resize event to user handler
-      if app.eventHandler != nil:
-        if not (await app.eventHandler(resizeEvent)):
-          return false
+      if not (await app.dispatchEventAsync(resizeEvent)):
+        return false
 
     # Calculate remaining time until next render (used as poll timeout)
     let remainingTime = app.fpsMonitor.getRemainingFrameTime()
@@ -226,9 +262,8 @@ proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
           eventCount.inc()
 
           # User event handler first
-          if app.eventHandler != nil:
-            if not (await app.eventHandler(event)):
-              return false
+          if not (await app.dispatchEventAsync(event)):
+            return false
 
           # Window manager event handling
           if app.windowMode and not app.windowManager.isNil:
@@ -301,6 +336,54 @@ proc runAsync*(app: AsyncApp, config: AppConfig = DefaultAppConfig) {.async.} =
 proc quitAsync*(app: AsyncApp) {.async.} =
   ## Signal the async application to quit gracefully
   app.running = false
+
+# Suspend/Resume for shell command execution
+proc suspendAsync*(app: AsyncApp) {.async.} =
+  ## Temporarily suspend the TUI, restoring normal terminal mode.
+  ##
+  ## Use this to run shell commands or interact with the terminal normally.
+  ## Call `resumeAsync()` to return to TUI mode.
+  ##
+  ## Example:
+  ## ```nim
+  ## await app.suspendAsync()
+  ## discard execShellCmd("vim myfile.txt")
+  ## await app.resumeAsync()
+  ## ```
+  await app.terminal.suspendAsync()
+
+proc resumeAsync*(app: AsyncApp) {.async.} =
+  ## Resume the TUI after a `suspendAsync()` call.
+  ##
+  ## Restores terminal state and forces a full redraw on the next frame.
+  await app.terminal.resumeAsync()
+  app.forceNextRender = true
+
+proc isSuspended*(app: AsyncApp): bool =
+  ## Check if the application is currently suspended
+  app.terminal.isSuspended
+
+template withSuspendAsync*(app: AsyncApp, body: untyped) =
+  ## Suspend the TUI, execute body, then resume.
+  ##
+  ## This is the recommended way to run shell commands as it ensures
+  ## `resumeAsync()` is always called, even if an exception occurs.
+  ##
+  ## Note: The body should be synchronous code (like execShellCmd).
+  ## For async operations, use suspendAsync/resumeAsync directly.
+  ##
+  ## Example:
+  ## ```nim
+  ## app.withSuspendAsync:
+  ##   let exitCode = execShellCmd("git commit")
+  ##   echo "Press Enter to continue..."
+  ##   discard stdin.readLine()
+  ## ```
+  await app.suspendAsync()
+  try:
+    body
+  finally:
+    await app.resumeAsync()
 
 # Window Management Integration
 

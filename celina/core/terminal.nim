@@ -378,6 +378,10 @@ proc cleanup*(terminal: Terminal) =
   terminal.disableRawMode()
   terminal.disableAlternateScreen()
 
+proc isSuspended*(terminal: Terminal): bool =
+  ## Check if terminal is currently suspended
+  terminal.suspendState.isSuspended
+
 proc suspend*(terminal: Terminal) =
   ## Suspend terminal to return to shell mode temporarily
   ##
