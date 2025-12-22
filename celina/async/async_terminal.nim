@@ -194,6 +194,10 @@ proc cleanupAsync*(terminal: AsyncTerminal) {.async.} =
   # AsyncFD cleanup is handled automatically by Chronos
   # No manual unregistration needed
 
+proc isSuspended*(terminal: AsyncTerminal): bool =
+  ## Check if terminal is currently suspended
+  terminal.suspendState.isSuspended
+
 proc suspendAsync*(terminal: AsyncTerminal) {.async.} =
   ## Suspend terminal to return to shell mode temporarily
   ##
