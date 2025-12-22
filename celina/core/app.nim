@@ -19,6 +19,7 @@ type App* = ref object ## Main application context for CLI applications
   windowManager: WindowManager
   shouldQuit: bool
   eventHandler: proc(event: Event): bool
+  eventHandlerWithApp: proc(event: Event, app: App): bool
   renderHandler: proc(buffer: var Buffer)
   windowMode: bool
   config: AppConfig
@@ -34,6 +35,7 @@ proc newApp*(config: AppConfig = DefaultAppConfig): App =
     fpsMonitor: newFpsMonitor(if config.targetFps > 0: config.targetFps else: 60),
     shouldQuit: false,
     eventHandler: nil,
+    eventHandlerWithApp: nil,
     renderHandler: nil,
     windowMode: config.windowMode,
     config: config,
@@ -48,7 +50,31 @@ proc newApp*(config: AppConfig = DefaultAppConfig): App =
 # Event and render handlers
 proc onEvent*(app: App, handler: proc(event: Event): bool) =
   ## Set the event handler for the application
+  ##
+  ## For access to the App object (e.g., for suspend/resume), use the
+  ## overload that accepts `proc(event: Event, app: App): bool` instead.
   app.eventHandler = handler
+  app.eventHandlerWithApp = nil
+
+proc onEvent*(app: App, handler: proc(event: Event, app: App): bool) =
+  ## Set the event handler with App context for the application
+  ##
+  ## This overload provides access to the App object, enabling features like
+  ## suspend/resume for shell command execution.
+  ##
+  ## Example:
+  ## ```nim
+  ## app.onEvent proc(event: Event, app: App): bool =
+  ##   if event.kind == Key and event.key.char == "!":
+  ##     app.withSuspend:
+  ##       discard execShellCmd("ls -la")
+  ##       echo "Press Enter..."
+  ##       discard stdin.readLine()
+  ##     return true
+  ##   return true
+  ## ```
+  app.eventHandlerWithApp = handler
+  app.eventHandler = nil
 
 proc onRender*(app: App, handler: proc(buffer: var Buffer)) =
   ## Set the render handler for the application
@@ -115,6 +141,15 @@ proc render(app: App) =
   else:
     app.renderer.render()
 
+proc dispatchEvent(app: App, event: Event): bool =
+  ## Helper to dispatch event to the appropriate handler
+  if app.eventHandlerWithApp != nil:
+    app.eventHandlerWithApp(event, app)
+  elif app.eventHandler != nil:
+    app.eventHandler(event)
+  else:
+    true
+
 proc tick(app: App): bool =
   ## Process one application tick (events + render).
   ##
@@ -136,9 +171,8 @@ proc tick(app: App): bool =
       app.handleResize()
 
       # Pass resize event to user handler
-      if app.eventHandler != nil:
-        if not app.eventHandler(resizeEvent):
-          return false
+      if not app.dispatchEvent(resizeEvent):
+        return false
 
     # Calculate remaining time until next render (used as poll timeout)
     let remainingTime = app.fpsMonitor.getRemainingFrameTime()
@@ -154,9 +188,8 @@ proc tick(app: App): bool =
           eventCount.inc()
 
           # User event handler first
-          if app.eventHandler != nil:
-            if not app.eventHandler(event):
-              return false
+          if not app.dispatchEvent(event):
+            return false
 
           # Window manager event handling
           if app.windowMode and not app.windowManager.isNil:
@@ -208,6 +241,51 @@ proc run*(app: App) =
 proc quit*(app: App) =
   ## Signal the application to quit gracefully
   app.shouldQuit = true
+
+# Suspend/Resume for shell command execution
+proc suspend*(app: App) =
+  ## Temporarily suspend the TUI, restoring normal terminal mode.
+  ##
+  ## Use this to run shell commands or interact with the terminal normally.
+  ## Call `resume()` to return to TUI mode.
+  ##
+  ## Example:
+  ## ```nim
+  ## app.suspend()
+  ## discard execShellCmd("vim myfile.txt")
+  ## app.resume()
+  ## ```
+  app.terminal.suspend()
+
+proc resume*(app: App) =
+  ## Resume the TUI after a `suspend()` call.
+  ##
+  ## Restores terminal state and forces a full redraw on the next frame.
+  app.terminal.resume()
+  app.forceNextRender = true
+
+proc isSuspended*(app: App): bool =
+  ## Check if the application is currently suspended
+  app.terminal.isSuspended
+
+template withSuspend*(app: App, body: untyped) =
+  ## Suspend the TUI, execute body, then resume.
+  ##
+  ## This is the recommended way to run shell commands as it ensures
+  ## `resume()` is always called, even if an exception occurs.
+  ##
+  ## Example:
+  ## ```nim
+  ## app.withSuspend:
+  ##   let exitCode = execShellCmd("git commit")
+  ##   echo "Press Enter to continue..."
+  ##   discard stdin.readLine()
+  ## ```
+  app.suspend()
+  try:
+    body
+  finally:
+    app.resume()
 
 # FPS control delegation
 proc setTargetFps*(app: App, fps: int) =
