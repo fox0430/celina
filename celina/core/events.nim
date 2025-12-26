@@ -68,7 +68,7 @@ proc toEvent(data: mouse_logic.MouseEventData): Event =
   )
 
 proc parseMouseEventX10(): Event =
-  ## Parse X10 mouse format: ESC[Mbxy
+  ## Parse X10 mouse format: ESC[Mbxy (blocking mode)
   ## where b is button byte, x,y are coordinate bytes
   ##
   ## This function handles I/O and delegates parsing to shared mouse_logic module
@@ -81,7 +81,7 @@ proc parseMouseEventX10(): Event =
   return Event(kind: Unknown)
 
 proc parseMouseEventSGR(): Event =
-  ## Parse SGR mouse format: ESC[<button;x;y;M/m
+  ## Parse SGR mouse format: ESC[<button;x;y;M/m (blocking mode)
   ## M for press, m for release
   ##
   ## This function handles I/O and delegates parsing to shared mouse_logic module
@@ -400,6 +400,90 @@ proc readByteNonBlocking(fd: cint): tuple[success: bool, ch: char, isTimeout: bo
   else:
     return (false, '\0', false)
 
+# Non-blocking mouse event parsing
+
+proc parseMouseEventX10NonBlocking(): Option[Event] =
+  ## Parse X10 mouse format: ESC[Mbxy (non-blocking mode)
+  ## where b is button byte, x,y are coordinate bytes
+  ##
+  ## Uses non-blocking I/O with select() to wait for complete sequence
+  var data: array[3, char]
+
+  for i in 0 .. 2:
+    # Use select with timeout to wait for data
+    var readSet: TFdSet
+    FD_ZERO(readSet)
+    FD_SET(STDIN_FILENO, readSet)
+    var timeout = Timeval(tv_sec: Time(0), tv_usec: Suseconds(50000)) # 50ms per byte
+
+    let selectResult = select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout)
+    if selectResult <= 0:
+      # Timeout or error - incomplete sequence
+      return some(Event(kind: Unknown))
+
+    let readResult = readByteNonBlocking(STDIN_FILENO)
+    if not readResult.success:
+      return some(Event(kind: Unknown))
+
+    data[i] = readResult.ch
+
+  # Use shared parsing logic - no duplication with async version!
+  return some(parseMouseDataX10(data).toEvent())
+
+proc parseMouseEventSGRNonBlocking(): Option[Event] =
+  ## Parse SGR mouse format: ESC[<button;x;y;M/m (non-blocking mode)
+  ## M for press, m for release
+  ##
+  ## Uses non-blocking I/O with select() to wait for complete sequence
+  var buffer: string
+  var ch: char
+  var readCount = 0
+  const maxReadCount = 20 # Prevent infinite loops
+
+  # Read until we get M or m, with safety limits
+  while readCount < maxReadCount:
+    # Use select with timeout to wait for data
+    var readSet: TFdSet
+    FD_ZERO(readSet)
+    FD_SET(STDIN_FILENO, readSet)
+    var timeout = Timeval(tv_sec: Time(0), tv_usec: Suseconds(50000)) # 50ms per byte
+
+    let selectResult = select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout)
+    if selectResult <= 0:
+      # Timeout or error - incomplete sequence
+      return some(Event(kind: Unknown))
+
+    let readResult = readByteNonBlocking(STDIN_FILENO)
+    if not readResult.success:
+      return some(Event(kind: Unknown))
+
+    ch = readResult.ch
+    readCount.inc()
+
+    if ch == 'M' or ch == 'm':
+      break
+    buffer.add(ch)
+
+  # If we didn't find a terminator, return unknown event
+  if readCount >= maxReadCount or (ch != 'M' and ch != 'm'):
+    return some(Event(kind: Unknown))
+
+  # Parse the SGR format: button;x;y
+  let parts = buffer.split(';')
+  if parts.len >= 3:
+    try:
+      let buttonCode = parseInt(parts[0])
+      let x = parseInt(parts[1]) - 1 # SGR uses 1-based coordinates
+      let y = parseInt(parts[2]) - 1
+      let isRelease = (ch == 'm')
+
+      # Use shared parsing logic - no duplication with async version!
+      return some(parseMouseDataSGR(buttonCode, x, y, isRelease).toEvent())
+    except ValueError:
+      return some(Event(kind: Unknown))
+
+  return some(Event(kind: Unknown))
+
 # Escape sequence parsing helpers (ordered by dependencies)
 
 proc parseEscapeSequenceVT100(): Option[Event] =
@@ -442,7 +526,7 @@ proc parseNumericKeySequence(digit: char): Option[Event] =
     return some(Event(kind: Key, key: escapeKey()))
 
 proc parseEscapeSequenceBracket(): Option[Event] =
-  ## Parse ESC [ sequences (CSI sequences)
+  ## Parse ESC [ sequences (CSI sequences) (non-blocking mode)
   let finalResult = readByteNonBlocking(STDIN_FILENO)
   let seqKind = classifyBracketSequence(finalResult.ch)
 
@@ -451,9 +535,9 @@ proc parseEscapeSequenceBracket(): Option[Event] =
     let parseResult = processSimpleBracketSequence(finalResult.ch, finalResult.success)
     return some(Event(kind: Key, key: parseResult.keyEvent))
   of BskMouseX10:
-    return some(parseMouseEventX10())
+    return parseMouseEventX10NonBlocking()
   of BskMouseSGR:
-    return some(parseMouseEventSGR())
+    return parseMouseEventSGRNonBlocking()
   of BskNumeric:
     return parseNumericKeySequence(finalResult.ch)
   of BskInvalid:
