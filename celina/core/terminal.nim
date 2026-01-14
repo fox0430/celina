@@ -14,6 +14,7 @@ type Terminal* = ref object ## Terminal interface for screen management
   alternateScreen*: bool
   rawMode*: bool
   mouseEnabled*: bool
+  bracketedPasteEnabled*: bool
   lastBuffer*: Buffer
   rawModeEnabled: bool # Track raw mode state internally
   originalTermios: Termios # Store original terminal settings per instance
@@ -192,6 +193,19 @@ proc disableMouse*(terminal: Terminal) =
     tryWrite(disableMouseMode(MouseSGR))
     terminal.mouseEnabled = false
 
+# Bracketed paste mode control
+proc enableBracketedPaste*(terminal: Terminal) =
+  ## Enable bracketed paste mode for paste detection
+  if not terminal.bracketedPasteEnabled:
+    tryWrite(BracketedPasteEnable)
+    terminal.bracketedPasteEnabled = true
+
+proc disableBracketedPaste*(terminal: Terminal) =
+  ## Disable bracketed paste mode
+  if terminal.bracketedPasteEnabled:
+    tryWrite(BracketedPasteDisable)
+    terminal.bracketedPasteEnabled = false
+
 # Cursor control
 proc hideCursor*() =
   ## Hide the cursor
@@ -366,6 +380,25 @@ proc setupWithMouse*(terminal: Terminal) =
   except CatchableError as e:
     raise newTerminalError("Failed to setup terminal with mouse: " & e.msg)
 
+proc setupWithPaste*(terminal: Terminal) =
+  ## Setup terminal for CLI mode with bracketed paste support
+  ## Raises TerminalError if setup fails
+  try:
+    terminal.setup()
+    terminal.enableBracketedPaste()
+  except CatchableError as e:
+    raise newTerminalError("Failed to setup terminal with paste: " & e.msg)
+
+proc setupWithMouseAndPaste*(terminal: Terminal) =
+  ## Setup terminal for CLI mode with mouse and bracketed paste support
+  ## Raises TerminalError if setup fails
+  try:
+    terminal.setup()
+    terminal.enableMouse()
+    terminal.enableBracketedPaste()
+  except CatchableError as e:
+    raise newTerminalError("Failed to setup terminal with mouse and paste: " & e.msg)
+
 proc cleanup*(terminal: Terminal) =
   ## Cleanup terminal, restoring original settings
   ## Best effort - tries to restore everything even if some operations fail
@@ -374,6 +407,7 @@ proc cleanup*(terminal: Terminal) =
   except CatchableError:
     discard
 
+  terminal.disableBracketedPaste()
   terminal.disableMouse()
   terminal.disableRawMode()
   terminal.disableAlternateScreen()
@@ -401,12 +435,14 @@ proc suspend*(terminal: Terminal) =
   terminal.suspendState.suspendedRawMode = terminal.rawModeEnabled
   terminal.suspendState.suspendedAlternateScreen = terminal.alternateScreen
   terminal.suspendState.suspendedMouseEnabled = terminal.mouseEnabled
+  terminal.suspendState.suspendedBracketedPaste = terminal.bracketedPasteEnabled
 
   # Return to shell mode
   try:
     showCursor()
   except CatchableError:
     discard
+  terminal.disableBracketedPaste()
   terminal.disableMouse()
   terminal.disableRawMode()
   terminal.disableAlternateScreen()

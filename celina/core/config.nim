@@ -7,6 +7,7 @@ type AppConfig* = object ## Application configuration options
   title*: string ## Application title (for window managers)
   alternateScreen*: bool ## Use alternate screen buffer
   mouseCapture*: bool ## Enable mouse event capture
+  bracketedPaste*: bool ## Enable bracketed paste mode for paste detection
   rawMode*: bool ## Enable raw terminal mode (no line buffering)
   windowMode*: bool ## Enable window management
   targetFps*: int ## Target FPS for rendering (default: 60)
@@ -15,6 +16,7 @@ const DefaultAppConfig* = AppConfig(
   title: "Celina App",
   alternateScreen: true,
   mouseCapture: false,
+  bracketedPaste: false,
   rawMode: true,
   windowMode: false,
   targetFps: 60,
@@ -38,6 +40,11 @@ proc withMouseCapture*(config: AppConfig, enabled: bool): AppConfig {.inline.} =
   ## Return a new config with mouse capture setting
   result = config
   result.mouseCapture = enabled
+
+proc withBracketedPaste*(config: AppConfig, enabled: bool): AppConfig {.inline.} =
+  ## Return a new config with bracketed paste setting
+  result = config
+  result.bracketedPaste = enabled
 
 proc withRawMode*(config: AppConfig, enabled: bool): AppConfig {.inline.} =
   ## Return a new config with raw mode setting

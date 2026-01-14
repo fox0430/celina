@@ -33,6 +33,7 @@ type
     Key
     Mouse
     Resize
+    Paste
     Quit
     Unknown
 
@@ -49,6 +50,8 @@ type
       key*: KeyEvent
     of Mouse:
       mouse*: MouseEvent
+    of Paste:
+      pastedText*: string
     of Resize, Quit, Unknown:
       discard
 
@@ -140,11 +143,131 @@ proc parseEscapeSequenceVT100Blocking(): Event =
   let parseResult = processVT100FunctionKey(funcResult.ch, funcResult.success)
   return Event(kind: Key, key: parseResult.keyEvent)
 
+type PasteEndState = enum
+  ## State machine for detecting paste end sequence ESC[201~
+  PesNone # Not in sequence
+  PesEsc # Saw ESC
+  PesBracket # Saw ESC [
+  Pes2 # Saw ESC [ 2
+  Pes20 # Saw ESC [ 2 0
+  Pes201 # Saw ESC [ 2 0 1
+
+proc readPasteContentBlocking(): string =
+  ## Read all content until paste end sequence ESC[201~
+  ## Returns the pasted text (without the end sequence)
+  result = ""
+  var state = PesNone
+  var pendingBytes: string = ""
+
+  while true:
+    let readResult = readByteBlocking()
+    if not readResult.success:
+      # On read failure, return what we have
+      result.add(pendingBytes)
+      return
+
+    let ch = readResult.ch
+
+    case state
+    of PesNone:
+      if ch == '\x1b':
+        state = PesEsc
+        pendingBytes = $ch
+      else:
+        result.add(ch)
+    of PesEsc:
+      if ch == '[':
+        state = PesBracket
+        pendingBytes.add(ch)
+      elif ch == '\x1b':
+        # New potential sequence, flush previous ESC
+        result.add(pendingBytes)
+        pendingBytes = $ch
+        # state stays PesEsc
+      else:
+        # Not a sequence, flush pending and continue
+        result.add(pendingBytes)
+        result.add(ch)
+        pendingBytes = ""
+        state = PesNone
+    of PesBracket:
+      if ch == '2':
+        state = Pes2
+        pendingBytes.add(ch)
+      elif ch == '\x1b':
+        # New potential sequence, flush and restart
+        result.add(pendingBytes)
+        pendingBytes = $ch
+        state = PesEsc
+      else:
+        # Not paste end, flush pending
+        result.add(pendingBytes)
+        result.add(ch)
+        pendingBytes = ""
+        state = PesNone
+    of Pes2:
+      if ch == '0':
+        state = Pes20
+        pendingBytes.add(ch)
+      elif ch == '\x1b':
+        result.add(pendingBytes)
+        pendingBytes = $ch
+        state = PesEsc
+      else:
+        result.add(pendingBytes)
+        result.add(ch)
+        pendingBytes = ""
+        state = PesNone
+    of Pes20:
+      if ch == '1':
+        state = Pes201
+        pendingBytes.add(ch)
+      elif ch == '\x1b':
+        result.add(pendingBytes)
+        pendingBytes = $ch
+        state = PesEsc
+      else:
+        result.add(pendingBytes)
+        result.add(ch)
+        pendingBytes = ""
+        state = PesNone
+    of Pes201:
+      if ch == '~':
+        # Found paste end sequence ESC[201~
+        # Don't add pendingBytes or this char to result
+        return
+      elif ch == '\x1b':
+        result.add(pendingBytes)
+        pendingBytes = $ch
+        state = PesEsc
+      else:
+        result.add(pendingBytes)
+        result.add(ch)
+        pendingBytes = ""
+        state = PesNone
+
 proc parseMultiDigitFunctionKeyBlocking(firstDigit, secondDigit: char): Event =
-  ## Parse multi-digit function keys like ESC[15~ (blocking mode)
-  let tildeResult = readByteBlocking()
+  ## Parse multi-digit function keys like ESC[15~, ESC[200~, ESC[201~ (blocking mode)
+  let thirdResult = readByteBlocking()
+
+  # Check for 3-digit sequences (paste markers: 200~, 201~)
+  if thirdResult.success and thirdResult.ch in {'0' .. '9'}:
+    # This is a 3-digit sequence, read one more byte for the tilde
+    let tildeResult = readByteBlocking()
+    if tildeResult.success and tildeResult.ch == '~':
+      # Check for paste start: ESC[200~
+      if isPasteStartSequence(firstDigit, secondDigit, thirdResult.ch, '~'):
+        let pastedText = readPasteContentBlocking()
+        return Event(kind: Paste, pastedText: pastedText)
+      # Check for paste end (orphaned - shouldn't happen in normal flow)
+      if isPasteEndSequence(firstDigit, secondDigit, thirdResult.ch, '~'):
+        return Event(kind: Unknown)
+    # Unknown 3-digit sequence, return escape key
+    return Event(kind: Key, key: escapeKey())
+
+  # Standard 2-digit function key: ESC[15~
   let parseResult = processMultiDigitFunctionKey(
-    firstDigit, secondDigit, tildeResult.ch, tildeResult.success
+    firstDigit, secondDigit, thirdResult.ch, thirdResult.success
   )
   return Event(kind: Key, key: parseResult.keyEvent)
 
@@ -492,11 +615,131 @@ proc parseEscapeSequenceVT100(): Option[Event] =
   let parseResult = processVT100FunctionKey(funcResult.ch, funcResult.success)
   return some(Event(kind: Key, key: parseResult.keyEvent))
 
+proc readPasteContentNonBlocking(): Option[string] =
+  ## Read paste content in non-blocking mode until ESC[201~
+  ## Uses select() with timeout to wait for data
+  var resultStr = ""
+  var state = PesNone
+  var pendingBytes: string = ""
+
+  while true:
+    # Wait for data with reasonable timeout
+    var readSet: TFdSet
+    FD_ZERO(readSet)
+    FD_SET(STDIN_FILENO, readSet)
+    var timeout = Timeval(tv_sec: Time(1), tv_usec: Suseconds(0)) # 1 second max
+
+    let selectResult = select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout)
+    if selectResult <= 0:
+      # Timeout or error - return what we have
+      resultStr.add(pendingBytes)
+      return some(resultStr)
+
+    let readResult = readByteNonBlocking(STDIN_FILENO)
+    if not readResult.success:
+      resultStr.add(pendingBytes)
+      return some(resultStr)
+
+    let ch = readResult.ch
+
+    case state
+    of PesNone:
+      if ch == '\x1b':
+        state = PesEsc
+        pendingBytes = $ch
+      else:
+        resultStr.add(ch)
+    of PesEsc:
+      if ch == '[':
+        state = PesBracket
+        pendingBytes.add(ch)
+      elif ch == '\x1b':
+        # New potential sequence, flush previous ESC
+        resultStr.add(pendingBytes)
+        pendingBytes = $ch
+        # state stays PesEsc
+      else:
+        resultStr.add(pendingBytes)
+        resultStr.add(ch)
+        pendingBytes = ""
+        state = PesNone
+    of PesBracket:
+      if ch == '2':
+        state = Pes2
+        pendingBytes.add(ch)
+      elif ch == '\x1b':
+        resultStr.add(pendingBytes)
+        pendingBytes = $ch
+        state = PesEsc
+      else:
+        resultStr.add(pendingBytes)
+        resultStr.add(ch)
+        pendingBytes = ""
+        state = PesNone
+    of Pes2:
+      if ch == '0':
+        state = Pes20
+        pendingBytes.add(ch)
+      elif ch == '\x1b':
+        resultStr.add(pendingBytes)
+        pendingBytes = $ch
+        state = PesEsc
+      else:
+        resultStr.add(pendingBytes)
+        resultStr.add(ch)
+        pendingBytes = ""
+        state = PesNone
+    of Pes20:
+      if ch == '1':
+        state = Pes201
+        pendingBytes.add(ch)
+      elif ch == '\x1b':
+        resultStr.add(pendingBytes)
+        pendingBytes = $ch
+        state = PesEsc
+      else:
+        resultStr.add(pendingBytes)
+        resultStr.add(ch)
+        pendingBytes = ""
+        state = PesNone
+    of Pes201:
+      if ch == '~':
+        # Found paste end sequence ESC[201~
+        return some(resultStr)
+      elif ch == '\x1b':
+        resultStr.add(pendingBytes)
+        pendingBytes = $ch
+        state = PesEsc
+      else:
+        resultStr.add(pendingBytes)
+        resultStr.add(ch)
+        pendingBytes = ""
+        state = PesNone
+
 proc parseMultiDigitFunctionKey(firstDigit, secondDigit: char): Option[Event] =
-  ## Parse multi-digit function keys like ESC[15~
-  let tildeResult = readByteNonBlocking(STDIN_FILENO)
+  ## Parse multi-digit function keys like ESC[15~, ESC[200~, ESC[201~
+  let thirdResult = readByteNonBlocking(STDIN_FILENO)
+
+  # Check for 3-digit sequences (paste markers: 200~, 201~)
+  if thirdResult.success and thirdResult.ch in {'0' .. '9'}:
+    # This is a 3-digit sequence, read one more byte for the tilde
+    let tildeResult = readByteNonBlocking(STDIN_FILENO)
+    if tildeResult.success and tildeResult.ch == '~':
+      # Check for paste start: ESC[200~
+      if isPasteStartSequence(firstDigit, secondDigit, thirdResult.ch, '~'):
+        let pastedText = readPasteContentNonBlocking()
+        if pastedText.isSome:
+          return some(Event(kind: Paste, pastedText: pastedText.get))
+        return some(Event(kind: Unknown))
+      # Check for paste end (orphaned)
+      if isPasteEndSequence(firstDigit, secondDigit, thirdResult.ch, '~'):
+        return some(Event(kind: Unknown))
+    # Unknown 3-digit sequence
+    return some(Event(kind: Key, key: escapeKey()))
+
+  # Standard 2-digit function key: ESC[15~
   let parseResult = processMultiDigitFunctionKey(
-    firstDigit, secondDigit, tildeResult.ch, tildeResult.success
+    firstDigit, secondDigit, thirdResult.ch, thirdResult.success
   )
   return some(Event(kind: Key, key: parseResult.keyEvent))
 
