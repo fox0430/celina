@@ -14,6 +14,7 @@ type
     alternateScreen*: bool
     rawMode*: bool
     mouseEnabled*: bool
+    bracketedPasteEnabled*: bool
     lastBuffer*: Buffer
     stdinFd*: AsyncFD
     stdoutFd*: AsyncFD
@@ -83,6 +84,15 @@ proc enableMouse*(terminal: AsyncTerminal) =
 proc disableMouse*(terminal: AsyncTerminal) =
   ## Disable mouse reporting
   disableMouseImpl(terminal)
+
+# Bracketed paste control
+proc enableBracketedPaste*(terminal: AsyncTerminal) =
+  ## Enable bracketed paste mode for paste detection
+  enableBracketedPasteImpl(terminal)
+
+proc disableBracketedPaste*(terminal: AsyncTerminal) =
+  ## Disable bracketed paste mode
+  disableBracketedPasteImpl(terminal)
 
 # Async cursor control (using stdout for simplicity)
 proc hideCursor*() {.async.} =
@@ -184,9 +194,21 @@ proc setupWithMouseAsync*(terminal: AsyncTerminal) {.async.} =
   await terminal.setupAsync()
   terminal.enableMouse()
 
+proc setupWithPasteAsync*(terminal: AsyncTerminal) {.async.} =
+  ## Setup terminal for CLI mode with bracketed paste support asynchronously
+  await terminal.setupAsync()
+  terminal.enableBracketedPaste()
+
+proc setupWithMouseAndPasteAsync*(terminal: AsyncTerminal) {.async.} =
+  ## Setup terminal for CLI mode with mouse and bracketed paste support asynchronously
+  await terminal.setupAsync()
+  terminal.enableMouse()
+  terminal.enableBracketedPaste()
+
 proc cleanupAsync*(terminal: AsyncTerminal) {.async.} =
   ## Cleanup and restore terminal asynchronously
   await showCursor()
+  terminal.disableBracketedPaste()
   terminal.disableMouse()
   terminal.disableRawMode()
   terminal.disableAlternateScreen()
@@ -218,6 +240,7 @@ proc suspendAsync*(terminal: AsyncTerminal) {.async.} =
 
   # Return to shell mode
   await showCursor()
+  terminal.disableBracketedPaste()
   terminal.disableMouse()
   terminal.disableRawMode()
   terminal.disableAlternateScreen()

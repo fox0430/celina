@@ -43,6 +43,7 @@ type
     suspendedRawMode*: bool
     suspendedAlternateScreen*: bool
     suspendedMouseEnabled*: bool
+    suspendedBracketedPaste*: bool
 
 const
   # Screen control sequences
@@ -82,6 +83,10 @@ const
     MouseAll: ("\e[?1003h", "\e[?1003l"),
     MouseSGR: ("\e[?1006h", "\e[?1006l"),
   ]
+
+  # Bracketed paste mode sequences (DEC private mode 2004)
+  BracketedPasteEnable* = "\e[?2004h"
+  BracketedPasteDisable* = "\e[?2004l"
 
 proc makeCursorPositionSeq*(x, y: int): string {.inline.} =
   ## Generate ANSI sequence for cursor positioning (1-based)
@@ -460,6 +465,19 @@ template disableMouseImpl*(terminal: typed) =
     writeAndFlush(disableMouseMode(MouseSGR))
     terminal.mouseEnabled = false
 
+# Bracketed paste mode templates
+template enableBracketedPasteImpl*(terminal: typed) =
+  ## Common logic for enabling bracketed paste mode
+  if not terminal.bracketedPasteEnabled:
+    writeAndFlush(BracketedPasteEnable)
+    terminal.bracketedPasteEnabled = true
+
+template disableBracketedPasteImpl*(terminal: typed) =
+  ## Common logic for disabling bracketed paste mode
+  if terminal.bracketedPasteEnabled:
+    writeAndFlush(BracketedPasteDisable)
+    terminal.bracketedPasteEnabled = false
+
 # Mouse Input Processing
 
 proc enableMouseMode*(mode: MouseMode): string =
@@ -647,6 +665,7 @@ template saveSuspendState*(terminal: typed) =
   terminal.suspendState.suspendedRawMode = terminal.rawMode
   terminal.suspendState.suspendedAlternateScreen = terminal.alternateScreen
   terminal.suspendState.suspendedMouseEnabled = terminal.mouseEnabled
+  terminal.suspendState.suspendedBracketedPaste = terminal.bracketedPasteEnabled
 
 template restoreSuspendedFeatures*(terminal: typed) =
   ## Restore terminal features from suspend state
@@ -656,6 +675,8 @@ template restoreSuspendedFeatures*(terminal: typed) =
     terminal.enableRawMode()
   if terminal.suspendState.suspendedMouseEnabled:
     terminal.enableMouse()
+  if terminal.suspendState.suspendedBracketedPaste:
+    terminal.enableBracketedPaste()
 
 template clearLastBufferForResume*(terminal: typed) =
   ## Clear lastBuffer to force full redraw after resume
