@@ -164,12 +164,133 @@ proc parseEscapeSequenceVT100Async(): Future[Event] {.async.} =
   let r = processVT100FunctionKey(funcKey, funcKey != '\0')
   return Event(kind: Key, key: r.keyEvent)
 
+type PasteEndStateAsync = enum
+  ## State machine for detecting paste end sequence ESC[201~
+  PesNoneAsync # Not in sequence
+  PesEscAsync # Saw ESC
+  PesBracketAsync # Saw ESC [
+  Pes2Async # Saw ESC [ 2
+  Pes20Async # Saw ESC [ 2 0
+  Pes201Async # Saw ESC [ 2 0 1
+
+proc readPasteContentAsync(): Future[string] {.async.} =
+  ## Read all content until paste end sequence ESC[201~ (async mode)
+  ## Returns the pasted text (without the end sequence)
+  var resultStr = ""
+  var state = PesNoneAsync
+  var pendingBytes: string = ""
+
+  while true:
+    # Check for data with reasonable timeout
+    let hasData = await hasInputAsync(1000) # 1 second timeout
+    if not hasData:
+      # Timeout - return what we have
+      resultStr.add(pendingBytes)
+      return resultStr
+
+    let ch = await readCharAsync()
+    if ch == '\0':
+      resultStr.add(pendingBytes)
+      return resultStr
+
+    case state
+    of PesNoneAsync:
+      if ch == '\x1b':
+        state = PesEscAsync
+        pendingBytes = $ch
+      else:
+        resultStr.add(ch)
+    of PesEscAsync:
+      if ch == '[':
+        state = PesBracketAsync
+        pendingBytes.add(ch)
+      elif ch == '\x1b':
+        # New potential sequence, flush previous ESC
+        resultStr.add(pendingBytes)
+        pendingBytes = $ch
+        # state stays PesEscAsync
+      else:
+        resultStr.add(pendingBytes)
+        resultStr.add(ch)
+        pendingBytes = ""
+        state = PesNoneAsync
+    of PesBracketAsync:
+      if ch == '2':
+        state = Pes2Async
+        pendingBytes.add(ch)
+      elif ch == '\x1b':
+        resultStr.add(pendingBytes)
+        pendingBytes = $ch
+        state = PesEscAsync
+      else:
+        resultStr.add(pendingBytes)
+        resultStr.add(ch)
+        pendingBytes = ""
+        state = PesNoneAsync
+    of Pes2Async:
+      if ch == '0':
+        state = Pes20Async
+        pendingBytes.add(ch)
+      elif ch == '\x1b':
+        resultStr.add(pendingBytes)
+        pendingBytes = $ch
+        state = PesEscAsync
+      else:
+        resultStr.add(pendingBytes)
+        resultStr.add(ch)
+        pendingBytes = ""
+        state = PesNoneAsync
+    of Pes20Async:
+      if ch == '1':
+        state = Pes201Async
+        pendingBytes.add(ch)
+      elif ch == '\x1b':
+        resultStr.add(pendingBytes)
+        pendingBytes = $ch
+        state = PesEscAsync
+      else:
+        resultStr.add(pendingBytes)
+        resultStr.add(ch)
+        pendingBytes = ""
+        state = PesNoneAsync
+    of Pes201Async:
+      if ch == '~':
+        # Found paste end sequence ESC[201~
+        return resultStr
+      elif ch == '\x1b':
+        resultStr.add(pendingBytes)
+        pendingBytes = $ch
+        state = PesEscAsync
+      else:
+        resultStr.add(pendingBytes)
+        resultStr.add(ch)
+        pendingBytes = ""
+        state = PesNoneAsync
+
 proc parseMultiDigitFunctionKeyAsync(
     firstDigit, secondDigit: char
 ): Future[Event] {.async.} =
-  ## Parse multi-digit function keys like ESC[15~ (async mode)
-  let tilde = await readCharAsync()
-  let r = processMultiDigitFunctionKey(firstDigit, secondDigit, tilde, tilde != '\0')
+  ## Parse multi-digit function keys like ESC[15~, ESC[200~, ESC[201~ (async mode)
+  let thirdChar = await readCharAsync()
+
+  # Check for 3-digit sequences (paste markers: 200~, 201~)
+  if thirdChar != '\0' and thirdChar in {'0' .. '9'}:
+    # This is a 3-digit sequence, read one more byte for the tilde
+    let tildeChar = await readCharAsync()
+    if tildeChar == '~':
+      # Check for paste start: ESC[200~
+      if isPasteStartSequence(firstDigit, secondDigit, thirdChar, '~'):
+        let pastedText = await readPasteContentAsync()
+        return Event(kind: Paste, pastedText: pastedText)
+      # Check for paste end (orphaned)
+      if isPasteEndSequence(firstDigit, secondDigit, thirdChar, '~'):
+        return Event(kind: Unknown)
+    # Unknown 3-digit sequence
+    return Event(kind: Key, key: escapeKey())
+
+  # Standard 2-digit function key: ESC[15~
+  let r =
+    processMultiDigitFunctionKey(firstDigit, secondDigit, thirdChar, thirdChar != '\0')
   return Event(kind: Key, key: r.keyEvent)
 
 proc parseModifiedKeySequenceAsync(digit: char): Future[Event] {.async.} =

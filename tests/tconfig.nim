@@ -10,6 +10,7 @@ suite "Config Module Tests":
       check DefaultAppConfig.title == "Celina App"
       check DefaultAppConfig.alternateScreen == true
       check DefaultAppConfig.mouseCapture == false
+      check DefaultAppConfig.bracketedPaste == false
       check DefaultAppConfig.rawMode == true
       check DefaultAppConfig.windowMode == false
       check DefaultAppConfig.targetFps == 60
@@ -47,6 +48,14 @@ suite "Config Module Tests":
     test "withMouseCapture disables mouse capture":
       let config = DefaultAppConfig.withMouseCapture(false)
       check config.mouseCapture == false
+
+    test "withBracketedPaste enables bracketed paste":
+      let config = DefaultAppConfig.withBracketedPaste(true)
+      check config.bracketedPaste == true
+
+    test "withBracketedPaste disables bracketed paste":
+      let config = DefaultAppConfig.withBracketedPaste(false)
+      check config.bracketedPaste == false
 
     test "withRawMode enables raw mode":
       let config = DefaultAppConfig.withRawMode(true)
@@ -95,6 +104,7 @@ suite "Config Module Tests":
         .withTitle("Full Config")
         .withAlternateScreen(false)
         .withMouseCapture(true)
+        .withBracketedPaste(true)
         .withRawMode(false)
         .withWindowMode(true)
         .withTargetFps(120)
@@ -102,6 +112,7 @@ suite "Config Module Tests":
       check config.title == "Full Config"
       check config.alternateScreen == false
       check config.mouseCapture == true
+      check config.bracketedPaste == true
       check config.rawMode == false
       check config.windowMode == true
       check config.targetFps == 120

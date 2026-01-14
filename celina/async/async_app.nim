@@ -153,6 +153,9 @@ proc setupAsync(app: AsyncApp, config: AppConfig) {.async.} =
   if config.mouseCapture:
     app.terminal.enableMouse()
 
+  if config.bracketedPaste:
+    app.terminal.enableBracketedPaste()
+
   await hideCursor()
   await clearScreen()
 
@@ -162,6 +165,9 @@ proc setupAsync(app: AsyncApp, config: AppConfig) {.async.} =
 proc cleanupAsync(app: AsyncApp, config: AppConfig) {.async.} =
   ## Internal async cleanup procedure to restore terminal state
   await showCursor()
+
+  if config.bracketedPaste:
+    app.terminal.disableBracketedPaste()
 
   if config.mouseCapture:
     app.terminal.disableMouse()

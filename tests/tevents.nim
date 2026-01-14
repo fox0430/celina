@@ -11,8 +11,9 @@ suite "Events Module Tests":
       check EventKind.Key.ord == 0
       check EventKind.Mouse.ord == 1
       check EventKind.Resize.ord == 2
-      check EventKind.Quit.ord == 3
-      check EventKind.Unknown.ord == 4
+      check EventKind.Paste.ord == 3
+      check EventKind.Quit.ord == 4
+      check EventKind.Unknown.ord == 5
 
   suite "KeyCode Tests":
     test "Basic key codes":

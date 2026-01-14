@@ -136,3 +136,13 @@ proc processSimpleBracketSequence*(final: char, isValid: bool): EscapeResult =
 proc processSingleDigitNumeric*(digit: char): EscapeResult =
   ## Process single digit numeric sequences: ESC[1~ (Home/Insert/Delete etc)
   EscapeResult(isValid: true, keyEvent: mapNumericKeyCode(digit))
+
+# Bracketed paste mode sequence detection
+
+proc isPasteStartSequence*(d1, d2, d3, final: char): bool {.inline.} =
+  ## Check if sequence is ESC[200~ (paste start)
+  d1 == '2' and d2 == '0' and d3 == '0' and final == '~'
+
+proc isPasteEndSequence*(d1, d2, d3, final: char): bool {.inline.} =
+  ## Check if sequence is ESC[201~ (paste end)
+  d1 == '2' and d2 == '0' and d3 == '1' and final == '~'
