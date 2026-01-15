@@ -108,11 +108,7 @@ proc isCursorVisible*(renderer: Renderer): bool =
 
 # Direct buffer operations
 proc setString*(
-    renderer: Renderer,
-    x, y: int,
-    text: string,
-    style: Style,
-    hyperlink: string = "",
+    renderer: Renderer, x, y: int, text: string, style: Style, hyperlink: string = ""
 ) =
   ## Set string directly in buffer
   ## If hyperlink is provided, the text becomes a clickable link (OSC 8)
