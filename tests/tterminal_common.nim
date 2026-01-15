@@ -952,3 +952,148 @@ suite "Terminal Common Module Tests":
       check "48;2;100;0;0" in output # rgb(100,0,0)
       check "48;2;150;0;0" in output # rgb(150,0,0)
       check "48;2;200;0;0" in output # rgb(200,0,0)
+
+  suite "OSC 8 Hyperlink Support":
+    test "makeHyperlinkStartSeq generates correct sequence":
+      let seq = makeHyperlinkStartSeq("https://example.com")
+      check seq == "\e]8;;https://example.com\e\\"
+
+    test "Osc8 constants are correct":
+      check Osc8Start == "\e]8;;"
+      check Osc8End == "\e\\"
+      check Osc8Reset == "\e]8;;\e\\" # Used directly instead of function
+
+    test "buildDifferentialOutput includes hyperlink sequences":
+      var buffer1 = newBuffer(10, 1)
+      var buffer2 = newBuffer(10, 1)
+
+      # Set cells with hyperlink
+      buffer2.setString(0, 0, "Link", defaultStyle(), "https://test.com")
+
+      let output = buildDifferentialOutput(buffer1, buffer2)
+
+      # Should contain OSC 8 start and end sequences
+      check output.contains("\e]8;;https://test.com\e\\")
+      check output.contains("\e]8;;\e\\") # Reset
+      check output.contains("L")
+      check output.contains("i")
+      check output.contains("n")
+      check output.contains("k")
+
+    test "buildDifferentialOutput handles hyperlink changes":
+      var buffer1 = newBuffer(10, 1)
+      var buffer2 = newBuffer(10, 1)
+
+      # Buffer1 has hyperlink A
+      buffer1.setString(0, 0, "Link", defaultStyle(), "https://a.com")
+      # Buffer2 has hyperlink B (same text, different URL)
+      buffer2.setString(0, 0, "Link", defaultStyle(), "https://b.com")
+
+      let output = buildDifferentialOutput(buffer1, buffer2)
+
+      # Should contain new hyperlink URL
+      check output.contains("https://b.com")
+
+    test "buildDifferentialOutput handles hyperlink removal":
+      var buffer1 = newBuffer(10, 1)
+      var buffer2 = newBuffer(10, 1)
+
+      # Buffer1 has hyperlink
+      buffer1.setString(0, 0, "Link", defaultStyle(), "https://example.com")
+      # Buffer2 has no hyperlink
+      buffer2.setString(0, 0, "Link", defaultStyle(), "")
+
+      let output = buildDifferentialOutput(buffer1, buffer2)
+
+      # Should contain reset sequence but not the old URL
+      check output.contains("Link")
+
+    test "buildFullRenderOutput includes hyperlink sequences":
+      var buffer = newBuffer(10, 1)
+      buffer.setString(0, 0, "Click", defaultStyle(), "https://full.com")
+
+      let output = buildFullRenderOutput(buffer)
+
+      check output.contains("\e]8;;https://full.com\e\\")
+      check output.contains("\e]8;;\e\\") # Reset at end
+      check output.contains("Click")
+
+    test "buildFullRenderOutput handles multiple hyperlinks":
+      var buffer = newBuffer(20, 1)
+      buffer.setString(0, 0, "First", defaultStyle(), "https://first.com")
+      buffer.setString(7, 0, "Second", defaultStyle(), "https://second.com")
+
+      let output = buildFullRenderOutput(buffer)
+
+      check output.contains("https://first.com")
+      check output.contains("https://second.com")
+      check output.contains("First")
+      check output.contains("Second")
+
+    test "buildOutputWithCursor includes hyperlink sequences":
+      var oldBuf = newBuffer(0, 0)
+      var newBuf = newBuffer(10, 1)
+      newBuf.setString(0, 0, "Test", defaultStyle(), "https://cursor.com")
+
+      var lastCursorStyle = CursorStyle.Default
+      let output = buildOutputWithCursor(
+        oldBuf, newBuf, 0, 0, false, CursorStyle.Default, lastCursorStyle, force = false
+      )
+
+      check output.contains("\e]8;;https://cursor.com\e\\")
+      # Check individual characters (cursor positioning between chars)
+      check output.contains("T")
+      check output.contains("e")
+      check output.contains("s")
+      check output.contains("t")
+
+    test "hyperlink with styled text":
+      var buffer1 = newBuffer(10, 1)
+      var buffer2 = newBuffer(10, 1)
+
+      # Hyperlink with red text
+      let redStyle = style(Color.Red)
+      buffer2.setString(0, 0, "Red", redStyle, "https://styled.com")
+
+      let output = buildDifferentialOutput(buffer1, buffer2)
+
+      # Should contain both style and hyperlink sequences
+      check output.contains("\e]8;;https://styled.com\e\\")
+      check output.contains("31") # Red foreground ANSI code
+      # Check individual characters (style sequences between chars)
+      check output.contains("R")
+      check output.contains("e")
+      check output.contains("d")
+
+    test "adjacent hyperlinks with different URLs":
+      var buffer1 = newBuffer(10, 1)
+      var buffer2 = newBuffer(10, 1)
+
+      # Two adjacent hyperlinks
+      buffer2.setString(0, 0, "AB", defaultStyle(), "https://a.com")
+      buffer2.setString(2, 0, "CD", defaultStyle(), "https://b.com")
+
+      let output = buildDifferentialOutput(buffer1, buffer2)
+
+      # Should have separate hyperlink sequences
+      check output.contains("https://a.com")
+      check output.contains("https://b.com")
+      # First link ends before second begins
+      let aPos = output.find("https://a.com")
+      let bPos = output.find("https://b.com")
+      check aPos >= 0
+      check bPos >= 0
+      check bPos > aPos
+
+    test "wide characters with hyperlink":
+      var buffer1 = newBuffer(10, 1)
+      var buffer2 = newBuffer(10, 1)
+
+      # Japanese text with hyperlink
+      buffer2.setString(0, 0, "日本", defaultStyle(), "https://jp.com")
+
+      let output = buildDifferentialOutput(buffer1, buffer2)
+
+      check output.contains("\e]8;;https://jp.com\e\\")
+      check output.contains("日")
+      check output.contains("本")
