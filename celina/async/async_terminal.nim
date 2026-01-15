@@ -115,6 +115,23 @@ proc disableSyncOutput*(terminal: AsyncTerminal) =
   ## Disable synchronized output mode, flushing buffered output
   disableSyncOutputImpl(terminal)
 
+# Window title control
+proc setWindowTitle*(title: string) {.async.} =
+  ## Set the terminal window title and icon name
+  ## Supported by almost all terminal emulators
+  stdout.write(makeWindowTitleSeq(title))
+  stdout.flushFile()
+
+proc setIconName*(name: string) {.async.} =
+  ## Set the terminal icon name only
+  stdout.write(makeIconNameSeq(name))
+  stdout.flushFile()
+
+proc setTitleOnly*(title: string) {.async.} =
+  ## Set the terminal window title only (not icon name)
+  stdout.write(makeTitleOnlySeq(title))
+  stdout.flushFile()
+
 # Async cursor control (using stdout for simplicity)
 proc hideCursor*() {.async.} =
   ## Hide the cursor asynchronously

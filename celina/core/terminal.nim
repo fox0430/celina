@@ -236,6 +236,20 @@ proc disableSyncOutput*(terminal: Terminal) =
     tryWrite(SyncOutputDisable)
     terminal.syncOutputEnabled = false
 
+# Window title control
+proc setWindowTitle*(title: string) =
+  ## Set the terminal window title and icon name
+  ## Supported by almost all terminal emulators
+  tryWrite(makeWindowTitleSeq(title))
+
+proc setIconName*(name: string) =
+  ## Set the terminal icon name only
+  tryWrite(makeIconNameSeq(name))
+
+proc setTitleOnly*(title: string) =
+  ## Set the terminal window title only (not icon name)
+  tryWrite(makeTitleOnlySeq(title))
+
 # Cursor control
 proc hideCursor*() =
   ## Hide the cursor
