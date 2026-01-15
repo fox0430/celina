@@ -48,6 +48,21 @@ suite "Terminal Common Module Tests":
       check FocusEventsEnable == "\e[?1004h"
       check FocusEventsDisable == "\e[?1004l"
 
+    test "Synchronized output sequences":
+      check SyncOutputEnable == "\e[?2026h"
+      check SyncOutputDisable == "\e[?2026l"
+
+    test "wrapWithSyncOutput wraps output correctly":
+      let output = "test output"
+      let wrapped = wrapWithSyncOutput(output)
+      check wrapped == "\e[?2026h" & output & "\e[?2026l"
+      check wrapped.startsWith(SyncOutputEnable)
+      check wrapped.endsWith(SyncOutputDisable)
+
+    test "wrapWithSyncOutput handles empty output":
+      let wrapped = wrapWithSyncOutput("")
+      check wrapped == ""
+
   suite "Cursor Support":
     test "CursorState initialization":
       var state = CursorState(x: -1, y: -1, visible: false, style: CursorStyle.Default)
