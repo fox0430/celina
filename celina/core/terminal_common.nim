@@ -107,6 +107,31 @@ const
   Osc8End* = "\e\\"
   Osc8Reset* = "\e]8;;\e\\" # Reset hyperlink (no URL)
 
+  # OSC Window Title sequences
+  # OSC 0: Set window title and icon name
+  # OSC 1: Set icon name only
+  # OSC 2: Set window title only
+  # Supported by: Almost all terminal emulators
+  OscWindowTitleStart* = "\e]0;"
+  OscIconNameStart* = "\e]1;"
+  OscTitleOnlyStart* = "\e]2;"
+  OscTerminator* = "\a" # BEL character as terminator (widely supported)
+
+proc makeWindowTitleSeq*(title: string): string {.inline.} =
+  ## Generate OSC sequence to set window title and icon name
+  ## Format: \e]0;title\a
+  OscWindowTitleStart & title & OscTerminator
+
+proc makeIconNameSeq*(name: string): string {.inline.} =
+  ## Generate OSC sequence to set icon name only
+  ## Format: \e]1;name\a
+  OscIconNameStart & name & OscTerminator
+
+proc makeTitleOnlySeq*(title: string): string {.inline.} =
+  ## Generate OSC sequence to set window title only (not icon name)
+  ## Format: \e]2;title\a
+  OscTitleOnlyStart & title & OscTerminator
+
 proc makeHyperlinkStartSeq*(url: string): string {.inline.} =
   ## Generate OSC 8 hyperlink start sequence
   ## Format: \e]8;;URL\e\\

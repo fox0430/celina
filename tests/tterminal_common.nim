@@ -1097,3 +1097,37 @@ suite "Terminal Common Module Tests":
       check output.contains("\e]8;;https://jp.com\e\\")
       check output.contains("日")
       check output.contains("本")
+
+  suite "OSC Window Title Support":
+    test "Window title constants are correct":
+      check OscWindowTitleStart == "\e]0;"
+      check OscIconNameStart == "\e]1;"
+      check OscTitleOnlyStart == "\e]2;"
+      check OscTerminator == "\a"
+
+    test "makeWindowTitleSeq generates correct sequence":
+      let seq = makeWindowTitleSeq("My App")
+      check seq == "\e]0;My App\a"
+
+    test "makeIconNameSeq generates correct sequence":
+      let seq = makeIconNameSeq("app-icon")
+      check seq == "\e]1;app-icon\a"
+
+    test "makeTitleOnlySeq generates correct sequence":
+      let seq = makeTitleOnlySeq("Window Title")
+      check seq == "\e]2;Window Title\a"
+
+    test "Window title with special characters":
+      # Test with various characters that might appear in titles
+      check makeWindowTitleSeq("file.nim [modified]") == "\e]0;file.nim [modified]\a"
+      check makeWindowTitleSeq("build [=====>    ] 50%") == "\e]0;build [=====>    ] 50%\a"
+      check makeWindowTitleSeq("(3) messages") == "\e]0;(3) messages\a"
+
+    test "Window title with Unicode":
+      check makeWindowTitleSeq("日本語タイトル") == "\e]0;日本語タイトル\a"
+      check makeWindowTitleSeq("émoji 🎉") == "\e]0;émoji 🎉\a"
+
+    test "Empty window title":
+      check makeWindowTitleSeq("") == "\e]0;\a"
+      check makeIconNameSeq("") == "\e]1;\a"
+      check makeTitleOnlySeq("") == "\e]2;\a"
