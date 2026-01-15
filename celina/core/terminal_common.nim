@@ -44,6 +44,7 @@ type
     suspendedAlternateScreen*: bool
     suspendedMouseEnabled*: bool
     suspendedBracketedPaste*: bool
+    suspendedFocusEvents*: bool
 
 const
   # Screen control sequences
@@ -87,6 +88,10 @@ const
   # Bracketed paste mode sequences (DEC private mode 2004)
   BracketedPasteEnable* = "\e[?2004h"
   BracketedPasteDisable* = "\e[?2004l"
+
+  # Focus events sequences (DEC private mode 1004)
+  FocusEventsEnable* = "\e[?1004h"
+  FocusEventsDisable* = "\e[?1004l"
 
 proc makeCursorPositionSeq*(x, y: int): string {.inline.} =
   ## Generate ANSI sequence for cursor positioning (1-based)
@@ -478,6 +483,19 @@ template disableBracketedPasteImpl*(terminal: typed) =
     writeAndFlush(BracketedPasteDisable)
     terminal.bracketedPasteEnabled = false
 
+# Focus events templates
+template enableFocusEventsImpl*(terminal: typed) =
+  ## Common logic for enabling focus events
+  if not terminal.focusEventsEnabled:
+    writeAndFlush(FocusEventsEnable)
+    terminal.focusEventsEnabled = true
+
+template disableFocusEventsImpl*(terminal: typed) =
+  ## Common logic for disabling focus events
+  if terminal.focusEventsEnabled:
+    writeAndFlush(FocusEventsDisable)
+    terminal.focusEventsEnabled = false
+
 # Mouse Input Processing
 
 proc enableMouseMode*(mode: MouseMode): string =
@@ -666,6 +684,7 @@ template saveSuspendState*(terminal: typed) =
   terminal.suspendState.suspendedAlternateScreen = terminal.alternateScreen
   terminal.suspendState.suspendedMouseEnabled = terminal.mouseEnabled
   terminal.suspendState.suspendedBracketedPaste = terminal.bracketedPasteEnabled
+  terminal.suspendState.suspendedFocusEvents = terminal.focusEventsEnabled
 
 template restoreSuspendedFeatures*(terminal: typed) =
   ## Restore terminal features from suspend state
@@ -677,6 +696,8 @@ template restoreSuspendedFeatures*(terminal: typed) =
     terminal.enableMouse()
   if terminal.suspendState.suspendedBracketedPaste:
     terminal.enableBracketedPaste()
+  if terminal.suspendState.suspendedFocusEvents:
+    terminal.enableFocusEvents()
 
 template clearLastBufferForResume*(terminal: typed) =
   ## Clear lastBuffer to force full redraw after resume

@@ -11,6 +11,7 @@ suite "Config Module Tests":
       check DefaultAppConfig.alternateScreen == true
       check DefaultAppConfig.mouseCapture == false
       check DefaultAppConfig.bracketedPaste == false
+      check DefaultAppConfig.focusEvents == false
       check DefaultAppConfig.rawMode == true
       check DefaultAppConfig.windowMode == false
       check DefaultAppConfig.targetFps == 60
@@ -56,6 +57,14 @@ suite "Config Module Tests":
     test "withBracketedPaste disables bracketed paste":
       let config = DefaultAppConfig.withBracketedPaste(false)
       check config.bracketedPaste == false
+
+    test "withFocusEvents enables focus events":
+      let config = DefaultAppConfig.withFocusEvents(true)
+      check config.focusEvents == true
+
+    test "withFocusEvents disables focus events":
+      let config = DefaultAppConfig.withFocusEvents(false)
+      check config.focusEvents == false
 
     test "withRawMode enables raw mode":
       let config = DefaultAppConfig.withRawMode(true)
@@ -105,6 +114,7 @@ suite "Config Module Tests":
         .withAlternateScreen(false)
         .withMouseCapture(true)
         .withBracketedPaste(true)
+        .withFocusEvents(true)
         .withRawMode(false)
         .withWindowMode(true)
         .withTargetFps(120)
@@ -113,6 +123,7 @@ suite "Config Module Tests":
       check config.alternateScreen == false
       check config.mouseCapture == true
       check config.bracketedPaste == true
+      check config.focusEvents == true
       check config.rawMode == false
       check config.windowMode == true
       check config.targetFps == 120
