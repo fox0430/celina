@@ -1120,7 +1120,8 @@ suite "Terminal Common Module Tests":
     test "Window title with special characters":
       # Test with various characters that might appear in titles
       check makeWindowTitleSeq("file.nim [modified]") == "\e]0;file.nim [modified]\a"
-      check makeWindowTitleSeq("build [=====>    ] 50%") == "\e]0;build [=====>    ] 50%\a"
+      check makeWindowTitleSeq("build [=====>    ] 50%") ==
+        "\e]0;build [=====>    ] 50%\a"
       check makeWindowTitleSeq("(3) messages") == "\e]0;(3) messages\a"
 
     test "Window title with Unicode":
