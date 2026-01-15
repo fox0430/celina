@@ -45,6 +45,7 @@ type
     suspendedMouseEnabled*: bool
     suspendedBracketedPaste*: bool
     suspendedFocusEvents*: bool
+    suspendedSyncOutput*: bool
 
 const
   # Screen control sequences
@@ -92,6 +93,12 @@ const
   # Focus events sequences (DEC private mode 1004)
   FocusEventsEnable* = "\e[?1004h"
   FocusEventsDisable* = "\e[?1004l"
+
+  # Synchronized Output sequences (DEC private mode 2026)
+  # Prevents flickering by buffering output until mode is disabled
+  # Supported by: Kitty, WezTerm, foot, Contour, mintty, etc.
+  SyncOutputEnable* = "\e[?2026h"
+  SyncOutputDisable* = "\e[?2026l"
 
 proc makeCursorPositionSeq*(x, y: int): string {.inline.} =
   ## Generate ANSI sequence for cursor positioning (1-based)
@@ -496,6 +503,26 @@ template disableFocusEventsImpl*(terminal: typed) =
     writeAndFlush(FocusEventsDisable)
     terminal.focusEventsEnabled = false
 
+# Synchronized output templates
+template enableSyncOutputImpl*(terminal: typed) =
+  ## Common logic for enabling synchronized output
+  if not terminal.syncOutputEnabled:
+    writeAndFlush(SyncOutputEnable)
+    terminal.syncOutputEnabled = true
+
+template disableSyncOutputImpl*(terminal: typed) =
+  ## Common logic for disabling synchronized output
+  if terminal.syncOutputEnabled:
+    writeAndFlush(SyncOutputDisable)
+    terminal.syncOutputEnabled = false
+
+proc wrapWithSyncOutput*(output: string): string =
+  ## Wrap output string with synchronized output sequences
+  ## This prevents flickering by buffering terminal output
+  if output.len == 0:
+    return ""
+  SyncOutputEnable & output & SyncOutputDisable
+
 # Mouse Input Processing
 
 proc enableMouseMode*(mode: MouseMode): string =
@@ -685,6 +712,7 @@ template saveSuspendState*(terminal: typed) =
   terminal.suspendState.suspendedMouseEnabled = terminal.mouseEnabled
   terminal.suspendState.suspendedBracketedPaste = terminal.bracketedPasteEnabled
   terminal.suspendState.suspendedFocusEvents = terminal.focusEventsEnabled
+  terminal.suspendState.suspendedSyncOutput = terminal.syncOutputEnabled
 
 template restoreSuspendedFeatures*(terminal: typed) =
   ## Restore terminal features from suspend state
@@ -698,6 +726,8 @@ template restoreSuspendedFeatures*(terminal: typed) =
     terminal.enableBracketedPaste()
   if terminal.suspendState.suspendedFocusEvents:
     terminal.enableFocusEvents()
+  if terminal.suspendState.suspendedSyncOutput:
+    terminal.enableSyncOutput()
 
 template clearLastBufferForResume*(terminal: typed) =
   ## Clear lastBuffer to force full redraw after resume
