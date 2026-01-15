@@ -98,9 +98,9 @@ proc quickRun*(
   app.onRender(renderHandler)
   app.run()
 
-# Async API (when Chronos is available)
+# Async API
 
-when hasAsyncSupport and hasChronos:
+when hasAsyncSupport:
   import celina/async/[async_app, async_terminal, async_buffer, async_events]
 
   export async_app, async_terminal, async_buffer, async_events

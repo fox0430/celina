@@ -162,7 +162,7 @@ suite "Celina Main Module Tests":
 
       check not app.isNil
 
-when hasAsyncSupport and hasChronos:
+when hasAsyncSupport:
   suite "Async API Tests":
     test "async app creation":
       let app = newAsyncApp()
@@ -180,18 +180,33 @@ when hasAsyncSupport and hasChronos:
       let app = newAsyncApp(config)
       check not app.isNil
 
-    test "async utility functions":
-      # Test asyncToSync utility (with a simple future)
-      proc simpleAsync(): Future[int] {.async.} =
-        return 42
+    test "async types are exported":
+      # This test ensures async types are available for both asyncdispatch and chronos
+      # Previously, async modules were only exported when hasChronos was true
+      check declared(AsyncApp)
+      check declared(newAsyncApp)
+      check declared(AsyncBuffer)
+      check declared(newAsyncBufferNoRM)
+      check declared(AsyncTerminal)
+      check declared(newAsyncTerminal)
 
-      let result = asyncToSync(simpleAsync())
-      check result == 42
+    when hasChronos:
+      test "async utility functions (chronos only)":
+        # Test asyncToSync utility (with a simple future)
+        proc simpleAsync(): Future[int] {.async.} =
+          return 42
+
+        let result = asyncToSync(simpleAsync())
+        check result == 42
 
   suite "Backend Configuration":
-    test "async backend is chronos when enabled":
+    test "async backend detection":
       check hasAsyncSupport
       check hasAsyncDispatch or hasChronos
+
+    test "exactly one async backend is active":
+      # Ensure only one backend is active at a time
+      check not (hasAsyncDispatch and hasChronos)
 
 suite "Integration Tests":
   test "quickRun function signature":
