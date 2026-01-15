@@ -11,6 +11,7 @@ type
   Cell* = object ## Represents a single character cell in the terminal
     symbol*: string # UTF-8 string to support Unicode
     style*: Style # Visual styling
+    hyperlink*: string # OSC 8 hyperlink URL (empty = no link)
 
   DirtyRegion* = object ## Tracks the rectangular region of changed cells
     isDirty*: bool # Whether any changes have been made
@@ -22,17 +23,23 @@ type
     content*: seq[seq[Cell]] # 2D grid of cells
     dirty*: DirtyRegion # Tracks changed region for optimized diff
 
-proc cell*(symbol: string = " ", style: Style = defaultStyle()): Cell {.inline.} =
+proc cell*(
+    symbol: string = " ", style: Style = defaultStyle(), hyperlink: string = ""
+): Cell {.inline.} =
   ## Create a new Cell
-  Cell(symbol: symbol, style: style)
+  Cell(symbol: symbol, style: style, hyperlink: hyperlink)
 
-proc cell*(symbol: char, style: Style = defaultStyle()): Cell {.inline.} =
+proc cell*(
+    symbol: char, style: Style = defaultStyle(), hyperlink: string = ""
+): Cell {.inline.} =
   ## Create a new Cell from a character
-  Cell(symbol: $symbol, style: style)
+  Cell(symbol: $symbol, style: style, hyperlink: hyperlink)
 
-proc cell*(symbol: Rune, style: Style = defaultStyle()): Cell {.inline.} =
+proc cell*(
+    symbol: Rune, style: Style = defaultStyle(), hyperlink: string = ""
+): Cell {.inline.} =
   ## Create a new Cell from a Rune
-  Cell(symbol: $symbol, style: style)
+  Cell(symbol: $symbol, style: style, hyperlink: hyperlink)
 
 # Cell utilities
 proc isEmpty*(cell: Cell): bool {.inline.} =
@@ -67,14 +74,16 @@ proc width*(cell: Cell): int =
 
 proc `==`*(a, b: Cell): bool {.inline.} =
   ## Compare two cells for equality
-  a.symbol == b.symbol and a.style == b.style
+  a.symbol == b.symbol and a.style == b.style and a.hyperlink == b.hyperlink
 
 proc `$`*(cell: Cell): string =
   ## String representation of Cell
-  if cell.style == defaultStyle():
-    &"Cell('{cell.symbol}')"
-  else:
-    &"Cell('{cell.symbol}', {cell.style})"
+  var parts: seq[string] = @[&"'{cell.symbol}'"]
+  if cell.style != defaultStyle():
+    parts.add($cell.style)
+  if cell.hyperlink.len > 0:
+    parts.add(&"hyperlink: \"{cell.hyperlink}\"")
+  &"Cell({parts.join(\", \")})"
 
 proc newBuffer*(area: Rect): Buffer {.inline.} =
   ## Create a new Buffer with the specified area
@@ -196,10 +205,15 @@ proc fill*(buffer: var Buffer, area: Rect, fillCell: Cell) =
   buffer.markDirtyRect(clippedArea)
 
 proc setString*(
-    buffer: var Buffer, x, y: int, text: string, style: Style = defaultStyle()
+    buffer: var Buffer,
+    x, y: int,
+    text: string,
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
 ) =
   ## Set a string starting at the given coordinates
   ## Handles Unicode characters and wide characters properly
+  ## If hyperlink is provided, the text becomes a clickable link (OSC 8)
   if text.len == 0:
     return
 
@@ -221,11 +235,12 @@ proc setString*(
         break
 
       if buffer.isValidPos(currentX, y):
-        buffer[currentX, y] = cell($rune, style)
+        buffer[currentX, y] = cell($rune, style, hyperlink)
 
         # For wide characters, mark the next cell as occupied (empty)
+        # Also inherit the hyperlink for proper link region handling
         if width == 2 and buffer.isValidPos(currentX + 1, y):
-          buffer[currentX + 1, y] = cell("", style)
+          buffer[currentX + 1, y] = cell("", style, hyperlink)
 
       currentX += width
 
@@ -241,15 +256,24 @@ proc setString*(
     return
 
 proc setString*(
-    buffer: var Buffer, pos: Position, text: string, style: Style = defaultStyle()
+    buffer: var Buffer,
+    pos: Position,
+    text: string,
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
 ) {.inline.} =
   ## Set a string starting at the given position
-  buffer.setString(pos.x, pos.y, text, style)
+  buffer.setString(pos.x, pos.y, text, style, hyperlink)
 
 proc setRunes*(
-    buffer: var Buffer, x, y: int, runes: seq[Rune], style: Style = defaultStyle()
+    buffer: var Buffer,
+    x, y: int,
+    runes: seq[Rune],
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
 ) =
   ## Set a sequence of runes starting at the given coordinates
+  ## If hyperlink is provided, the text becomes a clickable link (OSC 8)
   let startX = x
   var currentX = x
 
@@ -259,10 +283,11 @@ proc setRunes*(
       break
 
     if buffer.isValidPos(currentX, y):
-      buffer[currentX, y] = cell($rune, style)
+      buffer[currentX, y] = cell($rune, style, hyperlink)
       # For wide characters, mark the next cell as occupied (empty)
+      # Also inherit the hyperlink for proper link region handling
       if width == 2 and buffer.isValidPos(currentX + 1, y):
-        buffer[currentX + 1, y] = cell("", style)
+        buffer[currentX + 1, y] = cell("", style, hyperlink)
 
     currentX += width
 
@@ -272,22 +297,34 @@ proc setRunes*(
     buffer.markDirty(currentX - 1, y)
 
 proc setRunes*(
-    buffer: var Buffer, pos: Position, runes: seq[Rune], style: Style = defaultStyle()
+    buffer: var Buffer,
+    pos: Position,
+    runes: seq[Rune],
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
 ) {.inline.} =
   ## Set a sequence of runes starting at the given position
-  buffer.setRunes(pos.x, pos.y, runes, style)
+  buffer.setRunes(pos.x, pos.y, runes, style, hyperlink)
 
 proc setString*(
-    buffer: var Buffer, x, y: int, runes: seq[Rune], style: Style = defaultStyle()
+    buffer: var Buffer,
+    x, y: int,
+    runes: seq[Rune],
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
 ) {.inline.} =
   ## Alias for setRunes for convenience
-  buffer.setRunes(x, y, runes, style)
+  buffer.setRunes(x, y, runes, style, hyperlink)
 
 proc setString*(
-    buffer: var Buffer, pos: Position, runes: seq[Rune], style: Style = defaultStyle()
+    buffer: var Buffer,
+    pos: Position,
+    runes: seq[Rune],
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
 ) {.inline.} =
   ## Alias for setRunes for convenience
-  buffer.setRunes(pos, runes, style)
+  buffer.setRunes(pos, runes, style, hyperlink)
 
 proc resize*(buffer: var Buffer, newArea: Rect) =
   ## Resize the buffer to a new area

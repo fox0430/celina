@@ -107,6 +107,9 @@ proc isCursorVisible*(renderer: Renderer): bool =
   renderer.cursorManager.isVisible()
 
 # Direct buffer operations
-proc setString*(renderer: Renderer, x, y: int, text: string, style: Style) =
+proc setString*(
+    renderer: Renderer, x, y: int, text: string, style: Style, hyperlink: string = ""
+) =
   ## Set string directly in buffer
-  renderer.buffer.setString(x, y, text, style)
+  ## If hyperlink is provided, the text becomes a clickable link (OSC 8)
+  renderer.buffer.setString(x, y, text, style, hyperlink)
