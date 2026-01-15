@@ -75,6 +75,8 @@ jobs:
       - name: Build examples
         run: |
           nimble install
+
+          for f in examples/*.nim; do if [[ "$f" == *"async"* ]]; then nim c -d:asyncBackend=asyncdispatch "$f"; else nim c "$f"; fi; done
           for f in examples/*.nim; do if [[ "$f" == *"async"* ]]; then nim c -d:asyncBackend=chronos "$f"; else nim c "$f"; fi; done
 
           nimble uninstall celina -y
