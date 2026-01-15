@@ -563,3 +563,79 @@ suite "Buffer Module Tests":
       # Destination should now be dirty
       check(destBuf.dirty.isDirty)
       check(destBuf.getDirtyRegionSize() > 0)
+
+  suite "Hyperlink (OSC 8) Support":
+    test "Cell with hyperlink creation":
+      let linkCell = cell("Click", defaultStyle(), "https://example.com")
+      check linkCell.symbol == "Click"
+      check linkCell.hyperlink == "https://example.com"
+      check linkCell.style == defaultStyle()
+
+    test "Cell without hyperlink has empty string":
+      let normalCell = cell("Normal")
+      check normalCell.hyperlink == ""
+
+    test "Cell equality includes hyperlink":
+      let cell1 = cell("A", defaultStyle(), "https://a.com")
+      let cell2 = cell("A", defaultStyle(), "https://a.com")
+      let cell3 = cell("A", defaultStyle(), "https://b.com")
+      let cell4 = cell("A", defaultStyle(), "")
+
+      check cell1 == cell2
+      check cell1 != cell3
+      check cell1 != cell4
+
+    test "setString with hyperlink":
+      var buf = newBuffer(80, 24)
+      buf.setString(0, 0, "Link", defaultStyle(), "https://example.com")
+
+      check buf[0, 0].symbol == "L"
+      check buf[0, 0].hyperlink == "https://example.com"
+      check buf[1, 0].symbol == "i"
+      check buf[1, 0].hyperlink == "https://example.com"
+      check buf[2, 0].symbol == "n"
+      check buf[2, 0].hyperlink == "https://example.com"
+      check buf[3, 0].symbol == "k"
+      check buf[3, 0].hyperlink == "https://example.com"
+
+    test "setString without hyperlink has empty hyperlink":
+      var buf = newBuffer(80, 24)
+      buf.setString(0, 0, "Plain")
+
+      check buf[0, 0].hyperlink == ""
+      check buf[1, 0].hyperlink == ""
+
+    test "Wide characters with hyperlink":
+      var buf = newBuffer(80, 24)
+      buf.setString(0, 0, "日本語", defaultStyle(), "https://example.jp")
+
+      # First character "日" (width 2)
+      check buf[0, 0].symbol == "日"
+      check buf[0, 0].hyperlink == "https://example.jp"
+      # Shadow cell for wide character
+      check buf[1, 0].symbol == ""
+      check buf[1, 0].hyperlink == "https://example.jp"
+      # Second character "本" (width 2)
+      check buf[2, 0].symbol == "本"
+      check buf[2, 0].hyperlink == "https://example.jp"
+      # Shadow cell
+      check buf[3, 0].symbol == ""
+      check buf[3, 0].hyperlink == "https://example.jp"
+
+    test "diff detects hyperlink changes":
+      var buf1 = newBuffer(80, 24)
+      var buf2 = newBuffer(80, 24)
+
+      buf1.setString(0, 0, "Link")
+      buf2.setString(0, 0, "Link", defaultStyle(), "https://new.com")
+
+      let changes = buf1.diff(buf2)
+      check changes.len > 0
+      # All cells should be in changes because hyperlink changed
+      check changes.len >= 4
+
+    test "Cell string representation includes hyperlink":
+      let linkCell = cell("A", defaultStyle(), "https://test.com")
+      let str = $linkCell
+      check "hyperlink" in str
+      check "https://test.com" in str

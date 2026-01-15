@@ -100,6 +100,18 @@ const
   SyncOutputEnable* = "\e[?2026h"
   SyncOutputDisable* = "\e[?2026l"
 
+  # OSC 8 Hyperlink sequences
+  # Format: \e]8;params;uri\e\\ (or \x07 as terminator)
+  # Supported by: iTerm2, Kitty, WezTerm, VTE-based (GNOME Terminal, etc.), Windows Terminal
+  Osc8Start* = "\e]8;;"
+  Osc8End* = "\e\\"
+  Osc8Reset* = "\e]8;;\e\\" # Reset hyperlink (no URL)
+
+proc makeHyperlinkStartSeq*(url: string): string {.inline.} =
+  ## Generate OSC 8 hyperlink start sequence
+  ## Format: \e]8;;URL\e\\
+  Osc8Start & url & Osc8End
+
 proc makeCursorPositionSeq*(x, y: int): string {.inline.} =
   ## Generate ANSI sequence for cursor positioning (1-based)
   &"\e[{y + 1};{x + 1}H"
@@ -339,12 +351,23 @@ proc calculateSimpleDiff*(
 
 proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
   ## Build output string using simple cell-by-cell differential rendering
+  ## Supports OSC 8 hyperlinks - hyperlink state is tracked per cell
 
   if oldBuffer.area != newBuffer.area:
     # Different sizes, use simple approach
     let changes = calculateSimpleDiff(oldBuffer, newBuffer)
+    var currentHyperlink = ""
+
     for change in changes:
       result.add(makeCursorPositionSeq(change.pos.x, change.pos.y))
+
+      # Handle hyperlink state change
+      if change.cell.hyperlink != currentHyperlink:
+        if currentHyperlink.len > 0:
+          result.add(Osc8Reset)
+        if change.cell.hyperlink.len > 0:
+          result.add(makeHyperlinkStartSeq(change.cell.hyperlink))
+        currentHyperlink = change.cell.hyperlink
 
       # Apply style if present
       let styleSeq = change.cell.style.toAnsiSequence()
@@ -356,9 +379,14 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
       # Reset style if it was applied
       if styleSeq.len > 0:
         result.add(resetSequence())
+
+    # Close any open hyperlink at the end
+    if currentHyperlink.len > 0:
+      result.add(Osc8Reset)
     return result
 
   var lastCursorPos = (-1, -1) # Track cursor position to minimize cursor moves
+  var currentHyperlink = "" # Track current hyperlink state
 
   # Simple cell-by-cell approach - write each changed cell individually
   for y in 0 ..< newBuffer.area.height:
@@ -371,6 +399,14 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
         if lastCursorPos != (x, y):
           result.add(makeCursorPositionSeq(x, y))
           lastCursorPos = (x, y)
+
+        # Handle hyperlink state change
+        if newCell.hyperlink != currentHyperlink:
+          if currentHyperlink.len > 0:
+            result.add(Osc8Reset)
+          if newCell.hyperlink.len > 0:
+            result.add(makeHyperlinkStartSeq(newCell.hyperlink))
+          currentHyperlink = newCell.hyperlink
 
         # Apply style and write character
         let styleSeq = newCell.style.toAnsiSequence()
@@ -386,14 +422,20 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
         # Update cursor position (we wrote one character)
         lastCursorPos = (x + 1, y)
 
+  # Close any open hyperlink at the end
+  if currentHyperlink.len > 0:
+    result.add(Osc8Reset)
+
 proc buildFullRenderOutput*(buffer: Buffer): string =
   ## Build output string for full buffer render
+  ## Supports OSC 8 hyperlinks
   result = newStringOfCap(buffer.area.width * buffer.area.height * 10)
 
   # Clear screen first
   result.add(ClearScreenSeq)
 
   var lastStyle = defaultStyle()
+  var lastHyperlink = ""
   var lastNonEmptyX = -1
 
   for y in 0 ..< buffer.area.height:
@@ -404,7 +446,7 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
     # Check if line has any content
     for x in 0 ..< buffer.area.width:
       let cell = buffer[x, y]
-      if not cell.isEmpty or cell.style != defaultStyle():
+      if not cell.isEmpty or cell.style != defaultStyle() or cell.hyperlink.len > 0:
         lineHasContent = true
         break
 
@@ -422,9 +464,17 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
       let cell = buffer[x, y]
 
       # Handle gaps between non-empty cells
-      if cell.isEmpty and cell.style == defaultStyle():
+      if cell.isEmpty and cell.style == defaultStyle() and cell.hyperlink.len == 0:
         lineBuffer.add(" ") # Add space for empty cell
       else:
+        # Update hyperlink if changed
+        if cell.hyperlink != lastHyperlink:
+          if lastHyperlink.len > 0:
+            lineBuffer.add(Osc8Reset)
+          if cell.hyperlink.len > 0:
+            lineBuffer.add(makeHyperlinkStartSeq(cell.hyperlink))
+          lastHyperlink = cell.hyperlink
+
         # Update style if changed
         if cell.style != lastStyle:
           if lastStyle != defaultStyle():
@@ -440,6 +490,10 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
     # Add line to result
     if lastNonEmptyX >= 0:
       result.add(lineBuffer)
+
+  # Close any open hyperlink at the end
+  if lastHyperlink.len > 0:
+    result.add(Osc8Reset)
 
   # Reset style at the end
   if lastStyle != defaultStyle():
@@ -618,22 +672,37 @@ proc buildOutputWithCursor*(
 ): string =
   ## Build output string with cursor positioning included
   ## This prevents cursor flickering by including cursor commands in the same output
+  ## Supports OSC 8 hyperlinks
   # First, build the buffer diff output
   if force or oldBuffer.area != newBuffer.area:
     # Use full render for different sizes
+    var currentHyperlink = ""
     for y in 0 ..< newBuffer.area.height:
       for x in 0 ..< newBuffer.area.width:
         let cell = newBuffer[x, y]
-        # Render if cell has non-default symbol, foreground, or background
+        # Render if cell has non-default symbol, foreground, background, or hyperlink
         if cell.symbol != " " or cell.style.fg.kind != Default or
-            cell.style.bg.kind != Default:
+            cell.style.bg.kind != Default or cell.hyperlink.len > 0:
           result.add(makeCursorPositionSeq(x, y))
+
+          # Handle hyperlink state change
+          if cell.hyperlink != currentHyperlink:
+            if currentHyperlink.len > 0:
+              result.add(Osc8Reset)
+            if cell.hyperlink.len > 0:
+              result.add(makeHyperlinkStartSeq(cell.hyperlink))
+            currentHyperlink = cell.hyperlink
+
           let styleSeq = cell.style.toAnsiSequence()
           if styleSeq.len > 0:
             result.add(styleSeq)
           result.add(cell.symbol)
           if styleSeq.len > 0:
             result.add(resetSequence())
+
+    # Close any open hyperlink
+    if currentHyperlink.len > 0:
+      result.add(Osc8Reset)
   else:
     # Use differential rendering
     result.add(buildDifferentialOutput(oldBuffer, newBuffer))
