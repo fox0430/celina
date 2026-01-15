@@ -397,9 +397,6 @@ suite "Events Module Tests":
     test "Focus events vs other event types":
       let focusInEvent = Event(kind: FocusIn)
       let focusOutEvent = Event(kind: FocusOut)
-      let keyEvent =
-        Event(kind: Key, key: KeyEvent(code: Char, char: "x", modifiers: {}))
-      let quitEvent = Event(kind: Quit)
 
       check focusInEvent.kind == FocusIn
       check focusOutEvent.kind == FocusOut
