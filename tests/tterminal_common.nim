@@ -40,6 +40,14 @@ suite "Terminal Common Module Tests":
       check ClearToEndOfLineSeq == "\e[0K"
       check ClearToStartOfLineSeq == "\e[1K"
 
+    test "Bracketed paste mode sequences":
+      check BracketedPasteEnable == "\e[?2004h"
+      check BracketedPasteDisable == "\e[?2004l"
+
+    test "Focus events sequences":
+      check FocusEventsEnable == "\e[?1004h"
+      check FocusEventsDisable == "\e[?1004l"
+
   suite "Cursor Support":
     test "CursorState initialization":
       var state = CursorState(x: -1, y: -1, visible: false, style: CursorStyle.Default)

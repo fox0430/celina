@@ -586,7 +586,8 @@ proc dispatchEvent*(wm: WindowManager, event: Event): bool =
     targetWindow = wm.findWindowAt(pos(event.mouse.x, event.mouse.y))
   of EventKind.Key, EventKind.Paste:
     targetWindow = wm.getFocusedWindow()
-  of EventKind.Resize, EventKind.Quit, EventKind.Unknown:
+  of EventKind.Resize, EventKind.FocusIn, EventKind.FocusOut, EventKind.Quit,
+      EventKind.Unknown:
     targetWindow = wm.getFocusedWindow()
 
   # Dispatch to target window's event handlers

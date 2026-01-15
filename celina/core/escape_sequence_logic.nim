@@ -94,10 +94,26 @@ type BracketSequenceKind* = enum
   BskMouseX10 # ESC[M
   BskMouseSGR # ESC[<
   BskNumeric # ESC[1~, ESC[15~, ESC[1;2A
+  BskFocusIn # ESC[I
+  BskFocusOut # ESC[O
   BskInvalid
 
 proc classifyBracketSequence*(final: char): BracketSequenceKind =
   ## Classify bracket sequence type by character after ESC[
+  case final
+  of 'I':
+    return BskFocusIn
+  of 'O':
+    return BskFocusOut
+  of 'M':
+    return BskMouseX10
+  of '<':
+    return BskMouseSGR
+  of '1' .. '6':
+    return BskNumeric
+  else:
+    discard
+
   let arrowKey = mapArrowKey(final)
   if arrowKey.code != KeyCode.Escape:
     return BskArrowKey
@@ -106,15 +122,7 @@ proc classifyBracketSequence*(final: char): BracketSequenceKind =
   if navKey.code != KeyCode.Escape:
     return BskNavigationKey
 
-  case final
-  of 'M':
-    return BskMouseX10
-  of '<':
-    return BskMouseSGR
-  of '1' .. '6':
-    return BskNumeric
-  else:
-    return BskInvalid
+  return BskInvalid
 
 proc processSimpleBracketSequence*(final: char, isValid: bool): EscapeResult =
   ## Process simple bracket sequences: ESC[A/H (arrow/navigation keys)

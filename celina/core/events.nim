@@ -34,6 +34,8 @@ type
     Mouse
     Resize
     Paste
+    FocusIn
+    FocusOut
     Quit
     Unknown
 
@@ -52,7 +54,7 @@ type
       mouse*: MouseEvent
     of Paste:
       pastedText*: string
-    of Resize, Quit, Unknown:
+    of Resize, FocusIn, FocusOut, Quit, Unknown:
       discard
 
 # Mouse event parsing functions (using shared logic from mouse_logic module)
@@ -311,6 +313,10 @@ proc parseEscapeSequenceBracketBlocking(): Event =
     return parseMouseEventSGR()
   of BskNumeric:
     return parseNumericKeySequenceBlocking(finalResult.ch)
+  of BskFocusIn:
+    return Event(kind: FocusIn)
+  of BskFocusOut:
+    return Event(kind: FocusOut)
   of BskInvalid:
     return Event(kind: Key, key: escapeKey())
 
@@ -783,6 +789,10 @@ proc parseEscapeSequenceBracket(): Option[Event] =
     return parseMouseEventSGRNonBlocking()
   of BskNumeric:
     return parseNumericKeySequence(finalResult.ch)
+  of BskFocusIn:
+    return some(Event(kind: FocusIn))
+  of BskFocusOut:
+    return some(Event(kind: FocusOut))
   of BskInvalid:
     return some(Event(kind: Key, key: escapeKey()))
 

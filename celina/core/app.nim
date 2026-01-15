@@ -97,12 +97,18 @@ proc setup(app: App) =
   if app.config.bracketedPaste:
     app.terminal.enableBracketedPaste()
 
+  if app.config.focusEvents:
+    app.terminal.enableFocusEvents()
+
   terminal.hideCursor()
   terminal.clearScreen()
 
 proc cleanup(app: App) =
   ## Internal cleanup procedure to restore terminal state
   terminal.showCursor()
+
+  if app.config.focusEvents:
+    app.terminal.disableFocusEvents()
 
   if app.config.bracketedPaste:
     app.terminal.disableBracketedPaste()

@@ -15,6 +15,7 @@ type Terminal* = ref object ## Terminal interface for screen management
   rawMode*: bool
   mouseEnabled*: bool
   bracketedPasteEnabled*: bool
+  focusEventsEnabled*: bool
   lastBuffer*: Buffer
   rawModeEnabled: bool # Track raw mode state internally
   originalTermios: Termios # Store original terminal settings per instance
@@ -205,6 +206,19 @@ proc disableBracketedPaste*(terminal: Terminal) =
   if terminal.bracketedPasteEnabled:
     tryWrite(BracketedPasteDisable)
     terminal.bracketedPasteEnabled = false
+
+# Focus events control
+proc enableFocusEvents*(terminal: Terminal) =
+  ## Enable focus event reporting (terminal sends ESC[I/O on focus change)
+  if not terminal.focusEventsEnabled:
+    tryWrite(FocusEventsEnable)
+    terminal.focusEventsEnabled = true
+
+proc disableFocusEvents*(terminal: Terminal) =
+  ## Disable focus event reporting
+  if terminal.focusEventsEnabled:
+    tryWrite(FocusEventsDisable)
+    terminal.focusEventsEnabled = false
 
 # Cursor control
 proc hideCursor*() =
@@ -407,6 +421,7 @@ proc cleanup*(terminal: Terminal) =
   except CatchableError:
     discard
 
+  terminal.disableFocusEvents()
   terminal.disableBracketedPaste()
   terminal.disableMouse()
   terminal.disableRawMode()
@@ -436,12 +451,14 @@ proc suspend*(terminal: Terminal) =
   terminal.suspendState.suspendedAlternateScreen = terminal.alternateScreen
   terminal.suspendState.suspendedMouseEnabled = terminal.mouseEnabled
   terminal.suspendState.suspendedBracketedPaste = terminal.bracketedPasteEnabled
+  terminal.suspendState.suspendedFocusEvents = terminal.focusEventsEnabled
 
   # Return to shell mode
   try:
     showCursor()
   except CatchableError:
     discard
+  terminal.disableFocusEvents()
   terminal.disableBracketedPaste()
   terminal.disableMouse()
   terminal.disableRawMode()

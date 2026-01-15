@@ -15,6 +15,7 @@ type
     rawMode*: bool
     mouseEnabled*: bool
     bracketedPasteEnabled*: bool
+    focusEventsEnabled*: bool
     lastBuffer*: Buffer
     stdinFd*: AsyncFD
     stdoutFd*: AsyncFD
@@ -93,6 +94,15 @@ proc enableBracketedPaste*(terminal: AsyncTerminal) =
 proc disableBracketedPaste*(terminal: AsyncTerminal) =
   ## Disable bracketed paste mode
   disableBracketedPasteImpl(terminal)
+
+# Focus events control
+proc enableFocusEvents*(terminal: AsyncTerminal) =
+  ## Enable focus event reporting (terminal sends ESC[I/O on focus change)
+  enableFocusEventsImpl(terminal)
+
+proc disableFocusEvents*(terminal: AsyncTerminal) =
+  ## Disable focus event reporting
+  disableFocusEventsImpl(terminal)
 
 # Async cursor control (using stdout for simplicity)
 proc hideCursor*() {.async.} =
@@ -208,6 +218,7 @@ proc setupWithMouseAndPasteAsync*(terminal: AsyncTerminal) {.async.} =
 proc cleanupAsync*(terminal: AsyncTerminal) {.async.} =
   ## Cleanup and restore terminal asynchronously
   await showCursor()
+  terminal.disableFocusEvents()
   terminal.disableBracketedPaste()
   terminal.disableMouse()
   terminal.disableRawMode()
@@ -240,6 +251,7 @@ proc suspendAsync*(terminal: AsyncTerminal) {.async.} =
 
   # Return to shell mode
   await showCursor()
+  terminal.disableFocusEvents()
   terminal.disableBracketedPaste()
   terminal.disableMouse()
   terminal.disableRawMode()
