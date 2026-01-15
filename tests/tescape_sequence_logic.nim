@@ -188,6 +188,14 @@ suite "Escape Sequence Logic Tests":
         let kind = classifyBracketSequence(digit)
         check kind == BskNumeric
 
+    test "classifyBracketSequence with focus in (I)":
+      let kind = classifyBracketSequence('I')
+      check kind == BskFocusIn
+
+    test "classifyBracketSequence with focus out (O)":
+      let kind = classifyBracketSequence('O')
+      check kind == BskFocusOut
+
     test "classifyBracketSequence with invalid character":
       let kind = classifyBracketSequence('X')
       check kind == BskInvalid

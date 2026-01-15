@@ -333,6 +333,10 @@ proc parseEscapeSequenceBracketAsync(): Future[Event] {.async.} =
     return await parseMouseEventSGR()
   of BskNumeric:
     return await parseNumericKeySequenceAsync(final)
+  of BskFocusIn:
+    return Event(kind: FocusIn)
+  of BskFocusOut:
+    return Event(kind: FocusOut)
   of BskInvalid:
     return Event(kind: Key, key: escapeKey())
 

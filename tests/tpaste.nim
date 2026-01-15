@@ -11,7 +11,7 @@ suite "Bracketed Paste Mode Tests":
     test "Paste EventKind exists":
       check EventKind.Paste.ord == 3
       check EventKind.Paste.ord > EventKind.Resize.ord
-      check EventKind.Paste.ord < EventKind.Quit.ord
+      check EventKind.Paste.ord < EventKind.FocusIn.ord
 
     test "Paste Event creation":
       let event = Event(kind: Paste, pastedText: "Hello World")
@@ -62,6 +62,13 @@ suite "Bracketed Paste Mode Tests":
       check state.suspendedBracketedPaste == true
       state.suspendedBracketedPaste = false
       check state.suspendedBracketedPaste == false
+
+    test "SuspendState has focusEvents field":
+      var state: SuspendState
+      state.suspendedFocusEvents = true
+      check state.suspendedFocusEvents == true
+      state.suspendedFocusEvents = false
+      check state.suspendedFocusEvents == false
 
   suite "Edge Cases":
     test "Paste containing escape sequences":

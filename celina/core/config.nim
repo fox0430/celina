@@ -8,6 +8,7 @@ type AppConfig* = object ## Application configuration options
   alternateScreen*: bool ## Use alternate screen buffer
   mouseCapture*: bool ## Enable mouse event capture
   bracketedPaste*: bool ## Enable bracketed paste mode for paste detection
+  focusEvents*: bool ## Enable focus event reporting (FocusIn/FocusOut)
   rawMode*: bool ## Enable raw terminal mode (no line buffering)
   windowMode*: bool ## Enable window management
   targetFps*: int ## Target FPS for rendering (default: 60)
@@ -17,6 +18,7 @@ const DefaultAppConfig* = AppConfig(
   alternateScreen: true,
   mouseCapture: false,
   bracketedPaste: false,
+  focusEvents: false,
   rawMode: true,
   windowMode: false,
   targetFps: 60,
@@ -45,6 +47,11 @@ proc withBracketedPaste*(config: AppConfig, enabled: bool): AppConfig {.inline.}
   ## Return a new config with bracketed paste setting
   result = config
   result.bracketedPaste = enabled
+
+proc withFocusEvents*(config: AppConfig, enabled: bool): AppConfig {.inline.} =
+  ## Return a new config with focus events setting
+  result = config
+  result.focusEvents = enabled
 
 proc withRawMode*(config: AppConfig, enabled: bool): AppConfig {.inline.} =
   ## Return a new config with raw mode setting

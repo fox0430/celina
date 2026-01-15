@@ -12,8 +12,10 @@ suite "Events Module Tests":
       check EventKind.Mouse.ord == 1
       check EventKind.Resize.ord == 2
       check EventKind.Paste.ord == 3
-      check EventKind.Quit.ord == 4
-      check EventKind.Unknown.ord == 5
+      check EventKind.FocusIn.ord == 4
+      check EventKind.FocusOut.ord == 5
+      check EventKind.Quit.ord == 6
+      check EventKind.Unknown.ord == 7
 
   suite "KeyCode Tests":
     test "Basic key codes":
@@ -117,6 +119,14 @@ suite "Events Module Tests":
     test "Event creation - Unknown event":
       let event = Event(kind: Unknown)
       check event.kind == Unknown
+
+    test "Event creation - FocusIn event":
+      let event = Event(kind: FocusIn)
+      check event.kind == FocusIn
+
+    test "Event creation - FocusOut event":
+      let event = Event(kind: FocusOut)
+      check event.kind == FocusOut
 
     test "Event creation - Key event with Enter":
       let keyEvent = KeyEvent(code: Enter, char: "\r", modifiers: {})
@@ -383,6 +393,28 @@ suite "Events Module Tests":
       check keyEvent.key.code == Enter
       check keyEvent.key.char == "\r"
       check Ctrl in keyEvent.key.modifiers
+
+    test "Focus events vs other event types":
+      let focusInEvent = Event(kind: FocusIn)
+      let focusOutEvent = Event(kind: FocusOut)
+      let keyEvent =
+        Event(kind: Key, key: KeyEvent(code: Char, char: "x", modifiers: {}))
+      let quitEvent = Event(kind: Quit)
+
+      check focusInEvent.kind == FocusIn
+      check focusOutEvent.kind == FocusOut
+
+      # FocusIn should be distinct from all other event types
+      check focusInEvent.kind != FocusOut
+      check focusInEvent.kind != EventKind.Key
+      check focusInEvent.kind != Quit
+      check focusInEvent.kind != Unknown
+
+      # FocusOut should be distinct from all other event types
+      check focusOutEvent.kind != FocusIn
+      check focusOutEvent.kind != EventKind.Key
+      check focusOutEvent.kind != Quit
+      check focusOutEvent.kind != Unknown
 
   suite "Navigation Key Tests":
     test "Navigation key creation":
