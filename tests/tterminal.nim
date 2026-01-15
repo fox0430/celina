@@ -526,6 +526,7 @@ suite "Terminal Module Tests":
       check terminal.rawMode == false
       check terminal.alternateScreen == false
       check terminal.mouseEnabled == false
+      check terminal.syncOutputEnabled == false
 
     test "Terminal size management":
       let terminal = newTerminal()

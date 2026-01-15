@@ -16,6 +16,7 @@ type Terminal* = ref object ## Terminal interface for screen management
   mouseEnabled*: bool
   bracketedPasteEnabled*: bool
   focusEventsEnabled*: bool
+  syncOutputEnabled*: bool
   lastBuffer*: Buffer
   rawModeEnabled: bool # Track raw mode state internally
   originalTermios: Termios # Store original terminal settings per instance
@@ -220,6 +221,21 @@ proc disableFocusEvents*(terminal: Terminal) =
     tryWrite(FocusEventsDisable)
     terminal.focusEventsEnabled = false
 
+# Synchronized output control
+proc enableSyncOutput*(terminal: Terminal) =
+  ## Enable synchronized output mode (DEC private mode 2026)
+  ## Terminal buffers output until mode is disabled, preventing flickering
+  ## Supported by: Kitty, WezTerm, foot, Contour, mintty, etc.
+  if not terminal.syncOutputEnabled:
+    tryWrite(SyncOutputEnable)
+    terminal.syncOutputEnabled = true
+
+proc disableSyncOutput*(terminal: Terminal) =
+  ## Disable synchronized output mode, flushing buffered output
+  if terminal.syncOutputEnabled:
+    tryWrite(SyncOutputDisable)
+    terminal.syncOutputEnabled = false
+
 # Cursor control
 proc hideCursor*() =
   ## Hide the cursor
@@ -421,6 +437,7 @@ proc cleanup*(terminal: Terminal) =
   except CatchableError:
     discard
 
+  terminal.disableSyncOutput()
   terminal.disableFocusEvents()
   terminal.disableBracketedPaste()
   terminal.disableMouse()
@@ -452,12 +469,14 @@ proc suspend*(terminal: Terminal) =
   terminal.suspendState.suspendedMouseEnabled = terminal.mouseEnabled
   terminal.suspendState.suspendedBracketedPaste = terminal.bracketedPasteEnabled
   terminal.suspendState.suspendedFocusEvents = terminal.focusEventsEnabled
+  terminal.suspendState.suspendedSyncOutput = terminal.syncOutputEnabled
 
   # Return to shell mode
   try:
     showCursor()
   except CatchableError:
     discard
+  terminal.disableSyncOutput()
   terminal.disableFocusEvents()
   terminal.disableBracketedPaste()
   terminal.disableMouse()
@@ -490,6 +509,9 @@ proc draw*(terminal: Terminal, buffer: Buffer, force: bool = false) =
   ## to prevent crashes from transient terminal issues. Failed renders will be retried
   ## in the next frame.
   ##
+  ## Output is automatically wrapped with synchronized output sequences (DEC mode 2026)
+  ## to prevent flickering on supported terminals.
+  ##
   ## Parameters:
   ## - buffer: The buffer to render to the terminal
   ## - force: If true, forces a full redraw regardless of changes
@@ -497,13 +519,20 @@ proc draw*(terminal: Terminal, buffer: Buffer, force: bool = false) =
   ## Note: For rendering with cursor positioning, use `drawWithCursor()` instead.
   ## For low-level rendering with explicit error handling, use `render()` or `renderFull()`.
   try:
-    let output =
+    let rawOutput =
       if force or terminal.lastBuffer.area.isEmpty:
         buildFullRenderOutput(buffer)
       else:
         buildDifferentialOutput(terminal.lastBuffer, buffer)
 
-    if output.len > 0:
+    if rawOutput.len > 0:
+      # Wrap with synchronized output to prevent flickering
+      # Skip wrapping if sync output is already enabled to avoid double-wrapping
+      let output =
+        if terminal.syncOutputEnabled:
+          rawOutput
+        else:
+          wrapWithSyncOutput(rawOutput)
       # Use writeWithRetry for robust I/O handling
       # Only update lastBuffer if write was successful
       if writeWithRetry(output):
@@ -534,15 +563,25 @@ proc drawWithCursor*(
   ## Draw buffer with cursor positioning in single write operation
   ## This prevents cursor flickering by including cursor commands in the same output
   ##
+  ## Output is automatically wrapped with synchronized output sequences (DEC mode 2026)
+  ## to prevent flickering on supported terminals.
+  ##
   ## Note: This procedure silently ignores I/O errors to prevent crashes from transient
   ## terminal issues. Failed renders will be retried in the next frame.
   try:
-    let output = buildOutputWithCursor(
+    let rawOutput = buildOutputWithCursor(
       terminal.lastBuffer, buffer, cursorX, cursorY, cursorVisible, cursorStyle,
       lastCursorStyle, force,
     )
 
-    if output.len > 0:
+    if rawOutput.len > 0:
+      # Wrap with synchronized output to prevent flickering
+      # Skip wrapping if sync output is already enabled to avoid double-wrapping
+      let output =
+        if terminal.syncOutputEnabled:
+          rawOutput
+        else:
+          wrapWithSyncOutput(rawOutput)
       # Use writeWithRetry for robust I/O handling
       # Only update lastBuffer if write was successful
       if writeWithRetry(output):

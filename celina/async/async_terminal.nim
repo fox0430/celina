@@ -16,6 +16,7 @@ type
     mouseEnabled*: bool
     bracketedPasteEnabled*: bool
     focusEventsEnabled*: bool
+    syncOutputEnabled*: bool
     lastBuffer*: Buffer
     stdinFd*: AsyncFD
     stdoutFd*: AsyncFD
@@ -104,6 +105,16 @@ proc disableFocusEvents*(terminal: AsyncTerminal) =
   ## Disable focus event reporting
   disableFocusEventsImpl(terminal)
 
+# Synchronized output control
+proc enableSyncOutput*(terminal: AsyncTerminal) =
+  ## Enable synchronized output mode (DEC private mode 2026)
+  ## Terminal buffers output until mode is disabled, preventing flickering
+  enableSyncOutputImpl(terminal)
+
+proc disableSyncOutput*(terminal: AsyncTerminal) =
+  ## Disable synchronized output mode, flushing buffered output
+  disableSyncOutputImpl(terminal)
+
 # Async cursor control (using stdout for simplicity)
 proc hideCursor*() {.async.} =
   ## Hide the cursor asynchronously
@@ -169,9 +180,17 @@ proc renderCell*(cell: Cell, x, y: int) {.async.} =
 
 proc renderAsync*(terminal: AsyncTerminal, buffer: Buffer) {.async.} =
   ## Render a buffer to the terminal asynchronously using differential updates
-  let output = buildDifferentialOutput(terminal.lastBuffer, buffer)
+  ## Output is automatically wrapped with synchronized output sequences (DEC mode 2026)
+  ## to prevent flickering on supported terminals.
+  let rawOutput = buildDifferentialOutput(terminal.lastBuffer, buffer)
 
-  if output.len > 0:
+  if rawOutput.len > 0:
+    # Skip wrapping if sync output is already enabled to avoid double-wrapping
+    let output =
+      if terminal.syncOutputEnabled:
+        rawOutput
+      else:
+        wrapWithSyncOutput(rawOutput)
     stdout.write(output)
     stdout.flushFile()
 
@@ -181,7 +200,15 @@ proc renderAsync*(terminal: AsyncTerminal, buffer: Buffer) {.async.} =
 
 proc renderFullAsync*(terminal: AsyncTerminal, buffer: Buffer) {.async.} =
   ## Force a full async render of the buffer
-  let output = buildFullRenderOutput(buffer)
+  ## Output is automatically wrapped with synchronized output sequences (DEC mode 2026)
+  ## to prevent flickering on supported terminals.
+  let rawOutput = buildFullRenderOutput(buffer)
+  # Skip wrapping if sync output is already enabled to avoid double-wrapping
+  let output =
+    if terminal.syncOutputEnabled:
+      rawOutput
+    else:
+      wrapWithSyncOutput(rawOutput)
 
   stdout.write(output)
   stdout.flushFile()
@@ -218,6 +245,7 @@ proc setupWithMouseAndPasteAsync*(terminal: AsyncTerminal) {.async.} =
 proc cleanupAsync*(terminal: AsyncTerminal) {.async.} =
   ## Cleanup and restore terminal asynchronously
   await showCursor()
+  terminal.disableSyncOutput()
   terminal.disableFocusEvents()
   terminal.disableBracketedPaste()
   terminal.disableMouse()
@@ -251,6 +279,7 @@ proc suspendAsync*(terminal: AsyncTerminal) {.async.} =
 
   # Return to shell mode
   await showCursor()
+  terminal.disableSyncOutput()
   terminal.disableFocusEvents()
   terminal.disableBracketedPaste()
   terminal.disableMouse()
