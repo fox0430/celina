@@ -20,6 +20,7 @@ type
     lastBuffer*: Buffer
     stdinFd*: AsyncFD
     stdoutFd*: AsyncFD
+    rawModeEnabled: bool # Track raw mode state internally
     originalTermios: Termios # Store original terminal settings per instance
     suspendState: SuspendState
 
@@ -35,11 +36,13 @@ proc updateSize*(terminal: AsyncTerminal) =
 
 proc newAsyncTerminal*(): AsyncTerminal =
   ## Create a new AsyncTerminal instance
+  ## Uses default size if unable to get actual terminal size
   result = AsyncTerminal(
     size: size(80, 24), # Default size
     alternateScreen: false,
     rawMode: false,
     mouseEnabled: false,
+    rawModeEnabled: false,
   )
 
   # Initialize async file descriptors
@@ -56,18 +59,37 @@ proc newAsyncTerminal*(): AsyncTerminal =
 
 proc enableRawMode*(terminal: AsyncTerminal) =
   ## Enable raw mode for direct key input
-  if tcgetattr(STDIN_FILENO, addr terminal.originalTermios) == 0:
-    var raw = terminal.originalTermios
-    applyTerminalConfig(raw, getRawModeConfig())
+  ## Best effort - logs errors in debug mode but doesn't raise
+  if terminal.rawModeEnabled:
+    return # Already enabled
 
-    if tcsetattr(STDIN_FILENO, TCSAFLUSH, addr raw) == 0:
-      terminal.rawMode = true
+  if tcgetattr(STDIN_FILENO, addr terminal.originalTermios) == -1:
+    when defined(celinaDebug):
+      stderr.writeLine("Warning: Failed to get terminal attributes")
+    return
+
+  var raw = terminal.originalTermios
+  applyTerminalConfig(raw, getRawModeConfig())
+
+  if tcsetattr(STDIN_FILENO, TCSAFLUSH, addr raw) == -1:
+    when defined(celinaDebug):
+      stderr.writeLine("Warning: Failed to set raw mode")
+    return
+
+  terminal.rawMode = true
+  terminal.rawModeEnabled = true
 
 proc disableRawMode*(terminal: AsyncTerminal) =
-  ## Disable raw mode
-  if terminal.rawMode:
-    discard tcsetattr(STDIN_FILENO, TCSAFLUSH, addr terminal.originalTermios)
+  ## Disable raw mode, restoring original terminal settings
+  ## Best effort - doesn't raise on error to ensure cleanup
+  if not terminal.rawModeEnabled:
+    return # Not enabled
+
+  if tcsetattr(STDIN_FILENO, TCSAFLUSH, addr terminal.originalTermios) == -1:
+    when defined(celinaDebug):
+      stderr.writeLine("Warning: Failed to restore terminal settings")
   terminal.rawMode = false
+  terminal.rawModeEnabled = false
 
 # Alternate screen control
 proc enableAlternateScreen*(terminal: AsyncTerminal) =
