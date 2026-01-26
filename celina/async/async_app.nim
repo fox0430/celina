@@ -29,6 +29,7 @@ type
     lastFrameTime: MonoTime
     resizeState: ResizeState ## Shared resize detection state (from tick_common)
     forceNextRender: bool ## Force full render on next frame (used after resize)
+    config: AppConfig ## Stored configuration from newAsyncApp
 
   ## Deprecated: Use AppConfig instead
   AsyncAppConfig* {.deprecated: "Use AppConfig instead".} = AppConfig
@@ -62,6 +63,7 @@ proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
     lastFrameTime: getMonoTime(),
     resizeState: initResizeState(async_events.getResizeCounter()),
     forceNextRender: false,
+    config: config,
   )
 
   # Initialize async buffer based on terminal size (GC-safe version)
@@ -294,17 +296,17 @@ proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
   except Exception:
     return false
 
-proc runAsync*(app: AsyncApp, config: AppConfig = DefaultAppConfig) {.async.} =
+proc runAsync*(app: AsyncApp) {.async.} =
   ## Run the async application main loop
   ##
   ## This will:
-  ## 1. Setup terminal state asynchronously
+  ## 1. Setup terminal state asynchronously using config from newAsyncApp
   ## 2. Enter main async event loop
   ## 3. Cleanup terminal state on exit
   ##
   ## Example:
   ## ```nim
-  ## var app = newAsyncApp()
+  ## var app = newAsyncApp(AppConfig(mouseCapture: true))
   ##
   ## app.onEventAsync proc(event: Event): Future[bool] {.async.} =
   ##   # Handle events asynchronously
@@ -314,8 +316,9 @@ proc runAsync*(app: AsyncApp, config: AppConfig = DefaultAppConfig) {.async.} =
   ##   # Render UI asynchronously
   ##   buffer.setString(0, 0, "Hello Async!", defaultStyle())
   ##
-  ## await app.runAsync()
+  ## await app.runAsync()  # Uses config passed to newAsyncApp
   ## ```
+  let config = app.config
 
   try:
     await app.setupAsync(config)
@@ -460,7 +463,7 @@ proc quickRunAsync*(
   var app = newAsyncApp(config)
   app.onEventAsync(eventHandler)
   app.onRenderAsync(renderHandler)
-  await app.runAsync(config)
+  await app.runAsync()
 
 # ============================================================================
 # Performance Monitoring
@@ -481,6 +484,10 @@ proc isRunning*(app: AsyncApp): bool =
 proc getTerminalSize*(app: AsyncApp): Size =
   ## Get current terminal size
   app.terminal.getSize()
+
+proc getConfig*(app: AsyncApp): AppConfig =
+  ## Get the stored configuration
+  app.config
 
 # FPS Control Delegation
 

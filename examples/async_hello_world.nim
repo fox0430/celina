@@ -72,8 +72,8 @@ proc main() {.async.} =
       style(fg = Color.BrightBlack, modifiers = {StyleModifier.Italic}),
     )
 
-  # Run the async application
-  await app.runAsync(config)
+  # Run the async application (uses config from newAsyncApp)
+  await app.runAsync()
 
 when isMainModule:
   # Run the async main function
