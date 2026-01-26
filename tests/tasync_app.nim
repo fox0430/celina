@@ -31,6 +31,48 @@ when hasAsyncSupport:
       check app.isRunning() == false
       check app.getFrameCount() == 0
 
+    test "newAsyncApp stores config for use by runAsync":
+      ## Regression test: config passed to newAsyncApp should be stored
+      ## and used by runAsync (GitHub issue: config not stored bug)
+      let config = AppConfig(
+        title: "Stored Config Test",
+        alternateScreen: true,
+        mouseCapture: true,
+        rawMode: true,
+        bracketedPaste: true,
+        windowMode: false,
+        targetFps: 45,
+      )
+      let app = newAsyncApp(config)
+
+      # Verify config is stored and accessible
+      let storedConfig = app.getConfig()
+      check storedConfig.title == "Stored Config Test"
+      check storedConfig.alternateScreen == true
+      check storedConfig.mouseCapture == true
+      check storedConfig.rawMode == true
+      check storedConfig.bracketedPaste == true
+      check storedConfig.windowMode == false
+      check storedConfig.targetFps == 45
+
+    test "getConfig returns same config passed to newAsyncApp":
+      ## Verify that getConfig returns exactly the config passed to newAsyncApp
+      let config = AppConfig(mouseCapture: true, targetFps: 120)
+      let app = newAsyncApp(config)
+
+      check app.getConfig().mouseCapture == config.mouseCapture
+      check app.getConfig().targetFps == config.targetFps
+
+    test "default config is stored when no config provided":
+      let app = newAsyncApp()
+      let storedConfig = app.getConfig()
+
+      # Should match DefaultAppConfig values
+      check storedConfig.alternateScreen == DefaultAppConfig.alternateScreen
+      check storedConfig.mouseCapture == DefaultAppConfig.mouseCapture
+      check storedConfig.rawMode == DefaultAppConfig.rawMode
+      check storedConfig.targetFps == DefaultAppConfig.targetFps
+
   suite "AsyncApp Event and Render Handlers":
     test "onEventAsync sets event handler":
       let app = newAsyncApp()
