@@ -565,11 +565,8 @@ proc runFileManagerAsync(): Future[void] {.async.} =
   try:
     let fm = await newFileManagerApp()
 
-    let config = AppConfig(
-      title: "Async File Manager", windowMode: true, mouseCapture: false, targetFps: 30
-    )
-
-    await fm.app.runAsync(config)
+    # Config is already stored in AsyncApp from newAsyncApp call in newFileManagerApp
+    await fm.app.runAsync()
   except CatchableError as e:
     echo "Error in file manager: ", e.msg
   finally:
