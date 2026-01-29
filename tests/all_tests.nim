@@ -9,5 +9,5 @@ import ../celina/async/async_backend
 
 when hasAsyncSupport:
   import
-    tasync_app, tasync_buffer, tasync_events, tasync_io, tasync_terminal, tasync_windows,
-    tasync_renderer
+    tasync_app, tasync_buffer, tasync_events, tasync_io, tasync_terminal,
+    tasync_windows, tasync_renderer
