@@ -1,7 +1,22 @@
-## Async Window management system
+## Async Window Management System
+## ==============================
 ##
 ## This module provides window management capabilities for async operations,
 ## allowing for overlapping, resizable, and focusable window areas within the terminal.
+##
+## Event Handling
+## --------------
+## Two event handling functions are provided:
+##
+## - `handleEventSync`: Synchronous handler that **invokes** window event handlers.
+##   Use this when you need actual event processing. Safe to call from async contexts
+##   with `{.cast(gcsafe).}`.
+##
+## - `handleEventAsync`: Async handler that only **checks** if handlers exist.
+##   Due to GC safety constraints, it cannot invoke handlers directly.
+##   Returns true if an appropriate handler exists for the event.
+##
+## For most use cases, prefer `handleEventSync` for actual event processing.
 
 import std/[sequtils, options]
 
@@ -30,6 +45,19 @@ proc getWindowHelper(awm: AsyncWindowManager, windowId: WindowId): Option[Window
     if window.id == windowId:
       return some(window)
   return none(Window)
+
+proc focusWindowHelper(awm: AsyncWindowManager, windowIndex: int, window: Window) =
+  ## Internal helper to focus a window and bring it to front.
+  ## Does not check visibility - caller must ensure window is visible.
+  # Unfocus all windows
+  for w in awm.windows:
+    if not w.isNil:
+      w.focused = false
+  # Focus target window and bring to front
+  window.focused = true
+  awm.focusedWindow = some(window.id)
+  awm.windows.delete(windowIndex)
+  awm.windows.add(window)
 
 # AsyncWindowManager Creation and Management
 
@@ -180,73 +208,88 @@ proc findWindowAtAsync*(
 # Async Event Handling
 
 proc handleEventAsync*(awm: AsyncWindowManager, event: Event): Future[bool] {.async.} =
-  ## Handle an event, routing it to the appropriate window asynchronously
-  ## Returns true if the event was handled
-  ## Note: Event handlers are executed synchronously for GC safety
+  ## Handle an event asynchronously - checks if a window can handle the event.
+  ##
+  ## Note: Due to GC safety constraints in async contexts, this function only
+  ## checks if an appropriate handler exists but does not invoke it.
+  ## For actual event handling, use handleEventSync which can safely invoke handlers.
+  ##
+  ## Returns true if a window has an appropriate handler for the event.
+
+  if awm.isNil:
+    return false
+
+  try:
+    case event.kind
+    of Key:
+      # Check if focused window has a key handler
+      let focusedWindowOpt = await awm.getFocusedWindowAsync()
+      if focusedWindowOpt.isSome():
+        let window = focusedWindowOpt.get()
+        return window.keyHandler.isSome()
+      return false
+    of Mouse:
+      # Check if window at position has a mouse handler
+      let windowOpt = await awm.findWindowAtAsync(pos(event.mouse.x, event.mouse.y))
+      if windowOpt.isSome():
+        let window = windowOpt.get()
+        return window.mouseHandler.isSome()
+      return false
+    of Resize:
+      # Check if any visible window has a resize handler
+      let visibleWindows = await awm.getVisibleWindowsAsync()
+      for window in visibleWindows:
+        if window.resizeHandler.isSome():
+          return true
+      return false
+    else:
+      return false
+  except CatchableError:
+    # Handler check failed - window state may be invalid
+    return false
+
+proc handleEventSync*(awm: AsyncWindowManager, event: Event): bool =
+  ## Synchronous event handling for AsyncWindowManager.
+  ## Routes events to appropriate windows and invokes their handlers.
+  ##
+  ## Unlike handleEventAsync, this function actually invokes the event handlers.
+  ## Safe to call from async contexts with `{.cast(gcsafe).}`.
+  ##
+  ## Returns true if the event was handled by a window.
+  if awm.isNil:
+    return false
 
   try:
     case event.kind
     of Key:
       # Route keyboard events to focused window
-      let focusedWindowOpt = await awm.getFocusedWindowAsync()
-      if focusedWindowOpt.isSome():
-        let window = focusedWindowOpt.get()
-        # For now, just return true if window can handle keys
-        # Real handler invocation would need GC-safe redesign
-        return window.keyHandler.isSome()
+      if awm.focusedWindow.isSome():
+        let windowId = awm.focusedWindow.get()
+        for window in awm.windows:
+          if window.id == windowId:
+            return window.handleWindowEvent(event)
+      return false
     of Mouse:
-      # Route mouse events to window under cursor
-      let windowOpt = await awm.findWindowAtAsync(pos(event.mouse.x, event.mouse.y))
-      if windowOpt.isSome():
-        let window = windowOpt.get()
-        # For now, just return true if window can handle mouse
-        return window.mouseHandler.isSome()
+      # Find topmost window at mouse position
+      let mousePos = pos(event.mouse.x, event.mouse.y)
+      for i in countdown(awm.windows.len - 1, 0):
+        let window = awm.windows[i]
+        if window.visible and window.area.contains(mousePos):
+          # Auto-focus window on mouse click
+          if event.mouse.kind == Press:
+            awm.focusWindowHelper(i, window)
+          return window.handleWindowEvent(event)
+      return false
     of Resize:
-      # Broadcast resize to all windows with resize handlers
-      let visibleWindows = await awm.getVisibleWindowsAsync()
-      var handlerCount = 0
-      for window in visibleWindows:
-        if window.resizeHandler.isSome():
-          handlerCount.inc()
-      # Return true if any window has resize handlers
-      return handlerCount > 0
+      # Resize events are typically handled separately via dispatchResize
+      # Just return false here for consistency with sync WindowManager
+      return false
     else:
-      discard
-
-    return false
+      return false
   except:
+    # Event handler raised an exception - treat as unhandled
+    # Note: Using bare except to handle indirect calls that may raise any Exception
     return false
-
-proc handleEventSync*(awm: AsyncWindowManager, event: Event): bool =
-  ## Synchronous event handling for AsyncWindowManager
-  ## Returns true if the event could be handled (window has appropriate handler)
-  if awm.isNil:
-    return false
-
-  case event.kind
-  of Key:
-    # Check focused window for key handler
-    if awm.focusedWindow.isSome():
-      let windowId = awm.focusedWindow.get()
-      for window in awm.windows:
-        if window.id == windowId:
-          return window.keyHandler.isSome()
-  of Mouse:
-    # Check window at mouse position for mouse handler
-    let mousePos = pos(event.mouse.x, event.mouse.y)
-    for i in countdown(awm.windows.len - 1, 0):
-      let window = awm.windows[i]
-      if window.visible and window.area.contains(mousePos):
-        return window.mouseHandler.isSome()
-  of Resize:
-    # Check if any window has resize handler
-    for window in awm.windows:
-      if window.visible and window.resizeHandler.isSome():
-        return true
-  else:
-    discard
-
-  return false
 
 # Async Window Border Drawing
 
@@ -496,21 +539,10 @@ proc focusWindowSync*(awm: AsyncWindowManager, windowId: WindowId): bool =
   if awm.isNil:
     return false
 
-  # Unfocus all windows
-  for window in awm.windows:
-    if not window.isNil:
-      window.focused = false
-
-  # Focus the target window
+  # Find and focus the target window
   for i, window in awm.windows:
     if not window.isNil and window.id == windowId and window.visible:
-      window.focused = true
-      awm.focusedWindow = some(windowId)
-
-      # Bring to front by moving to end of sequence
-      awm.windows.delete(i)
-      awm.windows.add(window)
-
+      awm.focusWindowHelper(i, window)
       return true
 
   return false

@@ -485,7 +485,7 @@ when hasAsyncSupport:
       # Window has a mouse handler, so should return true
       check app.handleWindowEvent(event) == true
 
-    test "handleWindowEvent resize event with window that has resize handler":
+    test "handleWindowEvent resize event":
       let config = AppConfig(windowMode: true)
       let app = newAsyncApp(config)
 
@@ -497,7 +497,8 @@ when hasAsyncSupport:
       discard app.addWindow(window)
 
       let event = Event(kind: Resize)
-      # Window has a resize handler, so should return true
-      check app.handleWindowEvent(event) == true
+      # Resize events are handled separately via dispatchResize, not handleEvent
+      # This is consistent with sync WindowManager behavior
+      check app.handleWindowEvent(event) == false
 else:
   echo "Skipping AsyncApp tests - no async backend available"

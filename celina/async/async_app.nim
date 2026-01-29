@@ -268,7 +268,8 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
 
           # Window manager event handling
           if app.windowMode and not app.windowManager.isNil:
-            discard app.windowManager.handleEventSync(event)
+            {.cast(gcsafe).}:
+              discard app.windowManager.handleEventSync(event)
         else:
           break
 
