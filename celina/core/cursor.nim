@@ -93,3 +93,7 @@ proc styleChanged*(manager: CursorManager): bool =
 proc updateLastStyle*(manager: CursorManager) =
   ## Update the last style to current style (after applying changes)
   manager.state.lastStyle = manager.state.style
+
+proc setLastStyle*(manager: CursorManager, style: CursorStyle) =
+  ## Set the last style directly (used after drawWithCursor returns the new style)
+  manager.state.lastStyle = style

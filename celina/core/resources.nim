@@ -63,9 +63,7 @@ var
   globalLock: Lock
   globalResourceManager* {.guard: globalLock.}: ResourceManager
 
-# ============================================================================
 # ResourceId Operations
-# ============================================================================
 
 proc `$`*(id: ResourceId): string =
   $uint64(id)
@@ -76,9 +74,7 @@ proc `==`*(a, b: ResourceId): bool =
 proc hash*(id: ResourceId): Hash =
   hash(uint64(id))
 
-# ============================================================================
 # ResourceManager Implementation
-# ============================================================================
 
 proc newResourceManager*(): ResourceManager =
   ## Create a new resource manager
@@ -197,9 +193,7 @@ proc getResourceStats*(
     for info in rm.resources.values:
       result.byType.mgetOrPut(info.resourceType, 0).inc()
 
-# ============================================================================
 # ResourceGuard Implementation (RAII)
-# ============================================================================
 
 proc newResourceGuard*[T](
     resource: T,
@@ -265,9 +259,7 @@ template withResourceGuard*[T](
   finally:
     guard.release()
 
-# ============================================================================
 # ResourcePool Implementation
-# ============================================================================
 
 proc newResourcePool*[T](
     maxSize: int,
@@ -324,9 +316,7 @@ proc getStats*[T](pool: ResourcePool[T]): tuple[available: int, inUse: int] =
   ## Get pool statistics
   (available: pool.available.len, inUse: pool.inUse.len)
 
-# ============================================================================
 # Convenience Templates and Procedures
-# ============================================================================
 
 template withManagedResource*[T](
     resource: T, resourceType: ResourceType, name: string, body: untyped

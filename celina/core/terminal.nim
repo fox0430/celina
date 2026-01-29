@@ -43,6 +43,10 @@ proc updateSize*(terminal: Terminal) =
   except CatchableError as e:
     raise newTerminalError("Failed to update terminal size: " & e.msg)
 
+proc getSize*(terminal: Terminal): Size =
+  ## Get current terminal size
+  terminal.size
+
 # Terminal creation and cleanup
 proc newTerminal*(): Terminal =
   ## Create a new Terminal instance
@@ -259,11 +263,11 @@ proc showCursor*() =
   ## Show the cursor
   tryWrite(ShowCursorSeq)
 
-proc setCursorPos*(x, y: int) =
+proc setCursorPosition*(x, y: int) =
   ## Set cursor position (1-based coordinates)
   tryWrite(makeCursorPositionSeq(x, y))
 
-proc setCursorPos*(pos: Position) =
+proc setCursorPosition*(pos: Position) =
   ## Set cursor position
   tryWrite(makeCursorPositionSeq(pos))
 
@@ -336,7 +340,7 @@ proc clearToStartOfLine*() =
 # Buffer rendering
 proc renderCell*(cell: Cell, x, y: int) =
   ## Render a single cell at the specified position
-  setCursorPos(x, y)
+  setCursorPosition(x, y)
 
   let styleSeq = cell.style.toAnsiSequence()
   if styleSeq.len > 0:
@@ -571,22 +575,26 @@ proc drawWithCursor*(
     cursorX, cursorY: int,
     cursorVisible: bool,
     cursorStyle: CursorStyle = CursorStyle.Default,
-    lastCursorStyle: var CursorStyle,
+    lastCursorStyle: CursorStyle,
     force: bool = false,
-) =
+): CursorStyle =
   ## Draw buffer with cursor positioning in single write operation
   ## This prevents cursor flickering by including cursor commands in the same output
   ##
   ## Output is automatically wrapped with synchronized output sequences (DEC mode 2026)
   ## to prevent flickering on supported terminals.
   ##
+  ## Returns the updated lastCursorStyle value. Caller is responsible for tracking this state.
+  ##
   ## Note: This procedure silently ignores I/O errors to prevent crashes from transient
   ## terminal issues. Failed renders will be retried in the next frame.
+  result = lastCursorStyle
   try:
-    let rawOutput = buildOutputWithCursor(
+    let (rawOutput, newLastCursorStyle) = buildOutputWithCursor(
       terminal.lastBuffer, buffer, cursorX, cursorY, cursorVisible, cursorStyle,
       lastCursorStyle, force,
     )
+    result = newLastCursorStyle
 
     if rawOutput.len > 0:
       # Wrap with synchronized output to prevent flickering

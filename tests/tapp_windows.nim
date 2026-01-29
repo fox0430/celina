@@ -87,7 +87,7 @@ suite "App Window Manager API Tests":
     check focusedId.get() == id2
 
     # Focus first window
-    app.focusWindow(id1)
+    check app.focusWindow(id1) == true
     let newFocusedId = app.getFocusedWindowId()
     check newFocusedId.isSome()
     check newFocusedId.get() == id1
@@ -194,7 +194,7 @@ suite "App Window Integration Tests":
     check app.getFocusedWindowId().get() == id3
 
     # Remove focused window
-    app.removeWindow(id3)
+    check app.removeWindow(id3) == true
 
     check app.getWindowCount() == 2
     # Focus should shift to remaining window

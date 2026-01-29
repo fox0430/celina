@@ -3,33 +3,35 @@
 ## This module provides the main AsyncApp type and async event loop
 ## implementation using either Chronos or std/asyncdispatch.
 
-import std/[options, unicode, monotimes]
+import std/[options, monotimes]
 
-import async_backend, async_terminal, async_events, async_buffer, async_windows
-import ../core/[geometry, colors, buffer, events, fps, config, tick_common]
-import ../widgets/[text, base]
+import async_backend, async_terminal, async_events, async_windows, async_renderer
+import
+  ../core/[
+    geometry, buffer, events, fps, config, tick_common, cursor, terminal_common, errors,
+    windows,
+  ]
 
-export
-  geometry, colors, buffer, events, text, base, unicode, async_backend, async_terminal,
-  async_events, async_buffer, async_windows, config
+export config
 
 type
   ## Main async application context for CLI applications
   AsyncApp* = ref object
     terminal: AsyncTerminal
-    buffer: async_buffer.AsyncBuffer
-    windowManager: AsyncWindowManager
+    renderer: AsyncRenderer
     fpsMonitor: FpsMonitor
-    running: bool
+    windowManager: AsyncWindowManager
+    shouldQuit: bool
     eventHandler: proc(event: Event): Future[bool] {.async.}
     eventHandlerWithApp: proc(event: Event, app: AsyncApp): Future[bool] {.async.}
-    renderHandler: proc(buffer: async_buffer.AsyncBuffer): Future[void] {.async.}
+    renderHandler: proc(buffer: var Buffer)
     windowMode: bool ## Whether to use window management
-    frameCounter: int
-    lastFrameTime: MonoTime
+    config: AppConfig
     resizeState: ResizeState ## Shared resize detection state (from tick_common)
     forceNextRender: bool ## Force full render on next frame (used after resize)
-    config: AppConfig ## Stored configuration from newAsyncApp
+    running: bool ## Whether app is currently running
+    frameCounter: int ## Total frame count
+    lastFrameTime: MonoTime ## Timestamp of last frame
 
   ## Deprecated: Use AppConfig instead
   AsyncAppConfig* {.deprecated: "Use AppConfig instead".} = AppConfig
@@ -51,29 +53,29 @@ proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
   ## )
   ## var app = newAsyncApp(config)
   ## ```
+  let terminal = newAsyncTerminal()
   result = AsyncApp(
-    terminal: newAsyncTerminal(),
+    terminal: terminal,
+    renderer: newAsyncRenderer(terminal),
     fpsMonitor: newFpsMonitor(if config.targetFps > 0: config.targetFps else: 60),
-    running: false,
+    shouldQuit: false,
     eventHandler: nil,
     eventHandlerWithApp: nil,
     renderHandler: nil,
     windowMode: config.windowMode,
-    frameCounter: 0,
-    lastFrameTime: getMonoTime(),
+    config: config,
     resizeState: initResizeState(async_events.getResizeCounter()),
     forceNextRender: false,
-    config: config,
+    running: false,
+    frameCounter: 0,
+    lastFrameTime: getMonoTime(),
   )
-
-  # Initialize async buffer based on terminal size (GC-safe version)
-  let termSize = result.terminal.getSize()
-  result.buffer = newAsyncBufferNoRM(termSize.width, termSize.height)
 
   # Initialize async window manager if enabled
   if config.windowMode:
     result.windowManager = newAsyncWindowManager()
 
+# Event and render handlers
 proc onEventAsync*(app: AsyncApp, handler: proc(event: Event): Future[bool] {.async.}) =
   ## Set the async event handler for the application
   ##
@@ -121,76 +123,67 @@ proc onEventAsync*(
   app.eventHandlerWithApp = handler
   app.eventHandler = nil
 
-proc onRenderAsync*(
-    app: AsyncApp,
-    handler: proc(buffer: async_buffer.AsyncBuffer): Future[void] {.async.},
-) =
-  ## Set the async render handler for the application
+proc onRenderAsync*(app: AsyncApp, handler: proc(buffer: var Buffer)) =
+  ## Set the render handler for the application
   ##
   ## This handler is called each frame to update the display buffer.
   ##
   ## Example:
   ## ```nim
-  ## app.onRenderAsync proc(buffer: async_buffer.AsyncBuffer): Future[void] {.async.} =
-  ##   await buffer.clearAsync()
-  ##   let area = buffer.getArea()
-  ##   let centerX = area.width div 2 - 5  # Center "Hello!"
-  ##   let centerY = area.height div 2
-  ##   await buffer.setStringAsync(centerX, centerY, "Hello!", defaultStyle())
+  ## app.onRenderAsync proc(buffer: var Buffer) =
+  ##   buffer.setString(10, 5, "Hello!", defaultStyle())
   ## ```
   app.renderHandler = handler
 
 # AsyncApp Lifecycle Management
 
-proc setupAsync(app: AsyncApp, config: AppConfig) {.async.} =
+proc setupAsync(app: AsyncApp) {.async.} =
   ## Internal async setup procedure to initialize terminal state
   await app.terminal.setupAsync()
 
-  if config.rawMode:
+  if app.config.rawMode:
     app.terminal.enableRawMode()
 
-  if config.alternateScreen:
+  if app.config.alternateScreen:
     app.terminal.enableAlternateScreen()
 
-  if config.mouseCapture:
+  if app.config.mouseCapture:
     app.terminal.enableMouse()
 
-  if config.bracketedPaste:
+  if app.config.bracketedPaste:
     app.terminal.enableBracketedPaste()
+
+  if app.config.focusEvents:
+    app.terminal.enableFocusEvents()
 
   await hideCursor()
   await clearScreen()
 
-  # Initialize async event system
-  initAsyncEventSystem()
-
-proc cleanupAsync(app: AsyncApp, config: AppConfig) {.async.} =
+proc cleanupAsync(app: AsyncApp) {.async.} =
   ## Internal async cleanup procedure to restore terminal state
   await showCursor()
 
-  if config.bracketedPaste:
+  if app.config.focusEvents:
+    app.terminal.disableFocusEvents()
+
+  if app.config.bracketedPaste:
     app.terminal.disableBracketedPaste()
 
-  if config.mouseCapture:
+  if app.config.mouseCapture:
     app.terminal.disableMouse()
 
-  if config.alternateScreen:
+  if app.config.alternateScreen:
     app.terminal.disableAlternateScreen()
 
-  if config.rawMode:
+  if app.config.rawMode:
     app.terminal.disableRawMode()
 
   await app.terminal.cleanupAsync()
 
-  # Cleanup async event system
-  cleanupAsyncEventSystem()
-
 proc handleResizeAsync(app: AsyncApp) {.async.} =
   ## Handle terminal resize events asynchronously
   app.terminal.updateSize()
-  let newSize = app.terminal.getSize()
-  let newArea = Rect(x: 0, y: 0, width: newSize.width, height: newSize.height)
-  await app.buffer.resizeAsync(newArea)
+  app.renderer.resize()
   # Clear screen to avoid artifacts from old content
   await clearScreen()
   # Force full render on next frame to ensure clean redraw
@@ -199,24 +192,24 @@ proc handleResizeAsync(app: AsyncApp) {.async.} =
 proc renderAsync(app: AsyncApp) {.async.} =
   ## Render the current frame asynchronously
   # Clear the buffer
-  await app.buffer.clearAsync()
+  app.renderer.clear()
 
   # Call user render handler first (for background content)
   if app.renderHandler != nil:
-    await app.renderHandler(app.buffer)
+    {.cast(gcsafe).}:
+      {.cast(raises: []).}:
+        app.renderHandler(app.renderer.getBuffer())
 
   # If window mode is enabled, render windows on top
   if app.windowMode and not app.windowManager.isNil:
-    await app.windowManager.renderAsync(app.buffer)
+    app.windowManager.renderSync(app.renderer.getBuffer())
 
-  # Use async terminal rendering - convert AsyncBuffer to Buffer (GC-safe version)
-  let renderBuffer = app.buffer.toBufferAsync()
-  # Force render if requested after resize
+  # Render to terminal (force if requested after resize)
   if app.forceNextRender:
-    await app.terminal.drawAsync(renderBuffer, force = true)
+    await app.renderer.renderAsync(force = true)
     app.forceNextRender = false
   else:
-    await app.terminal.drawAsync(renderBuffer, force = false)
+    await app.renderer.renderAsync()
 
 proc dispatchEventAsync(app: AsyncApp, event: Event): Future[bool] {.async.} =
   ## Helper to dispatch event to the appropriate handler
@@ -227,7 +220,7 @@ proc dispatchEventAsync(app: AsyncApp, event: Event): Future[bool] {.async.} =
   else:
     return true
 
-proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
+proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
   ## Process one async application tick (events + render).
   ##
   ## This method:
@@ -240,7 +233,7 @@ proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
   ## See tick_common module for details on CPU efficiency and FPS control.
   ##
   ## Returns:
-  ##   false if application should quit, true to continue
+  ##   true to continue running, false to exit the application loop
   try:
     # Check for resize event using shared counter-based detection
     if app.resizeState.checkResize(async_events.getResizeCounter()):
@@ -275,12 +268,7 @@ proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
 
           # Window manager event handling
           if app.windowMode and not app.windowManager.isNil:
-            try:
-              let handled = await app.windowManager.handleEventAsync(event)
-              if handled:
-                continue
-            except:
-              discard
+            discard app.windowManager.handleEventSync(event)
         else:
           break
 
@@ -292,8 +280,10 @@ proc tickAsync(app: AsyncApp, targetFps: int): Future[bool] {.async.} =
       app.frameCounter.inc()
       app.lastFrameTime = getMonoTime()
 
-    return app.running
-  except Exception:
+    return not app.shouldQuit
+  except TerminalError as e:
+    raise e
+  except CatchableError:
     return false
 
 proc runAsync*(app: AsyncApp) {.async.} =
@@ -312,39 +302,46 @@ proc runAsync*(app: AsyncApp) {.async.} =
   ##   # Handle events asynchronously
   ##   return true
   ##
-  ## app.onRenderAsync proc(buffer: var Buffer): Future[void] {.async.} =
-  ##   # Render UI asynchronously
+  ## app.onRenderAsync proc(buffer: var Buffer) =
+  ##   # Render UI
   ##   buffer.setString(0, 0, "Hello Async!", defaultStyle())
   ##
-  ## await app.runAsync()  # Uses config passed to newAsyncApp
+  ## await app.runAsync()
   ## ```
-  let config = app.config
-
   try:
-    await app.setupAsync(config)
+    await app.setupAsync()
     app.running = true
 
+    # Initialize async event system for resize detection
+    initAsyncEventSystem()
+
     # Main async application loop
-    while await app.tickAsync(config.targetFps):
-      # The tick function controls timing and frame rate
+    while await app.tickAsync():
       discard
-  except:
-    # Any errors should trigger cleanup
+  except TerminalError as e:
     try:
-      await app.cleanupAsync(config)
+      await app.cleanupAsync()
     except:
-      discard # Ignore cleanup errors in error state
+      discard
+    raise e
+  except CatchableError as e:
+    try:
+      await app.cleanupAsync()
+    except:
+      discard
+    raise e
   finally:
-    # Always try cleanup in normal termination
+    app.running = false
+    # Cleanup async event system
+    cleanupAsyncEventSystem()
     try:
-      await app.cleanupAsync(config)
-    except:
-      # Cleanup errors in normal flow should not crash
+      await app.cleanupAsync()
+    except CatchableError:
       discard
 
-proc quitAsync*(app: AsyncApp) {.async.} =
+proc quit*(app: AsyncApp) =
   ## Signal the async application to quit gracefully
-  app.running = false
+  app.shouldQuit = true
 
 # Suspend/Resume for shell command execution
 proc suspendAsync*(app: AsyncApp) {.async.} =
@@ -394,51 +391,164 @@ template withSuspendAsync*(app: AsyncApp, body: untyped) =
   finally:
     await app.resumeAsync()
 
-# Window Management Integration
+# FPS control delegation
+proc setTargetFps*(app: AsyncApp, fps: int) =
+  ## Set the target FPS for the application
+  app.fpsMonitor.setTargetFps(fps)
 
+proc getTargetFps*(app: AsyncApp): int =
+  ## Get the current target FPS
+  app.fpsMonitor.getTargetFps()
+
+proc getCurrentFps*(app: AsyncApp): float =
+  ## Get the current actual FPS
+  app.fpsMonitor.getCurrentFps()
+
+# Cursor control delegation
+proc setCursorPosition*(app: AsyncApp, x, y: int) =
+  ## Set cursor position without changing visibility state
+  app.renderer.setCursorPosition(x, y)
+
+proc setCursorPosition*(app: AsyncApp, pos: Position) =
+  ## Set cursor position using Position type without changing visibility
+  app.renderer.setCursorPosition(pos)
+
+proc showCursorAt*(app: AsyncApp, x, y: int) =
+  ## Set cursor position and make it visible
+  app.renderer.showCursorAt(x, y)
+
+proc showCursorAt*(app: AsyncApp, pos: Position) =
+  ## Set cursor position using Position type and make it visible
+  app.renderer.showCursorAt(pos)
+
+proc showCursor*(app: AsyncApp) =
+  ## Show cursor at current position
+  app.renderer.showCursor()
+
+proc hideCursor*(app: AsyncApp) =
+  ## Hide cursor
+  app.renderer.hideCursor()
+
+proc setCursorStyle*(app: AsyncApp, style: CursorStyle) =
+  ## Set cursor style for next render
+  app.renderer.setCursorStyle(style)
+
+proc getCursorPosition*(app: AsyncApp): (int, int) =
+  ## Get current cursor position
+  app.renderer.getCursorPosition()
+
+proc moveCursorBy*(app: AsyncApp, dx, dy: int) =
+  ## Move cursor relatively by dx, dy
+  let (x, y) = app.getCursorPosition()
+  app.setCursorPosition(x + dx, y + dy)
+
+proc isCursorVisible*(app: AsyncApp): bool =
+  ## Check if cursor is visible
+  app.renderer.isCursorVisible()
+
+proc getCursorStyle*(app: AsyncApp): CursorStyle =
+  ## Get current cursor style
+  app.renderer.getCursorManager().getStyle()
+
+proc resetCursor*(app: AsyncApp) =
+  ## Reset cursor to default state
+  app.renderer.getCursorManager().reset()
+
+# Window management
 proc enableWindowMode*(app: AsyncApp) =
   ## Enable window management mode
   app.windowMode = true
   if app.windowManager.isNil:
     app.windowManager = newAsyncWindowManager()
 
-proc addWindowAsync*(app: AsyncApp, window: Window): Future[WindowId] {.async.} =
-  ## Add a window to the application asynchronously
+proc addWindow*(app: AsyncApp, window: Window): WindowId =
+  ## Add a window to the application
   if not app.windowMode:
     app.enableWindowMode()
-  return await app.windowManager.addWindowAsync(window)
+  return app.windowManager.addWindowSync(window)
 
-proc removeWindowAsync*(app: AsyncApp, windowId: WindowId): Future[bool] {.async.} =
-  ## Remove a window from the application asynchronously
+proc removeWindow*(app: AsyncApp, windowId: WindowId): bool =
+  ## Remove a window from the application
+  ## Returns true if the window was found and removed, false otherwise
   if app.windowMode and not app.windowManager.isNil:
-    return await app.windowManager.removeWindowAsync(windowId)
-  return false
+    return app.windowManager.removeWindowSync(windowId)
 
-proc getWindowAsync*(
-    app: AsyncApp, windowId: WindowId
-): Future[Option[Window]] {.async.} =
-  ## Get a window by ID asynchronously
+proc getWindow*(app: AsyncApp, windowId: WindowId): Option[Window] =
+  ## Get a window by ID
   if app.windowMode and not app.windowManager.isNil:
-    return await app.windowManager.getWindowAsync(windowId)
+    return app.windowManager.getWindowSync(windowId)
   return none(Window)
 
-proc focusWindowAsync*(app: AsyncApp, windowId: WindowId): Future[bool] {.async.} =
-  ## Focus a specific window asynchronously
+proc focusWindow*(app: AsyncApp, windowId: WindowId): bool =
+  ## Focus a specific window
+  ## Returns true if the window was found and focused, false otherwise
   if app.windowMode and not app.windowManager.isNil:
-    return await app.windowManager.focusWindowAsync(windowId)
-  return false
+    return app.windowManager.focusWindowSync(windowId)
 
-proc getFocusedWindowAsync*(app: AsyncApp): Future[Option[Window]] {.async.} =
-  ## Get the currently focused window asynchronously
+proc getFocusedWindow*(app: AsyncApp): Option[Window] =
+  ## Get the currently focused window
   if app.windowMode and not app.windowManager.isNil:
-    return await app.windowManager.getFocusedWindowAsync()
+    return app.windowManager.getFocusedWindowSync()
   return none(Window)
 
-# Async Convenience Functions
+proc getWindows*(app: AsyncApp): seq[Window] =
+  ## Get all windows in the application
+  if app.windowMode and not app.windowManager.isNil:
+    return app.windowManager.getWindowsSync()
+  return @[]
+
+proc getWindowCount*(app: AsyncApp): int =
+  ## Get the total number of windows
+  if app.windowMode and not app.windowManager.isNil:
+    return app.windowManager.getWindowCountSync()
+  return 0
+
+proc getFocusedWindowId*(app: AsyncApp): Option[WindowId] =
+  ## Get the ID of the currently focused window
+  if app.windowMode and not app.windowManager.isNil:
+    return app.windowManager.getFocusedWindowIdSync()
+  return none(WindowId)
+
+proc getWindowInfo*(app: AsyncApp, windowId: WindowId): Option[WindowInfo] =
+  ## Get window information by ID
+  if app.windowMode and not app.windowManager.isNil:
+    let windowOpt = app.windowManager.getWindowSync(windowId)
+    if windowOpt.isSome():
+      return some(windowOpt.get.toWindowInfo())
+  return none(WindowInfo)
+
+proc handleWindowEvent*(app: AsyncApp, event: Event): bool =
+  ## Handle an event through the window manager
+  if app.windowMode and not app.windowManager.isNil:
+    return app.windowManager.handleEventSync(event)
+
+# State and info queries
+
+proc isRunning*(app: AsyncApp): bool =
+  ## Check if app is currently running
+  app.running
+
+proc getTerminalSize*(app: AsyncApp): Size =
+  ## Get current terminal size
+  app.terminal.getSize()
+
+proc getConfig*(app: AsyncApp): AppConfig =
+  ## Get the stored configuration
+  app.config
+
+proc getFrameCount*(app: AsyncApp): int =
+  ## Get total frame count
+  app.frameCounter
+
+proc getLastFrameTime*(app: AsyncApp): MonoTime =
+  ## Get timestamp of last frame
+  app.lastFrameTime
+
+# Convenience functions
 
 proc quickRunAsync*(
     eventHandler: proc(event: Event): Future[bool] {.async.},
-    renderHandler: proc(buffer: async_buffer.AsyncBuffer): Future[void] {.async.},
+    renderHandler: proc(buffer: var Buffer),
     config: AppConfig = DefaultAppConfig,
 ) {.async.} =
   ## Quick way to run a simple async CLI application
@@ -454,51 +564,11 @@ proc quickRunAsync*(
   ##     else: discard
   ##     return true,
   ##
-  ##   renderHandler = proc(buffer: async_buffer.AsyncBuffer): Future[void] {.async.} =
-  ##     await buffer.clearAsync()
-  ##     let area = buffer.getArea()
-  ##     await buffer.setStringAsync(10, area.height div 2, "Press 'q' to quit", defaultStyle())
+  ##   renderHandler = proc(buffer: var Buffer) =
+  ##     buffer.setString(10, 5, "Press 'q' to quit", defaultStyle())
   ## )
   ## ```
   var app = newAsyncApp(config)
   app.onEventAsync(eventHandler)
   app.onRenderAsync(renderHandler)
   await app.runAsync()
-
-# ============================================================================
-# Performance Monitoring
-# ============================================================================
-
-proc getFrameCount*(app: AsyncApp): int =
-  ## Get total frame count
-  app.frameCounter
-
-proc getLastFrameTime*(app: AsyncApp): MonoTime =
-  ## Get timestamp of last frame
-  app.lastFrameTime
-
-proc isRunning*(app: AsyncApp): bool =
-  ## Check if app is currently running
-  app.running
-
-proc getTerminalSize*(app: AsyncApp): Size =
-  ## Get current terminal size
-  app.terminal.getSize()
-
-proc getConfig*(app: AsyncApp): AppConfig =
-  ## Get the stored configuration
-  app.config
-
-# FPS Control Delegation
-
-proc setTargetFps*(app: AsyncApp, fps: int) =
-  ## Set the target FPS for the application
-  app.fpsMonitor.setTargetFps(fps)
-
-proc getTargetFps*(app: AsyncApp): int =
-  ## Get the current target FPS
-  app.fpsMonitor.getTargetFps()
-
-proc getCurrentFps*(app: AsyncApp): float =
-  ## Get the current actual FPS
-  app.fpsMonitor.getCurrentFps()
