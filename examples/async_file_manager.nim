@@ -159,7 +159,7 @@ proc loadDirectoryAsync(
 
 proc updateDirectoryWindowAsync(fm: FileManagerApp): Future[void] {.async.} =
   ## Update the directory listing window
-  let dirWindowOpt = await fm.app.getWindowAsync(fm.dirListWindow)
+  let dirWindowOpt = fm.app.getWindow(fm.dirListWindow)
   if dirWindowOpt == none(Window):
     return
 
@@ -243,7 +243,7 @@ proc updateDirectoryWindowAsync(fm: FileManagerApp): Future[void] {.async.} =
 
 proc updatePreviewWindowAsync(fm: FileManagerApp): Future[void] {.async.} =
   ## Update the file preview window
-  let previewWindow = await fm.app.getWindowAsync(fm.previewWindow)
+  let previewWindow = fm.app.getWindow(fm.previewWindow)
   if previewWindow == none(Window):
     return
 
@@ -322,7 +322,7 @@ proc updatePreviewWindowAsync(fm: FileManagerApp): Future[void] {.async.} =
 
 proc updateStatusWindowAsync(fm: FileManagerApp): Future[void] {.async.} =
   ## Update the status bar window
-  let statusWindow = await fm.app.getWindowAsync(fm.statusWindow)
+  let statusWindow = fm.app.getWindow(fm.statusWindow)
   if statusWindow == none(Window):
     return
 
@@ -467,21 +467,21 @@ proc updateWindowLayout(fm: FileManagerApp): Future[void] {.async.} =
   let termSize = fm.app.getTerminalSize()
 
   # Update directory list window (left side)
-  let dirWindowOpt = await fm.app.getWindowAsync(fm.dirListWindow)
+  let dirWindowOpt = fm.app.getWindow(fm.dirListWindow)
   if dirWindowOpt.isSome():
     let dirWindow = dirWindowOpt.get()
     dirWindow.resize(size(termSize.width * 2 div 3, termSize.height - 2))
     dirWindow.move(pos(0, 0))
 
   # Update preview window (right side)
-  let previewWindowOpt = await fm.app.getWindowAsync(fm.previewWindow)
+  let previewWindowOpt = fm.app.getWindow(fm.previewWindow)
   if previewWindowOpt.isSome():
     let previewWindow = previewWindowOpt.get()
     previewWindow.resize(size(termSize.width div 3, termSize.height - 2))
     previewWindow.move(pos(termSize.width * 2 div 3, 0))
 
   # Update status window (bottom)
-  let statusWindowOpt = await fm.app.getWindowAsync(fm.statusWindow)
+  let statusWindowOpt = fm.app.getWindow(fm.statusWindow)
   if statusWindowOpt.isSome():
     let statusWindow = statusWindowOpt.get()
     statusWindow.resize(size(termSize.width, 2))
@@ -501,19 +501,19 @@ proc createFileManagerWindows(fm: FileManagerApp): Future[void] {.async.} =
     area = rect(0, 0, termSize.width * 2 div 3, termSize.height - 2),
     title = "Directory",
   )
-  fm.dirListWindow = await fm.app.addWindowAsync(dirWindow)
+  fm.dirListWindow = fm.app.addWindow(dirWindow)
 
   # Preview window (right side)
   let previewWindow = newWindow(
     area = rect(termSize.width * 2 div 3, 0, termSize.width div 3, termSize.height - 2),
     title = "Preview",
   )
-  fm.previewWindow = await fm.app.addWindowAsync(previewWindow)
+  fm.previewWindow = fm.app.addWindow(previewWindow)
 
   # Status window (bottom)
   let statusWindow =
     newWindow(area = rect(0, termSize.height - 2, termSize.width, 2), title = "")
-  fm.statusWindow = await fm.app.addWindowAsync(statusWindow)
+  fm.statusWindow = fm.app.addWindow(statusWindow)
 
 proc newFileManagerApp(): Future[FileManagerApp] {.async.} =
   ## Create a new file manager application
@@ -549,9 +549,7 @@ proc newFileManagerApp(): Future[FileManagerApp] {.async.} =
       return true
 
   # Set up rendering
-  result.app.onRenderAsync proc(
-      buffer: async_buffer.AsyncBuffer
-  ): Future[void] {.async.} =
+  result.app.onRenderAsync proc(buffer: var Buffer) =
     # Background is handled by window manager
     discard
 

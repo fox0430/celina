@@ -6,11 +6,7 @@ import ../celina/async/async_backend
 
 when hasAsyncSupport:
   import ../celina/async/async_app
-  import ../celina/async/async_buffer as celina_async_buffer
-  import ../celina/core/[geometry, events, windows]
-
-  # Alias for clarity
-  type CelinaAsyncBuffer = celina_async_buffer.AsyncBuffer
+  import ../celina/core/[geometry, events, windows, buffer, terminal_common]
 
   suite "AsyncApp Creation and Configuration":
     test "newAsyncApp with default config":
@@ -89,7 +85,7 @@ when hasAsyncSupport:
       let app = newAsyncApp()
       var handlerCalled = false
 
-      app.onRenderAsync proc(buffer: CelinaAsyncBuffer): Future[void] {.async.} =
+      app.onRenderAsync proc(buffer: var Buffer) =
         handlerCalled = true
 
       # Handler is set but not called until run
@@ -111,24 +107,24 @@ when hasAsyncSupport:
       check size.height > 0
 
   suite "AsyncApp Window Management - No Window Mode":
-    test "getWindowAsync with no window mode":
+    test "getWindow with no window mode":
       let app = newAsyncApp()
-      let windowOpt = waitFor app.getWindowAsync(WindowId(1))
+      let windowOpt = app.getWindow(WindowId(1))
       check windowOpt.isNone()
 
-    test "focusWindowAsync with no window mode":
+    test "focusWindow with no window mode":
       let app = newAsyncApp()
-      let result = waitFor app.focusWindowAsync(WindowId(1))
+      let result = app.focusWindow(WindowId(1))
       check result == false
 
-    test "removeWindowAsync with no window mode":
+    test "removeWindow with no window mode":
       let app = newAsyncApp()
-      let result = waitFor app.removeWindowAsync(WindowId(1))
+      let result = app.removeWindow(WindowId(1))
       check result == false
 
-    test "getFocusedWindowAsync with no window mode":
+    test "getFocusedWindow with no window mode":
       let app = newAsyncApp()
-      let windowOpt = waitFor app.getFocusedWindowAsync()
+      let windowOpt = app.getFocusedWindow()
       check windowOpt.isNone()
 
   suite "AsyncApp Window Management - Window Mode Enabled":
@@ -137,89 +133,89 @@ when hasAsyncSupport:
       app.enableWindowMode()
       # Window mode enabled successfully (no crash)
 
-    test "addWindowAsync with window mode":
+    test "addWindow with window mode":
       let config = AppConfig(windowMode: true)
       let app = newAsyncApp(config)
 
       let window = newWindow(rect(10, 10, 30, 15), "Test Window")
-      let windowId = waitFor app.addWindowAsync(window)
+      let windowId = app.addWindow(window)
       check windowId.int > 0
 
-    test "addWindowAsync enables window mode if not enabled":
+    test "addWindow enables window mode if not enabled":
       let app = newAsyncApp() # windowMode = false
 
       let window = newWindow(rect(10, 10, 30, 15), "Test Window")
-      let windowId = waitFor app.addWindowAsync(window)
+      let windowId = app.addWindow(window)
       check windowId.int > 0
 
-    test "getWindowAsync retrieves added window":
+    test "getWindow retrieves added window":
       let config = AppConfig(windowMode: true)
       let app = newAsyncApp(config)
 
       let window = newWindow(rect(10, 10, 30, 15), "Test Window")
-      let windowId = waitFor app.addWindowAsync(window)
+      let windowId = app.addWindow(window)
 
-      let retrievedOpt = waitFor app.getWindowAsync(windowId)
+      let retrievedOpt = app.getWindow(windowId)
       check retrievedOpt.isSome()
       check retrievedOpt.get().title == "Test Window"
 
-    test "getWindowAsync with invalid ID returns none":
+    test "getWindow with invalid ID returns none":
       let config = AppConfig(windowMode: true)
       let app = newAsyncApp(config)
 
-      let windowOpt = waitFor app.getWindowAsync(WindowId(999))
+      let windowOpt = app.getWindow(WindowId(999))
       check windowOpt.isNone()
 
-    test "removeWindowAsync removes window":
+    test "removeWindow removes window":
       let config = AppConfig(windowMode: true)
       let app = newAsyncApp(config)
 
       let window = newWindow(rect(10, 10, 30, 15), "Test Window")
-      let windowId = waitFor app.addWindowAsync(window)
+      let windowId = app.addWindow(window)
 
       # Verify window exists
-      var windowOpt = waitFor app.getWindowAsync(windowId)
+      var windowOpt = app.getWindow(windowId)
       check windowOpt.isSome()
 
       # Remove window
-      let removed = waitFor app.removeWindowAsync(windowId)
+      let removed = app.removeWindow(windowId)
       check removed == true
 
       # Verify window no longer exists
-      windowOpt = waitFor app.getWindowAsync(windowId)
+      windowOpt = app.getWindow(windowId)
       check windowOpt.isNone()
 
-    test "focusWindowAsync focuses window":
+    test "focusWindow focuses window":
       let config = AppConfig(windowMode: true)
       let app = newAsyncApp(config)
 
       let window1 = newWindow(rect(10, 10, 30, 15), "Window 1")
       let window2 = newWindow(rect(20, 20, 25, 12), "Window 2")
 
-      let id1 = waitFor app.addWindowAsync(window1)
-      discard waitFor app.addWindowAsync(window2)
+      let id1 = app.addWindow(window1)
+      discard app.addWindow(window2)
 
       # Focus first window
-      let focused = waitFor app.focusWindowAsync(id1)
+      let focused = app.focusWindow(id1)
       check focused == true
 
       # Verify focused window
-      let focusedOpt = waitFor app.getFocusedWindowAsync()
+      let focusedOpt = app.getFocusedWindow()
       check focusedOpt.isSome()
       check focusedOpt.get().id == id1
 
-    test "getFocusedWindowAsync with multiple windows":
+    test "getFocusedWindow with multiple windows":
       let config = AppConfig(windowMode: true)
       let app = newAsyncApp(config)
 
       let window1 = newWindow(rect(10, 10, 30, 15), "Window 1")
       let window2 = newWindow(rect(20, 20, 25, 12), "Window 2")
 
-      let id1 = waitFor app.addWindowAsync(window1)
-      discard waitFor app.addWindowAsync(window2)
+      let id1 = app.addWindow(window1)
+      discard app.addWindow(window2)
 
-      # First window should be focused (async behavior differs from sync)
-      let focusedOpt = waitFor app.getFocusedWindowAsync()
+      # First window should be focused
+      let focusedOpt = app.getFocusedWindow()
       check focusedOpt.isSome()
       check focusedOpt.get().id == id1
 
@@ -232,23 +228,23 @@ when hasAsyncSupport:
       let window2 = newWindow(rect(20, 20, 25, 12), "Window 2")
       let window3 = newWindow(rect(5, 5, 20, 10), "Window 3")
 
-      let id1 = waitFor app.addWindowAsync(window1)
-      let id2 = waitFor app.addWindowAsync(window2)
-      let id3 = waitFor app.addWindowAsync(window3)
+      let id1 = app.addWindow(window1)
+      let id2 = app.addWindow(window2)
+      let id3 = app.addWindow(window3)
 
       # All windows should exist
-      check (waitFor app.getWindowAsync(id1)).isSome()
-      check (waitFor app.getWindowAsync(id2)).isSome()
-      check (waitFor app.getWindowAsync(id3)).isSome()
+      check app.getWindow(id1).isSome()
+      check app.getWindow(id2).isSome()
+      check app.getWindow(id3).isSome()
 
       # Remove middle window
-      let removed = waitFor app.removeWindowAsync(id2)
+      let removed = app.removeWindow(id2)
       check removed == true
 
       # Verify removal
-      check (waitFor app.getWindowAsync(id1)).isSome()
-      check (waitFor app.getWindowAsync(id2)).isNone()
-      check (waitFor app.getWindowAsync(id3)).isSome()
+      check app.getWindow(id1).isSome()
+      check app.getWindow(id2).isNone()
+      check app.getWindow(id3).isSome()
 
     test "window focus management with multiple windows":
       let config = AppConfig(windowMode: true)
@@ -257,35 +253,252 @@ when hasAsyncSupport:
       let window1 = newWindow(rect(10, 10, 30, 15), "Window 1")
       let window2 = newWindow(rect(20, 20, 25, 12), "Window 2")
 
-      let id1 = waitFor app.addWindowAsync(window1)
-      let id2 = waitFor app.addWindowAsync(window2)
+      let id1 = app.addWindow(window1)
+      let id2 = app.addWindow(window2)
 
-      # First window should be focused initially (async behavior)
-      var focusedOpt = waitFor app.getFocusedWindowAsync()
+      # First window should be focused initially
+      var focusedOpt = app.getFocusedWindow()
       check focusedOpt.isSome()
       check focusedOpt.get().id == id1
 
       # Focus second window
-      discard waitFor app.focusWindowAsync(id2)
-      focusedOpt = waitFor app.getFocusedWindowAsync()
+      discard app.focusWindow(id2)
+      focusedOpt = app.getFocusedWindow()
       check focusedOpt.isSome()
       check focusedOpt.get().id == id2
 
       # Focus first window
-      discard waitFor app.focusWindowAsync(id1)
-      focusedOpt = waitFor app.getFocusedWindowAsync()
+      discard app.focusWindow(id1)
+      focusedOpt = app.getFocusedWindow()
       check focusedOpt.isSome()
       check focusedOpt.get().id == id1
 
-  suite "AsyncApp quitAsync":
-    test "quitAsync sets running to false":
+  suite "AsyncApp Window APIs":
+    test "getWindows returns all windows":
+      let config = AppConfig(windowMode: true)
+      let app = newAsyncApp(config)
+
+      let window1 = newWindow(rect(10, 10, 30, 15), "Window 1")
+      let window2 = newWindow(rect(20, 20, 25, 12), "Window 2")
+      let window3 = newWindow(rect(5, 5, 20, 10), "Window 3")
+
+      discard app.addWindow(window1)
+      discard app.addWindow(window2)
+      discard app.addWindow(window3)
+
+      let windows = app.getWindows()
+      check windows.len == 3
+
+    test "getWindows with no window mode returns empty":
+      let app = newAsyncApp()
+      let windows = app.getWindows()
+      check windows.len == 0
+
+    test "getWindowCount returns correct count":
+      let config = AppConfig(windowMode: true)
+      let app = newAsyncApp(config)
+
+      check app.getWindowCount() == 0
+
+      let window1 = newWindow(rect(10, 10, 30, 15), "Window 1")
+      let window2 = newWindow(rect(20, 20, 25, 12), "Window 2")
+
+      discard app.addWindow(window1)
+      check app.getWindowCount() == 1
+
+      discard app.addWindow(window2)
+      check app.getWindowCount() == 2
+
+    test "getWindowCount with no window mode returns zero":
+      let app = newAsyncApp()
+      check app.getWindowCount() == 0
+
+    test "getFocusedWindowId returns focused window ID":
+      let config = AppConfig(windowMode: true)
+      let app = newAsyncApp(config)
+
+      # No window initially
+      check app.getFocusedWindowId().isNone()
+
+      let window1 = newWindow(rect(10, 10, 30, 15), "Window 1")
+      let window2 = newWindow(rect(20, 20, 25, 12), "Window 2")
+
+      let id1 = app.addWindow(window1)
+      check app.getFocusedWindowId().isSome()
+      check app.getFocusedWindowId().get() == id1
+
+      discard app.addWindow(window2)
+      # First window should still be focused
+      check app.getFocusedWindowId().get() == id1
+
+    test "getFocusedWindowId with no window mode returns none":
+      let app = newAsyncApp()
+      check app.getFocusedWindowId().isNone()
+
+    test "getWindowInfo returns window information":
+      let config = AppConfig(windowMode: true)
+      let app = newAsyncApp(config)
+
+      let windowArea = rect(15, 8, 40, 20)
+      let window = newWindow(windowArea, "Test Window", resizable = false, modal = true)
+      let windowId = app.addWindow(window)
+
+      let windowInfo = app.getWindowInfo(windowId)
+      check windowInfo.isSome()
+
+      let info = windowInfo.get()
+      check info.id == windowId
+      check info.title == "Test Window"
+      check info.area == windowArea
+      check info.resizable == false
+      check info.modal == true
+
+    test "getWindowInfo with invalid ID returns none":
+      let config = AppConfig(windowMode: true)
+      let app = newAsyncApp(config)
+
+      let windowInfo = app.getWindowInfo(WindowId(999))
+      check windowInfo.isNone()
+
+    test "getWindowInfo with no window mode returns none":
+      let app = newAsyncApp()
+      check app.getWindowInfo(WindowId(1)).isNone()
+
+  suite "AsyncApp quit":
+    test "quit sets running to false":
       let app = newAsyncApp()
 
       # Initially not running
       check app.isRunning() == false
 
       # Quit should work even if not running
-      waitFor app.quitAsync()
+      app.quit()
       check app.isRunning() == false
+
+  suite "AsyncApp Cursor Management":
+    test "cursor is hidden by default":
+      let app = newAsyncApp()
+      check app.isCursorVisible() == false
+
+    test "showCursorAt sets position and visibility":
+      let app = newAsyncApp()
+      app.showCursorAt(10, 5)
+      check app.isCursorVisible() == true
+      check app.getCursorPosition() == (10, 5)
+
+    test "showCursorAt with Position type":
+      let app = newAsyncApp()
+      app.showCursorAt(pos(20, 15))
+      check app.isCursorVisible() == true
+      check app.getCursorPosition() == (20, 15)
+
+    test "hideCursor hides cursor":
+      let app = newAsyncApp()
+      app.showCursorAt(10, 5)
+      check app.isCursorVisible() == true
+      app.hideCursor()
+      check app.isCursorVisible() == false
+
+    test "showCursor shows cursor without changing position":
+      let app = newAsyncApp()
+      app.setCursorPosition(15, 10)
+      app.showCursor()
+      check app.isCursorVisible() == true
+      check app.getCursorPosition() == (15, 10)
+
+    test "setCursorPosition sets position without changing visibility":
+      let app = newAsyncApp()
+      app.setCursorPosition(5, 3)
+      check app.getCursorPosition() == (5, 3)
+      check app.isCursorVisible() == false # Still hidden
+
+    test "setCursorPosition with Position type":
+      let app = newAsyncApp()
+      app.setCursorPosition(pos(8, 12))
+      check app.getCursorPosition() == (8, 12)
+
+    test "moveCursorBy moves cursor relatively":
+      let app = newAsyncApp()
+      app.setCursorPosition(10, 10)
+      app.moveCursorBy(5, -3)
+      check app.getCursorPosition() == (15, 7)
+
+    test "setCursorStyle changes cursor style":
+      let app = newAsyncApp()
+      check app.getCursorStyle() == CursorStyle.Default
+      app.setCursorStyle(CursorStyle.BlinkingBar)
+      check app.getCursorStyle() == CursorStyle.BlinkingBar
+
+    test "resetCursor resets to default state":
+      let app = newAsyncApp()
+      app.showCursorAt(10, 5)
+      app.setCursorStyle(CursorStyle.SteadyBlock)
+      app.resetCursor()
+      check app.isCursorVisible() == false
+      check app.getCursorPosition() == (-1, -1)
+      check app.getCursorStyle() == CursorStyle.Default
+
+  suite "AsyncApp handleWindowEvent":
+    test "handleWindowEvent with no window mode returns false":
+      let app = newAsyncApp()
+      let event = Event(kind: Key)
+      check app.handleWindowEvent(event) == false
+
+    test "handleWindowEvent with window mode enabled but no handlers":
+      let config = AppConfig(windowMode: true)
+      let app = newAsyncApp(config)
+      let event = Event(kind: Key)
+      # No window has handlers, so should return false
+      check app.handleWindowEvent(event) == false
+
+    test "handleWindowEvent with window that has key handler":
+      let config = AppConfig(windowMode: true)
+      let app = newAsyncApp(config)
+
+      let window = newWindow(rect(10, 10, 30, 15), "Test Window")
+      window.setKeyHandler(
+        proc(w: Window, k: KeyEvent): bool =
+          true
+      )
+      let windowId = app.addWindow(window)
+
+      # Focus the window
+      discard app.focusWindow(windowId)
+
+      let event = Event(kind: Key)
+      # Window has a key handler, so should return true
+      check app.handleWindowEvent(event) == true
+
+    test "handleWindowEvent mouse event with window that has mouse handler":
+      let config = AppConfig(windowMode: true)
+      let app = newAsyncApp(config)
+
+      let window = newWindow(rect(10, 10, 30, 15), "Test Window")
+      window.setMouseHandler(
+        proc(w: Window, m: MouseEvent): bool =
+          true
+      )
+      discard app.addWindow(window)
+
+      # Mouse event within window bounds
+      let event = Event(kind: Mouse, mouse: MouseEvent(x: 15, y: 12))
+      # Window has a mouse handler, so should return true
+      check app.handleWindowEvent(event) == true
+
+    test "handleWindowEvent resize event":
+      let config = AppConfig(windowMode: true)
+      let app = newAsyncApp(config)
+
+      let window = newWindow(rect(10, 10, 30, 15), "Test Window")
+      window.setResizeHandler(
+        proc(w: Window, newSize: Size): bool =
+          true
+      )
+      discard app.addWindow(window)
+
+      let event = Event(kind: Resize)
+      # Resize events are handled separately via dispatchResize, not handleEvent
+      # This is consistent with sync WindowManager behavior
+      check app.handleWindowEvent(event) == false
 else:
   echo "Skipping AsyncApp tests - no async backend available"

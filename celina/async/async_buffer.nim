@@ -3,7 +3,7 @@
 ## This module provides memory-safe Buffer types that can be used
 ## in async closures without violating Nim's memory safety requirements.
 
-import std/[locks, strformat]
+import std/[locks, strformat, unicode]
 
 import async_backend
 
@@ -149,20 +149,51 @@ proc clearAsync*(asyncBuffer: AsyncBuffer, cell: Cell = cell()) {.async.} =
   await sleepMs(0)
 
 proc setStringAsync*(
-    asyncBuffer: AsyncBuffer, x, y: int, text: string, style: Style = defaultStyle()
+    asyncBuffer: AsyncBuffer,
+    x, y: int,
+    text: string,
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
 ) {.async.} =
   ## Set string asynchronously
   asyncBuffer.withBufferAsync:
-    buffer.setString(x, y, text, style)
+    buffer.setString(x, y, text, style, hyperlink)
 
   # Yield to allow other async operations
   await sleepMs(0)
 
 proc setStringAsync*(
-    asyncBuffer: AsyncBuffer, pos: Position, text: string, style: Style = defaultStyle()
+    asyncBuffer: AsyncBuffer,
+    pos: Position,
+    text: string,
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
 ) {.async.} =
   ## Set string at position asynchronously
-  await asyncBuffer.setStringAsync(pos.x, pos.y, text, style)
+  await asyncBuffer.setStringAsync(pos.x, pos.y, text, style, hyperlink)
+
+proc setRunesAsync*(
+    asyncBuffer: AsyncBuffer,
+    x, y: int,
+    runes: seq[Rune],
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
+) {.async.} =
+  ## Set a sequence of runes starting at the given coordinates asynchronously
+  asyncBuffer.withBufferAsync:
+    buffer.setRunes(x, y, runes, style, hyperlink)
+
+  await sleepMs(0)
+
+proc setRunesAsync*(
+    asyncBuffer: AsyncBuffer,
+    pos: Position,
+    runes: seq[Rune],
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
+) {.async.} =
+  ## Set a sequence of runes starting at the given position asynchronously
+  await asyncBuffer.setRunesAsync(pos.x, pos.y, runes, style, hyperlink)
 
 proc setCellAsync*(asyncBuffer: AsyncBuffer, x, y: int, cell: Cell) {.async.} =
   ## Set cell asynchronously
@@ -201,17 +232,46 @@ proc getCell*(asyncBuffer: AsyncBuffer, pos: Position): Cell =
   asyncBuffer.getCell(pos.x, pos.y)
 
 proc setString*(
-    asyncBuffer: AsyncBuffer, x, y: int, text: string, style: Style = defaultStyle()
+    asyncBuffer: AsyncBuffer,
+    x, y: int,
+    text: string,
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
 ) =
   ## Set string synchronously (thread-safe)
   asyncBuffer.withBuffer:
-    buffer.setString(x, y, text, style)
+    buffer.setString(x, y, text, style, hyperlink)
 
 proc setString*(
-    asyncBuffer: AsyncBuffer, pos: Position, text: string, style: Style = defaultStyle()
+    asyncBuffer: AsyncBuffer,
+    pos: Position,
+    text: string,
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
 ) =
   ## Set string at position synchronously (thread-safe)
-  asyncBuffer.setString(pos.x, pos.y, text, style)
+  asyncBuffer.setString(pos.x, pos.y, text, style, hyperlink)
+
+proc setRunes*(
+    asyncBuffer: AsyncBuffer,
+    x, y: int,
+    runes: seq[Rune],
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
+) =
+  ## Set a sequence of runes starting at the given coordinates (thread-safe)
+  asyncBuffer.withBuffer:
+    buffer.setRunes(x, y, runes, style, hyperlink)
+
+proc setRunes*(
+    asyncBuffer: AsyncBuffer,
+    pos: Position,
+    runes: seq[Rune],
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
+) =
+  ## Set a sequence of runes starting at the given position (thread-safe)
+  asyncBuffer.setRunes(pos.x, pos.y, runes, style, hyperlink)
 
 proc clear*(asyncBuffer: AsyncBuffer, cell: Cell = cell()) =
   ## Clear buffer synchronously (thread-safe)

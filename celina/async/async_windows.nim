@@ -1,9 +1,24 @@
-## Async-safe Window management system
+## Async Window Management System
+## ==============================
 ##
-## This module provides GC-safe window management capabilities for async operations,
+## This module provides window management capabilities for async operations,
 ## allowing for overlapping, resizable, and focusable window areas within the terminal.
+##
+## Event Handling
+## --------------
+## Two event handling functions are provided:
+##
+## - `handleEventSync`: Synchronous handler that **invokes** window event handlers.
+##   Use this when you need actual event processing. Safe to call from async contexts
+##   with `{.cast(gcsafe).}`.
+##
+## - `handleEventAsync`: Async handler that only **checks** if handlers exist.
+##   Due to GC safety constraints, it cannot invoke handlers directly.
+##   Returns true if an appropriate handler exists for the event.
+##
+## For most use cases, prefer `handleEventSync` for actual event processing.
 
-import std/[sequtils, options, atomics]
+import std/[sequtils, options]
 
 import async_backend, async_buffer
 import ../core/[geometry, buffer, colors, events, windows]
@@ -11,47 +26,47 @@ import ../core/[geometry, buffer, colors, events, windows]
 export
   WindowId, Window, WindowState, WindowBorder, BorderChars, EventPhase, WindowEvent,
   WindowEventHandler, WindowKeyHandler, WindowMouseHandler, WindowResizeHandler,
-  EventHandler, newWindow
+  EventHandler, newWindow, WindowInfo, toWindowInfo
 
 type
-  ## Async-safe window manager with thread-safe operations
+  ## Async window manager for cooperative multitasking
   AsyncWindowManager* = ref object
     windows: seq[Window]
-    nextWindowId: Atomic[int]
+    nextWindowId: int
     focusedWindow: Option[WindowId]
-    lock: Atomic[bool] # Simple spinlock for thread safety
 
   AsyncWindowError* = object of CatchableError
 
-# Thread-Safe Access Control
+# Helper Functions
 
 proc getWindowHelper(awm: AsyncWindowManager, windowId: WindowId): Option[Window] =
-  ## Helper function to get a window by ID (assumes caller has lock)
+  ## Helper function to get a window by ID
   for window in awm.windows:
     if window.id == windowId:
       return some(window)
   return none(Window)
 
-template withLock*(awm: AsyncWindowManager, operation: untyped): untyped =
-  ## Thread-safe template for accessing the window manager
-  while awm.lock.exchange(true):
-    # Spin wait - should be very brief for window operations
-    discard
-
-  try:
-    operation
-  finally:
-    awm.lock.store(false)
+proc focusWindowHelper(awm: AsyncWindowManager, windowIndex: int, window: Window) =
+  ## Internal helper to focus a window and bring it to front.
+  ## Does not check visibility - caller must ensure window is visible.
+  # Unfocus all windows
+  for w in awm.windows:
+    if not w.isNil:
+      w.focused = false
+  # Focus target window and bring to front
+  window.focused = true
+  awm.focusedWindow = some(window.id)
+  awm.windows.delete(windowIndex)
+  awm.windows.add(window)
 
 # AsyncWindowManager Creation and Management
 
 proc newAsyncWindowManager*(): AsyncWindowManager =
-  ## Create a new async-safe window manager
+  ## Create a new async window manager
   result = AsyncWindowManager()
   result.windows = @[]
-  result.nextWindowId.store(1)
+  result.nextWindowId = 1
   result.focusedWindow = none(WindowId)
-  result.lock.store(false)
 
 # Async Window Operations
 
@@ -64,11 +79,11 @@ proc getWindowAsync*(
 
   await sleepMs(0) # Yield to other tasks
 
-  awm.withLock:
-    for window in awm.windows:
-      if not window.isNil and window.id == windowId:
-        result = some(window)
-        break
+  for window in awm.windows:
+    if not window.isNil and window.id == windowId:
+      return some(window)
+
+  return none(Window)
 
 proc addWindowAsync*(
     awm: AsyncWindowManager, window: Window
@@ -77,16 +92,16 @@ proc addWindowAsync*(
   if awm.isNil or window.isNil:
     raise newException(AsyncWindowError, "AsyncWindowManager or Window is nil")
 
-  let newId = awm.nextWindowId.fetchAdd(1)
+  let newId = awm.nextWindowId
+  awm.nextWindowId.inc()
 
-  awm.withLock:
-    window.id = WindowId(newId)
-    awm.windows.add(window)
+  window.id = WindowId(newId)
+  awm.windows.add(window)
 
-    # Auto-focus if it's the first window or marked for focus
-    if awm.windows.len == 1 or window.focused:
-      awm.focusedWindow = some(window.id)
-      window.focused = true
+  # Auto-focus if it's the first window or marked for focus
+  if awm.windows.len == 1 or window.focused:
+    awm.focusedWindow = some(window.id)
+    window.focused = true
 
   await sleepMs(0)
   return window.id
@@ -98,29 +113,29 @@ proc removeWindowAsync*(
   ## All window resources are automatically freed by Nim's GC
   await sleepMs(0)
 
-  awm.withLock:
-    var windowToRemove: Option[Window] = none(Window)
-    for window in awm.windows:
-      if window.id == windowId:
-        windowToRemove = some(window)
-        break
-    if windowToRemove.isSome():
-      # Remove from windows list
-      awm.windows = awm.windows.filterIt(it.id != windowId)
+  var windowToRemove: Option[Window] = none(Window)
+  for window in awm.windows:
+    if window.id == windowId:
+      windowToRemove = some(window)
+      break
 
-      # Update focused window if necessary
-      if awm.focusedWindow.isSome() and awm.focusedWindow.get() == windowId:
-        # Focus the next available window
-        if awm.windows.len > 0:
-          let nextWindow = awm.windows[^1] # Focus the top window
-          awm.focusedWindow = some(nextWindow.id)
-          nextWindow.focused = true
-        else:
-          awm.focusedWindow = none(WindowId)
+  if windowToRemove.isSome():
+    # Remove from windows list
+    awm.windows = awm.windows.filterIt(it.id != windowId)
 
-      return true
-    else:
-      return false
+    # Update focused window if necessary
+    if awm.focusedWindow.isSome() and awm.focusedWindow.get() == windowId:
+      # Focus the next available window
+      if awm.windows.len > 0:
+        let nextWindow = awm.windows[^1] # Focus the top window
+        awm.focusedWindow = some(nextWindow.id)
+        nextWindow.focused = true
+      else:
+        awm.focusedWindow = none(WindowId)
+
+    return true
+  else:
+    return false
 
 proc focusWindowAsync*(
     awm: AsyncWindowManager, windowId: WindowId
@@ -131,24 +146,24 @@ proc focusWindowAsync*(
 
   await sleepMs(0)
 
-  awm.withLock:
-    # Unfocus all windows
-    for window in awm.windows:
-      if not window.isNil:
-        window.focused = false
+  # Unfocus all windows
+  for window in awm.windows:
+    if not window.isNil:
+      window.focused = false
 
-    # Focus the target window
-    for i, window in awm.windows:
-      if not window.isNil and window.id == windowId and window.visible:
-        window.focused = true
-        awm.focusedWindow = some(windowId)
+  # Focus the target window
+  for i, window in awm.windows:
+    if not window.isNil and window.id == windowId and window.visible:
+      window.focused = true
+      awm.focusedWindow = some(windowId)
 
-        # Bring to front by moving to end of sequence
-        awm.windows.delete(i)
-        awm.windows.add(window)
+      # Bring to front by moving to end of sequence
+      awm.windows.delete(i)
+      awm.windows.add(window)
 
-        result = true
-        break
+      return true
+
+  return false
 
 proc getFocusedWindowAsync*(awm: AsyncWindowManager): Future[Option[Window]] {.async.} =
   ## Get the currently focused window asynchronously
@@ -157,13 +172,13 @@ proc getFocusedWindowAsync*(awm: AsyncWindowManager): Future[Option[Window]] {.a
 
   await sleepMs(0)
 
-  awm.withLock:
-    if awm.focusedWindow.isSome():
-      let windowId = awm.focusedWindow.get()
-      for window in awm.windows:
-        if not window.isNil and window.id == windowId:
-          result = some(window)
-          break
+  if awm.focusedWindow.isSome():
+    let windowId = awm.focusedWindow.get()
+    for window in awm.windows:
+      if not window.isNil and window.id == windowId:
+        return some(window)
+
+  return none(Window)
 
 proc getVisibleWindowsAsync*(awm: AsyncWindowManager): Future[seq[Window]] {.async.} =
   ## Get all visible windows sorted by Z-index asynchronously
@@ -172,10 +187,9 @@ proc getVisibleWindowsAsync*(awm: AsyncWindowManager): Future[seq[Window]] {.asy
 
   await sleepMs(0)
 
-  awm.withLock:
-    for window in awm.windows:
-      if not window.isNil and window.visible and window.state != wsHidden:
-        result.add(window)
+  for window in awm.windows:
+    if not window.isNil and window.visible and window.state != wsHidden:
+      result.add(window)
 
 proc findWindowAtAsync*(
     awm: AsyncWindowManager, pos: Position
@@ -194,41 +208,87 @@ proc findWindowAtAsync*(
 # Async Event Handling
 
 proc handleEventAsync*(awm: AsyncWindowManager, event: Event): Future[bool] {.async.} =
-  ## Handle an event, routing it to the appropriate window asynchronously
-  ## Returns true if the event was handled
-  ## Note: Event handlers are executed synchronously for GC safety
+  ## Handle an event asynchronously - checks if a window can handle the event.
+  ##
+  ## Note: Due to GC safety constraints in async contexts, this function only
+  ## checks if an appropriate handler exists but does not invoke it.
+  ## For actual event handling, use handleEventSync which can safely invoke handlers.
+  ##
+  ## Returns true if a window has an appropriate handler for the event.
+
+  if awm.isNil:
+    return false
+
+  try:
+    case event.kind
+    of Key:
+      # Check if focused window has a key handler
+      let focusedWindowOpt = await awm.getFocusedWindowAsync()
+      if focusedWindowOpt.isSome():
+        let window = focusedWindowOpt.get()
+        return window.keyHandler.isSome()
+      return false
+    of Mouse:
+      # Check if window at position has a mouse handler
+      let windowOpt = await awm.findWindowAtAsync(pos(event.mouse.x, event.mouse.y))
+      if windowOpt.isSome():
+        let window = windowOpt.get()
+        return window.mouseHandler.isSome()
+      return false
+    of Resize:
+      # Check if any visible window has a resize handler
+      let visibleWindows = await awm.getVisibleWindowsAsync()
+      for window in visibleWindows:
+        if window.resizeHandler.isSome():
+          return true
+      return false
+    else:
+      return false
+  except CatchableError:
+    # Handler check failed - window state may be invalid
+    return false
+
+proc handleEventSync*(awm: AsyncWindowManager, event: Event): bool =
+  ## Synchronous event handling for AsyncWindowManager.
+  ## Routes events to appropriate windows and invokes their handlers.
+  ##
+  ## Unlike handleEventAsync, this function actually invokes the event handlers.
+  ## Safe to call from async contexts with `{.cast(gcsafe).}`.
+  ##
+  ## Returns true if the event was handled by a window.
+  if awm.isNil:
+    return false
 
   try:
     case event.kind
     of Key:
       # Route keyboard events to focused window
-      let focusedWindowOpt = await awm.getFocusedWindowAsync()
-      if focusedWindowOpt.isSome():
-        let window = focusedWindowOpt.get()
-        # For now, just return true if window can handle keys
-        # Real handler invocation would need GC-safe redesign
-        return window.keyHandler.isSome()
+      if awm.focusedWindow.isSome():
+        let windowId = awm.focusedWindow.get()
+        for window in awm.windows:
+          if window.id == windowId:
+            return window.handleWindowEvent(event)
+      return false
     of Mouse:
-      # Route mouse events to window under cursor
-      let windowOpt = await awm.findWindowAtAsync(pos(event.mouse.x, event.mouse.y))
-      if windowOpt.isSome():
-        let window = windowOpt.get()
-        # For now, just return true if window can handle mouse
-        return window.mouseHandler.isSome()
+      # Find topmost window at mouse position
+      let mousePos = pos(event.mouse.x, event.mouse.y)
+      for i in countdown(awm.windows.len - 1, 0):
+        let window = awm.windows[i]
+        if window.visible and window.area.contains(mousePos):
+          # Auto-focus window on mouse click
+          if event.mouse.kind == Press:
+            awm.focusWindowHelper(i, window)
+          return window.handleWindowEvent(event)
+      return false
     of Resize:
-      # Broadcast resize to all windows with resize handlers
-      let visibleWindows = await awm.getVisibleWindowsAsync()
-      var handlerCount = 0
-      for window in visibleWindows:
-        if window.resizeHandler.isSome():
-          handlerCount.inc()
-      # Return true if any window has resize handlers
-      return handlerCount > 0
+      # Resize events are typically handled separately via dispatchResize
+      # Just return false here for consistency with sync WindowManager
+      return false
     else:
-      discard
-
-    return false
+      return false
   except:
+    # Event handler raised an exception - treat as unhandled
+    # Note: Using bare except to handle indirect calls that may raise any Exception
     return false
 
 # Async Window Border Drawing
@@ -316,25 +376,24 @@ proc renderAsync*(
 
 proc renderSync*(awm: AsyncWindowManager, destBuffer: var Buffer) =
   ## Synchronous render for compatibility with existing sync code
-  awm.withLock:
-    var visibleWindows: seq[Window] = @[]
-    for window in awm.windows:
-      if window.visible and window.state != wsHidden:
-        visibleWindows.add(window)
+  var visibleWindows: seq[Window] = @[]
+  for window in awm.windows:
+    if window.visible and window.state != wsHidden:
+      visibleWindows.add(window)
 
-    for window in visibleWindows:
-      if window.state != wsMinimized and window.state != wsHidden:
-        var windowBuffer = newBuffer(window.area)
+  for window in visibleWindows:
+    if window.state != wsMinimized and window.state != wsHidden:
+      var windowBuffer = newBuffer(window.area)
 
-        # Render basic window content (placeholder)
-        windowBuffer.setString(
-          1, 1, window.title, Style(fg: color(White), modifiers: {Bold})
-        )
+      # Render basic window content (placeholder)
+      windowBuffer.setString(
+        1, 1, window.title, Style(fg: color(White), modifiers: {Bold})
+      )
 
-        if window.border.isSome():
-          drawAsyncWindowBorder(window, windowBuffer)
+      if window.border.isSome():
+        drawAsyncWindowBorder(window, windowBuffer)
 
-        destBuffer.merge(windowBuffer, pos(window.area.x, window.area.y))
+      destBuffer.merge(windowBuffer, pos(window.area.x, window.area.y))
 
 # Window Layout and Management
 
@@ -350,16 +409,15 @@ proc sendToBackAsync*(
   ## Send a window to the back asynchronously
   await sleepMs(0)
 
-  awm.withLock:
-    let windowOpt = getWindowHelper(awm, windowId)
-    if windowOpt.isSome():
-      let window = windowOpt.get()
-      let windowIndex = awm.windows.find(window)
-      if windowIndex >= 0:
-        awm.windows.delete(windowIndex)
-        awm.windows.insert(window, 0) # Insert at beginning
-        return true
-    return false
+  let windowOpt = getWindowHelper(awm, windowId)
+  if windowOpt.isSome():
+    let window = windowOpt.get()
+    let windowIndex = awm.windows.find(window)
+    if windowIndex >= 0:
+      awm.windows.delete(windowIndex)
+      awm.windows.insert(window, 0) # Insert at beginning
+      return true
+  return false
 
 proc resizeWindowAsync*(
     awm: AsyncWindowManager, windowId: WindowId, newSize: Size
@@ -367,18 +425,17 @@ proc resizeWindowAsync*(
   ## Resize a window asynchronously
   await sleepMs(0)
 
-  awm.withLock:
-    let windowOpt = getWindowHelper(awm, windowId)
-    if windowOpt.isSome():
-      let window = windowOpt.get()
-      window.area.width = newSize.width
-      window.area.height = newSize.height
+  let windowOpt = getWindowHelper(awm, windowId)
+  if windowOpt.isSome():
+    let window = windowOpt.get()
+    window.area.width = newSize.width
+    window.area.height = newSize.height
 
-      # Note: Resize handlers not called in async mode for GC safety
-      # Handler invocation would require careful design to be GC-safe
+    # Note: Resize handlers not called in async mode for GC safety
+    # Handler invocation would require careful design to be GC-safe
 
-      return true
-    return false
+    return true
+  return false
 
 proc moveWindowAsync*(
     awm: AsyncWindowManager, windowId: WindowId, newPos: Position
@@ -386,36 +443,119 @@ proc moveWindowAsync*(
   ## Move a window to a new position asynchronously
   await sleepMs(0)
 
-  awm.withLock:
-    let windowOpt = getWindowHelper(awm, windowId)
-    if windowOpt.isSome():
-      let window = windowOpt.get()
-      window.area.x = newPos.x
-      window.area.y = newPos.y
-      return true
-    return false
+  let windowOpt = getWindowHelper(awm, windowId)
+  if windowOpt.isSome():
+    let window = windowOpt.get()
+    window.area.x = newPos.x
+    window.area.y = newPos.y
+    return true
+  return false
 
 # Compatibility Layer
 
 proc getWindowSync*(awm: AsyncWindowManager, windowId: WindowId): Option[Window] =
   ## Synchronous getWindow for compatibility with sync code
   ## For async code, use getWindowAsync instead
-  awm.withLock:
-    for window in awm.windows:
-      if window.id == windowId:
-        return some(window)
-    return none(Window)
+  for window in awm.windows:
+    if window.id == windowId:
+      return some(window)
+  return none(Window)
 
 # Statistics and Debugging
 
-proc getStats*(
-    awm: AsyncWindowManager
-): tuple[windowCount: int, focusedId: int, locked: bool] =
+proc getStats*(awm: AsyncWindowManager): tuple[windowCount: int, focusedId: int] =
   ## Get window manager statistics
-  awm.withLock:
-    let focusedId =
-      if awm.focusedWindow.isSome():
-        awm.focusedWindow.get().int
+  let focusedId =
+    if awm.focusedWindow.isSome():
+      awm.focusedWindow.get().int
+    else:
+      -1
+  return (awm.windows.len, focusedId)
+
+proc getWindowsSync*(awm: AsyncWindowManager): seq[Window] =
+  ## Get all windows synchronously
+  if awm.isNil:
+    return @[]
+  result = awm.windows
+
+proc getWindowCountSync*(awm: AsyncWindowManager): int =
+  ## Get the number of windows synchronously
+  if awm.isNil:
+    return 0
+  result = awm.windows.len
+
+proc getFocusedWindowIdSync*(awm: AsyncWindowManager): Option[WindowId] =
+  ## Get the ID of the focused window synchronously
+  if awm.isNil:
+    return none(WindowId)
+  result = awm.focusedWindow
+
+proc addWindowSync*(awm: AsyncWindowManager, window: Window): WindowId =
+  ## Add a window to the manager synchronously and return its ID
+  if awm.isNil or window.isNil:
+    raise newException(AsyncWindowError, "AsyncWindowManager or Window is nil")
+
+  let newId = awm.nextWindowId
+  awm.nextWindowId.inc()
+
+  window.id = WindowId(newId)
+  awm.windows.add(window)
+
+  # Auto-focus if it's the first window or marked for focus
+  if awm.windows.len == 1 or window.focused:
+    awm.focusedWindow = some(window.id)
+    window.focused = true
+
+  return window.id
+
+proc removeWindowSync*(awm: AsyncWindowManager, windowId: WindowId): bool =
+  ## Remove a window from the manager synchronously
+  var windowToRemove: Option[Window] = none(Window)
+  for window in awm.windows:
+    if window.id == windowId:
+      windowToRemove = some(window)
+      break
+
+  if windowToRemove.isSome():
+    # Remove from windows list
+    awm.windows = awm.windows.filterIt(it.id != windowId)
+
+    # Update focused window if necessary
+    if awm.focusedWindow.isSome() and awm.focusedWindow.get() == windowId:
+      # Focus the next available window
+      if awm.windows.len > 0:
+        let nextWindow = awm.windows[^1]
+        awm.focusedWindow = some(nextWindow.id)
+        nextWindow.focused = true
       else:
-        -1
-    return (awm.windows.len, focusedId, awm.lock.load())
+        awm.focusedWindow = none(WindowId)
+
+    return true
+  else:
+    return false
+
+proc focusWindowSync*(awm: AsyncWindowManager, windowId: WindowId): bool =
+  ## Focus a specific window synchronously
+  if awm.isNil:
+    return false
+
+  # Find and focus the target window
+  for i, window in awm.windows:
+    if not window.isNil and window.id == windowId and window.visible:
+      awm.focusWindowHelper(i, window)
+      return true
+
+  return false
+
+proc getFocusedWindowSync*(awm: AsyncWindowManager): Option[Window] =
+  ## Get the currently focused window synchronously
+  if awm.isNil:
+    return none(Window)
+
+  if awm.focusedWindow.isSome():
+    let windowId = awm.focusedWindow.get()
+    for window in awm.windows:
+      if not window.isNil and window.id == windowId:
+        return some(window)
+
+  return none(Window)

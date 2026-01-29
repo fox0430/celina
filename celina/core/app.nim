@@ -4,7 +4,7 @@
 ## Core application management, lifecycle, and event loop handling.
 ## Provides the main App type and orchestrates all components.
 
-import std/options
+import std/[options, monotimes]
 
 import
   terminal, buffer, events, renderer, fps, cursor, geometry, errors, terminal_common,
@@ -25,6 +25,9 @@ type App* = ref object ## Main application context for CLI applications
   config: AppConfig
   resizeState: ResizeState ## Shared resize detection state (from tick_common)
   forceNextRender: bool ## Force full render on next frame (used after resize)
+  running: bool ## Whether app is currently running
+  frameCounter: int ## Total frame count
+  lastFrameTime: MonoTime ## Timestamp of last frame
 
 proc newApp*(config: AppConfig = DefaultAppConfig): App =
   ## Create a new CLI application with the specified configuration
@@ -41,6 +44,9 @@ proc newApp*(config: AppConfig = DefaultAppConfig): App =
     config: config,
     resizeState: initResizeState(events.getResizeCounter()),
     forceNextRender: false,
+    running: false,
+    frameCounter: 0,
+    lastFrameTime: getMonoTime(),
   )
 
   # Initialize window manager if enabled
@@ -214,6 +220,8 @@ proc tick(app: App): bool =
       app.fpsMonitor.startFrame()
       app.render()
       app.fpsMonitor.endFrame()
+      app.frameCounter.inc()
+      app.lastFrameTime = getMonoTime()
 
     return not app.shouldQuit
   except TerminalError:
@@ -225,6 +233,7 @@ proc run*(app: App) =
   ## Run the application main loop
   try:
     app.setup()
+    app.running = true
 
     # Initialize signal handling for resize detection
     events.initSignalHandling()
@@ -245,6 +254,7 @@ proc run*(app: App) =
       discard
     raise e
   finally:
+    app.running = false
     try:
       app.cleanup()
     except CatchableError:
@@ -375,10 +385,11 @@ proc addWindow*(app: App, window: Window): WindowId =
     app.enableWindowMode()
   return app.windowManager.addWindow(window)
 
-proc removeWindow*(app: App, windowId: WindowId) =
+proc removeWindow*(app: App, windowId: WindowId): bool =
   ## Remove a window from the application
+  ## Returns true if the window was found and removed, false otherwise
   if app.windowMode and not app.windowManager.isNil:
-    app.windowManager.removeWindow(windowId)
+    return app.windowManager.removeWindow(windowId)
 
 proc getWindow*(app: App, windowId: WindowId): Option[Window] =
   ## Get a window by ID
@@ -386,10 +397,11 @@ proc getWindow*(app: App, windowId: WindowId): Option[Window] =
     return app.windowManager.getWindow(windowId)
   return none(Window)
 
-proc focusWindow*(app: App, windowId: WindowId) =
+proc focusWindow*(app: App, windowId: WindowId): bool =
   ## Focus a specific window
+  ## Returns true if the window was found and focused, false otherwise
   if app.windowMode and not app.windowManager.isNil:
-    app.windowManager.focusWindow(windowId)
+    return app.windowManager.focusWindow(windowId)
 
 proc getFocusedWindow*(app: App): Option[Window] =
   ## Get the currently focused window
@@ -427,4 +439,54 @@ proc handleWindowEvent*(app: App, event: Event): bool =
   ## Handle an event through the window manager
   if app.windowMode and not app.windowManager.isNil:
     return app.windowManager.handleEvent(event)
-  return false
+
+# State and info queries
+
+proc isRunning*(app: App): bool =
+  ## Check if app is currently running
+  app.running
+
+proc getTerminalSize*(app: App): Size =
+  ## Get current terminal size
+  app.terminal.getSize()
+
+proc getConfig*(app: App): AppConfig =
+  ## Get the stored configuration
+  app.config
+
+proc getFrameCount*(app: App): int =
+  ## Get total frame count
+  app.frameCounter
+
+proc getLastFrameTime*(app: App): MonoTime =
+  ## Get timestamp of last frame
+  app.lastFrameTime
+
+# Convenience functions
+
+proc quickRun*(
+    eventHandler: proc(event: Event): bool,
+    renderHandler: proc(buffer: var Buffer),
+    config: AppConfig = DefaultAppConfig,
+) =
+  ## Quick way to run a simple CLI application
+  ##
+  ## Example:
+  ## ```nim
+  ## quickRun(
+  ##   eventHandler = proc(event: Event): bool =
+  ##     case event.kind
+  ##     of EventKind.Key:
+  ##       if event.key.code == KeyCode.Char and event.key.char == "q":
+  ##         return false
+  ##     else: discard
+  ##     return true,
+  ##
+  ##   renderHandler = proc(buffer: var Buffer) =
+  ##     buffer.setString(10, 5, "Press 'q' to quit", defaultStyle())
+  ## )
+  ## ```
+  var app = newApp(config)
+  app.onEvent(eventHandler)
+  app.onRender(renderHandler)
+  app.run()

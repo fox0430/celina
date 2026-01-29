@@ -84,13 +84,13 @@ suite "Terminal Common Module Tests":
     test "buildOutputWithCursor basic functionality":
       var oldBuffer = newBuffer(rect(0, 0, 10, 5))
       var newBuffer = newBuffer(rect(0, 0, 10, 5))
-      var lastCursorStyle = CursorStyle.Default
+      let lastCursorStyle = CursorStyle.Default
 
       # Add some content
       newBuffer[2, 2] = cell("A", defaultStyle())
 
       # Test with visible cursor
-      let output = buildOutputWithCursor(
+      let (output, _) = buildOutputWithCursor(
         oldBuffer,
         newBuffer,
         cursorX = 3,
@@ -106,9 +106,9 @@ suite "Terminal Common Module Tests":
     test "buildOutputWithCursor with hidden cursor":
       var oldBuffer = newBuffer(rect(0, 0, 10, 5))
       var newBuffer = newBuffer(rect(0, 0, 10, 5))
-      var lastCursorStyle = CursorStyle.Default
+      let lastCursorStyle = CursorStyle.Default
 
-      let output = buildOutputWithCursor(
+      let (output, _) = buildOutputWithCursor(
         oldBuffer,
         newBuffer,
         cursorX = 3,
@@ -123,10 +123,10 @@ suite "Terminal Common Module Tests":
     test "buildOutputWithCursor style change tracking":
       var oldBuffer = newBuffer(rect(0, 0, 10, 5))
       var newBuffer = newBuffer(rect(0, 0, 10, 5))
-      var lastCursorStyle = CursorStyle.Default
+      let lastCursorStyle = CursorStyle.Default
 
       # First call with new style
-      let output1 = buildOutputWithCursor(
+      let (output1, newLastCursorStyle1) = buildOutputWithCursor(
         oldBuffer,
         newBuffer,
         cursorX = 0,
@@ -137,17 +137,17 @@ suite "Terminal Common Module Tests":
       )
 
       check "\e[5 q" in output1 # Blinking bar style
-      check lastCursorStyle == CursorStyle.BlinkingBar
+      check newLastCursorStyle1 == CursorStyle.BlinkingBar
 
       # Second call with same style - should not repeat
-      let output2 = buildOutputWithCursor(
+      let (output2, _) = buildOutputWithCursor(
         oldBuffer,
         newBuffer,
         cursorX = 1,
         cursorY = 1,
         cursorVisible = true,
         cursorStyle = CursorStyle.BlinkingBar,
-        lastCursorStyle = lastCursorStyle,
+        lastCursorStyle = newLastCursorStyle1,
       )
 
       check "\e[5 q" notin output2 # Should not repeat style
@@ -155,10 +155,10 @@ suite "Terminal Common Module Tests":
     test "buildOutputWithCursor with invalid cursor positions":
       var oldBuffer = newBuffer(rect(0, 0, 10, 5))
       var newBuffer = newBuffer(rect(0, 0, 10, 5))
-      var lastCursorStyle = CursorStyle.Default
+      let lastCursorStyle = CursorStyle.Default
 
       # Test with negative cursor positions (should hide cursor)
-      let output = buildOutputWithCursor(
+      let (output, _) = buildOutputWithCursor(
         oldBuffer,
         newBuffer,
         cursorX = -1,
@@ -903,8 +903,8 @@ suite "Terminal Common Module Tests":
       newBuf.setString(3, 0, "Y", Style(fg: rgb(255, 255, 255), bg: rgb(0, 0, 255)))
         # Both
 
-      var lastCursorStyle = CursorStyle.Default
-      let output = buildOutputWithCursor(
+      let lastCursorStyle = CursorStyle.Default
+      let (output, _) = buildOutputWithCursor(
         oldBuf, newBuf, 0, 0, false, CursorStyle.Default, lastCursorStyle, force = false
       )
 
@@ -924,8 +924,8 @@ suite "Terminal Common Module Tests":
       newBuf.setString(1, 0, " ", Style(bg: grayscale(12))) # Gray
       newBuf.setString(2, 0, " ", Style(bg: color(BrightYellow))) # 16-color
 
-      var lastCursorStyle = CursorStyle.Default
-      let output = buildOutputWithCursor(
+      let lastCursorStyle = CursorStyle.Default
+      let (output, _) = buildOutputWithCursor(
         oldBuf, newBuf, 0, 0, false, CursorStyle.Default, lastCursorStyle, force = false
       )
 
@@ -1035,8 +1035,8 @@ suite "Terminal Common Module Tests":
       var newBuf = newBuffer(10, 1)
       newBuf.setString(0, 0, "Test", defaultStyle(), "https://cursor.com")
 
-      var lastCursorStyle = CursorStyle.Default
-      let output = buildOutputWithCursor(
+      let lastCursorStyle = CursorStyle.Default
+      let (output, _) = buildOutputWithCursor(
         oldBuf, newBuf, 0, 0, false, CursorStyle.Default, lastCursorStyle, force = false
       )
 

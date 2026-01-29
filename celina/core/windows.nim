@@ -88,17 +88,13 @@ type
     focusedWindow*: Option[WindowId]
     modalWindow*: Option[WindowId]
 
-# ============================================================================
 # Window ID utilities
-# ============================================================================
 
 proc `==`*(a, b: WindowId): bool {.borrow.}
 proc `$`*(id: WindowId): string =
   $int(id)
 
-# ============================================================================
 # BorderChars defaults
-# ============================================================================
 
 proc defaultBorderChars*(): BorderChars =
   ## Default border characters using box drawing
@@ -122,9 +118,7 @@ proc defaultBorder*(): WindowBorder =
     chars: defaultBorderChars(),
   )
 
-# ============================================================================
 # Window creation and management
-# ============================================================================
 
 proc newWindow*(
     area: Rect,
@@ -206,9 +200,7 @@ proc updateContentArea(window: Window) =
     # Ensure buffer area is always (0,0) based after resize
     window.buffer.area = newBufferArea
 
-# ============================================================================
 # Window operations
-# ============================================================================
 
 proc move*(window: Window, newPos: Position) =
   ## Move window to a new position
@@ -277,9 +269,7 @@ proc setBorder*(window: Window, border: Option[WindowBorder]) =
   window.border = border
   window.updateContentArea()
 
-# ============================================================================
 # Window event handling
-# ============================================================================
 
 proc setEventHandler*(window: Window, handler: WindowEventHandler) =
   ## Set general event handler for window
@@ -290,7 +280,7 @@ proc setKeyHandler*(window: Window, handler: WindowKeyHandler) =
   window.keyHandler = some(handler)
 
 proc setMouseHandler*(window: Window, handler: WindowMouseHandler) =
-  ## Set mouse event handler for window  
+  ## Set mouse event handler for window
   window.mouseHandler = some(handler)
 
 proc setResizeHandler*(window: Window, handler: WindowResizeHandler) =
@@ -329,9 +319,7 @@ proc handleWindowEvent*(window: Window, event: Event): bool =
 
   return false
 
-# ============================================================================
 # Window rendering
-# ============================================================================
 
 proc drawBorder(window: Window, destBuffer: var Buffer) =
   ## Draw window border to destination buffer
@@ -395,9 +383,7 @@ proc render*(window: Window, destBuffer: var Buffer) =
   # This is guaranteed by updateContentArea and window creation
   destBuffer.merge(window.buffer, contentPos)
 
-# ============================================================================
 # WindowManager implementation
-# ============================================================================
 
 proc newWindowManager*(): WindowManager =
   ## Create a new window manager
@@ -415,8 +401,9 @@ proc getWindow*(wm: WindowManager, windowId: WindowId): Option[Window] =
       return some(window)
   return none(Window)
 
-proc focusWindow*(wm: WindowManager, windowId: WindowId) =
+proc focusWindow*(wm: WindowManager, windowId: WindowId): bool =
   ## Focus a specific window
+  ## Returns true if the window was found and focused, false otherwise
   # Unfocus all windows
   for window in wm.windows:
     window.focused = false
@@ -439,6 +426,9 @@ proc focusWindow*(wm: WindowManager, windowId: WindowId) =
     # Set as modal if the window is modal
     if window.modal:
       wm.modalWindow = some(windowId)
+
+    return true
+  return false
 
 proc addWindow*(wm: WindowManager, window: Window): WindowId =
   ## Add a window to the manager and return its ID
@@ -465,17 +455,23 @@ proc addWindow*(wm: WindowManager, window: Window): WindowId =
 
   return window.id
 
-proc removeWindow*(wm: WindowManager, windowId: WindowId) =
+proc removeWindow*(wm: WindowManager, windowId: WindowId): bool =
   ## Remove a window from the manager
+  ## Returns true if the window was found and removed, false otherwise
   ## All window resources (buffer, title, etc.) are automatically freed by Nim's GC
+  let originalLen = wm.windows.len
   wm.windows = wm.windows.filterIt(it.id != windowId)
+
+  # Check if a window was actually removed
+  if wm.windows.len == originalLen:
+    return false
 
   # Update focus if the focused window was removed
   if wm.focusedWindow.isSome():
     let focusedId = wm.focusedWindow.get()
     if focusedId == windowId:
       if wm.windows.len > 0:
-        wm.focusWindow(wm.windows[^1].id) # Focus last window
+        discard wm.focusWindow(wm.windows[^1].id) # Focus last window
       else:
         wm.focusedWindow = none(WindowId)
 
@@ -484,6 +480,8 @@ proc removeWindow*(wm: WindowManager, windowId: WindowId) =
     let modalId = wm.modalWindow.get()
     if modalId == windowId:
       wm.modalWindow = none(WindowId)
+
+  return true
 
 proc getFocusedWindow*(wm: WindowManager): Option[Window] =
   ## Get the currently focused window
@@ -540,7 +538,7 @@ proc handleEvent*(wm: WindowManager, event: Event): bool =
       let window = windowAtPos.get()
       # Auto-focus window on mouse click
       if event.mouse.kind == Press:
-        wm.focusWindow(window.id)
+        discard wm.focusWindow(window.id)
       return window.handleWindowEvent(event)
 
   # For other events, route to focused window
@@ -563,9 +561,7 @@ proc render*(wm: WindowManager, destBuffer: var Buffer) =
   for window in visibleWindows:
     window.render(destBuffer)
 
-# ============================================================================
 # Window Event System
-# ============================================================================
 
 proc stopPropagation*(event: var WindowEvent) =
   ## Stop event from propagating further
@@ -594,12 +590,11 @@ proc dispatchEvent*(wm: WindowManager, event: Event): bool =
   if targetWindow.isSome():
     result = targetWindow.get().handleWindowEvent(event)
 
-# ============================================================================
 # Utility functions
-# ============================================================================
 
-proc bringToFront*(wm: WindowManager, windowId: WindowId) =
+proc bringToFront*(wm: WindowManager, windowId: WindowId): bool =
   ## Bring a window to the front
+  ## Returns true if the window was found and brought to front, false otherwise
   wm.focusWindow(windowId) # focusWindow already brings to front
 
 proc sendToBack*(wm: WindowManager, windowId: WindowId) =
