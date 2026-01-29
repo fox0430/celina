@@ -38,13 +38,13 @@ proc main() {.async.} =
       discard
     return true # Continue running
 
-  # Set up async render handler
-  app.onRenderAsync proc(buffer: async_buffer.AsyncBuffer): Future[void] {.async.} =
+  # Set up render handler
+  app.onRenderAsync proc(buffer: var Buffer) =
     # Clear the buffer
-    await buffer.clearAsync()
+    buffer.clear()
 
     # Get the buffer area
-    let area = buffer.getArea()
+    let area = buffer.area
 
     # Text to display
     let
