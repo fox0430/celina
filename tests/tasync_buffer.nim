@@ -1,6 +1,6 @@
 # Test suite for async_buffer module
 
-import std/[unittest, strutils]
+import std/[unittest, strutils, unicode]
 
 import ../celina/async/async_backend
 import ../celina/async/async_buffer
@@ -110,6 +110,17 @@ suite "AsyncBuffer Module Tests":
       check asyncBuffer.getCell(2, 3).symbol == "W"
       check asyncBuffer.getCell(6, 3).symbol == "d"
 
+    test "Synchronous string setting with hyperlink":
+      let asyncBuffer = newAsyncBuffer(20, 5)
+      let hyperlink = "https://example.com"
+
+      asyncBuffer.setString(1, 1, "Click", defaultStyle(), hyperlink)
+
+      check asyncBuffer.getCell(1, 1).symbol == "C"
+      check asyncBuffer.getCell(1, 1).hyperlink == hyperlink
+      check asyncBuffer.getCell(5, 1).symbol == "k"
+      check asyncBuffer.getCell(5, 1).hyperlink == hyperlink
+
     test "Synchronous clear operation":
       let asyncBuffer = newAsyncBuffer(5, 3)
 
@@ -178,6 +189,17 @@ suite "AsyncBuffer Module Tests":
       waitFor asyncBuffer.setStringAsync(pos(1, 2), "Test")
       check asyncBuffer.getCell(1, 2).symbol == "T"
       check asyncBuffer.getCell(4, 2).symbol == "t"
+
+    test "Async string setting with hyperlink":
+      let asyncBuffer = newAsyncBuffer(20, 5)
+      let hyperlink = "https://nim-lang.org"
+
+      waitFor asyncBuffer.setStringAsync(2, 2, "Link", defaultStyle(), hyperlink)
+
+      check asyncBuffer.getCell(2, 2).symbol == "L"
+      check asyncBuffer.getCell(2, 2).hyperlink == hyperlink
+      check asyncBuffer.getCell(5, 2).symbol == "k"
+      check asyncBuffer.getCell(5, 2).hyperlink == hyperlink
 
     test "Async cell operations":
       let asyncBuffer = newAsyncBuffer(10, 5)
@@ -502,3 +524,108 @@ suite "AsyncBuffer Module Tests":
 
       oldBuf.destroyAsync()
       newBuf.destroyAsync()
+
+  suite "Runes Operations":
+    test "Synchronous setRunes with coordinates":
+      let asyncBuffer = newAsyncBuffer(20, 5)
+      let runes = "Hello".toRunes()
+      let style = Style(fg: ColorValue(kind: Indexed, indexed: Color.Cyan))
+
+      asyncBuffer.setRunes(3, 1, runes, style)
+
+      check asyncBuffer.getCell(3, 1).symbol == "H"
+      check asyncBuffer.getCell(4, 1).symbol == "e"
+      check asyncBuffer.getCell(5, 1).symbol == "l"
+      check asyncBuffer.getCell(6, 1).symbol == "l"
+      check asyncBuffer.getCell(7, 1).symbol == "o"
+
+      for i in 0 ..< 5:
+        let cellStyle = asyncBuffer.getCell(3 + i, 1).style
+        check cellStyle.fg == ColorValue(kind: Indexed, indexed: Color.Cyan)
+
+    test "Synchronous setRunes with Position":
+      let asyncBuffer = newAsyncBuffer(20, 5)
+      let runes = "World".toRunes()
+
+      asyncBuffer.setRunes(pos(2, 2), runes)
+
+      check asyncBuffer.getCell(2, 2).symbol == "W"
+      check asyncBuffer.getCell(3, 2).symbol == "o"
+      check asyncBuffer.getCell(4, 2).symbol == "r"
+      check asyncBuffer.getCell(5, 2).symbol == "l"
+      check asyncBuffer.getCell(6, 2).symbol == "d"
+
+    test "Synchronous setRunes with hyperlink":
+      let asyncBuffer = newAsyncBuffer(20, 5)
+      let runes = "Link".toRunes()
+      let hyperlink = "https://example.com"
+
+      asyncBuffer.setRunes(1, 1, runes, defaultStyle(), hyperlink)
+
+      check asyncBuffer.getCell(1, 1).symbol == "L"
+      check asyncBuffer.getCell(1, 1).hyperlink == hyperlink
+      check asyncBuffer.getCell(4, 1).symbol == "k"
+      check asyncBuffer.getCell(4, 1).hyperlink == hyperlink
+
+    test "Async setRunes with coordinates":
+      let asyncBuffer = newAsyncBuffer(20, 5)
+      let runes = "Async".toRunes()
+      let style = Style(fg: ColorValue(kind: Indexed, indexed: Color.Yellow))
+
+      waitFor asyncBuffer.setRunesAsync(2, 3, runes, style)
+
+      check asyncBuffer.getCell(2, 3).symbol == "A"
+      check asyncBuffer.getCell(3, 3).symbol == "s"
+      check asyncBuffer.getCell(4, 3).symbol == "y"
+      check asyncBuffer.getCell(5, 3).symbol == "n"
+      check asyncBuffer.getCell(6, 3).symbol == "c"
+
+      for i in 0 ..< 5:
+        let cellStyle = asyncBuffer.getCell(2 + i, 3).style
+        check cellStyle.fg == ColorValue(kind: Indexed, indexed: Color.Yellow)
+
+    test "Async setRunes with Position":
+      let asyncBuffer = newAsyncBuffer(20, 5)
+      let runes = "Test".toRunes()
+
+      waitFor asyncBuffer.setRunesAsync(pos(5, 2), runes)
+
+      check asyncBuffer.getCell(5, 2).symbol == "T"
+      check asyncBuffer.getCell(6, 2).symbol == "e"
+      check asyncBuffer.getCell(7, 2).symbol == "s"
+      check asyncBuffer.getCell(8, 2).symbol == "t"
+
+    test "setRunes with wide characters (CJK)":
+      let asyncBuffer = newAsyncBuffer(20, 5)
+      let runes = "日本".toRunes()
+
+      asyncBuffer.setRunes(1, 1, runes)
+
+      # Wide characters take 2 cells each
+      check asyncBuffer.getCell(1, 1).symbol == "日"
+      # Cell 2 is empty (continuation of wide char)
+      check asyncBuffer.getCell(2, 1).symbol == ""
+      check asyncBuffer.getCell(3, 1).symbol == "本"
+      # Cell 4 is empty (continuation of wide char)
+      check asyncBuffer.getCell(4, 1).symbol == ""
+
+    test "Async setRunes with wide characters":
+      let asyncBuffer = newAsyncBuffer(20, 5)
+      let runes = "中文".toRunes()
+
+      waitFor asyncBuffer.setRunesAsync(0, 0, runes)
+
+      check asyncBuffer.getCell(0, 0).symbol == "中"
+      check asyncBuffer.getCell(1, 0).symbol == "" # Continuation
+      check asyncBuffer.getCell(2, 0).symbol == "文"
+      check asyncBuffer.getCell(3, 0).symbol == "" # Continuation
+
+    test "setRunes marks dirty region":
+      let asyncBuf = newAsyncBufferNoRM(80, 24)
+      let runes = "Test".toRunes()
+
+      asyncBuf.setRunes(10, 5, runes)
+
+      check asyncBuf.isDirty()
+      check asyncBuf.getDirtyRegionSize() > 0
+      asyncBuf.destroyAsync()

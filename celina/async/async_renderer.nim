@@ -1,54 +1,57 @@
-## Renderer Module
-## ===============
+## Async Renderer Module
+## =====================
 ##
-## Handles all rendering operations including buffer management,
+## Handles all async rendering operations including buffer management,
 ## differential rendering, and terminal output coordination.
+## This mirrors the sync Renderer but uses AsyncTerminal.
 
-import terminal, buffer, cursor, terminal_common, geometry, colors
+import async_backend, async_terminal
+import ../core/[buffer, cursor, terminal_common, geometry, colors]
 
-type Renderer* = ref object ## Manages rendering operations and buffer management
-  terminal: Terminal
+type AsyncRenderer* = ref object
+  ## Manages async rendering operations and buffer management
+  terminal: AsyncTerminal
   buffer: Buffer
   cursorManager: CursorManager
   lastRenderTime: float
 
-proc newRenderer*(terminal: Terminal): Renderer =
-  ## Create a new renderer with the given terminal
+proc newAsyncRenderer*(terminal: AsyncTerminal): AsyncRenderer =
+  ## Create a new async renderer with the given terminal
   let termSize = terminal.getSize()
-  result = Renderer(
+  result = AsyncRenderer(
     terminal: terminal,
     buffer: newBuffer(termSize.width, termSize.height),
     cursorManager: newCursorManager(),
     lastRenderTime: 0.0,
   )
 
-proc getBuffer*(renderer: Renderer): var Buffer =
+proc getBuffer*(renderer: AsyncRenderer): var Buffer =
   ## Get mutable reference to the internal buffer
   renderer.buffer
 
-proc getCursorManager*(renderer: Renderer): CursorManager =
+proc getCursorManager*(renderer: AsyncRenderer): CursorManager =
   ## Get the cursor manager
   renderer.cursorManager
 
-proc resize*(renderer: Renderer, width, height: int) =
+proc resize*(renderer: AsyncRenderer, width, height: int) =
   ## Resize the internal buffer
   let newArea = Rect(x: 0, y: 0, width: width, height: height)
   renderer.buffer.resize(newArea)
 
-proc resize*(renderer: Renderer) =
+proc resize*(renderer: AsyncRenderer) =
   ## Resize based on current terminal size
   let size = renderer.terminal.getSize()
   renderer.resize(size.width, size.height)
 
-proc clear*(renderer: Renderer) =
+proc clear*(renderer: AsyncRenderer) =
   ## Clear the buffer
   renderer.buffer.clear()
 
-proc render*(renderer: Renderer, force: bool = false) =
+proc renderAsync*(renderer: AsyncRenderer, force: bool = false) {.async.} =
   ## Render the buffer to terminal with cursor support
   let cursorState = renderer.cursorManager.getState()
 
-  let newLastStyle = renderer.terminal.drawWithCursor(
+  let newLastStyle = await renderer.terminal.drawWithCursorAsync(
     renderer.buffer,
     cursorState.x,
     cursorState.y,
@@ -61,54 +64,58 @@ proc render*(renderer: Renderer, force: bool = false) =
   # Update cursor manager with the new last style from render
   renderer.cursorManager.setLastStyle(newLastStyle)
 
-proc renderDiff*(renderer: Renderer) =
+proc renderDiffAsync*(renderer: AsyncRenderer) {.async.} =
   ## Render only the differences from last frame
-  renderer.render(force = false)
+  await renderer.renderAsync(force = false)
 
-proc forceRender*(renderer: Renderer) =
+proc forceRenderAsync*(renderer: AsyncRenderer) {.async.} =
   ## Force full screen redraw
-  renderer.render(force = true)
+  await renderer.renderAsync(force = true)
 
 # Cursor control delegation
-proc setCursorPosition*(renderer: Renderer, x, y: int) =
+proc setCursorPosition*(renderer: AsyncRenderer, x, y: int) =
   ## Set cursor position without changing visibility
   renderer.cursorManager.setPosition(x, y)
 
-proc setCursorPosition*(renderer: Renderer, pos: Position) =
+proc setCursorPosition*(renderer: AsyncRenderer, pos: Position) =
   ## Set cursor position using Position type without changing visibility
   renderer.cursorManager.setPosition(pos.x, pos.y)
 
-proc showCursorAt*(renderer: Renderer, x, y: int) =
+proc showCursorAt*(renderer: AsyncRenderer, x, y: int) =
   ## Set cursor position and make it visible
   renderer.cursorManager.showAt(x, y)
 
-proc showCursorAt*(renderer: Renderer, pos: Position) =
+proc showCursorAt*(renderer: AsyncRenderer, pos: Position) =
   ## Set cursor position using Position type and make it visible
   renderer.cursorManager.showAt(pos.x, pos.y)
 
-proc showCursor*(renderer: Renderer) =
+proc showCursor*(renderer: AsyncRenderer) =
   ## Show cursor at current position
   renderer.cursorManager.show()
 
-proc hideCursor*(renderer: Renderer) =
+proc hideCursor*(renderer: AsyncRenderer) =
   ## Hide cursor
   renderer.cursorManager.hide()
 
-proc setCursorStyle*(renderer: Renderer, style: CursorStyle) =
+proc setCursorStyle*(renderer: AsyncRenderer, style: CursorStyle) =
   ## Set cursor style
   renderer.cursorManager.setStyle(style)
 
-proc getCursorPosition*(renderer: Renderer): (int, int) =
+proc getCursorPosition*(renderer: AsyncRenderer): (int, int) =
   ## Get current cursor position
   renderer.cursorManager.getPosition()
 
-proc isCursorVisible*(renderer: Renderer): bool =
+proc isCursorVisible*(renderer: AsyncRenderer): bool =
   ## Check if cursor is visible
   renderer.cursorManager.isVisible()
 
 # Direct buffer operations
 proc setString*(
-    renderer: Renderer, x, y: int, text: string, style: Style, hyperlink: string = ""
+    renderer: AsyncRenderer,
+    x, y: int,
+    text: string,
+    style: Style,
+    hyperlink: string = "",
 ) =
   ## Set string directly in buffer
   ## If hyperlink is provided, the text becomes a clickable link (OSC 8)

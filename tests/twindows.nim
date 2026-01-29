@@ -131,7 +131,7 @@ suite "WindowManager Tests":
 
     check wm.windows.len == 2
 
-    wm.removeWindow(id1)
+    check wm.removeWindow(id1) == true
 
     check wm.windows.len == 1
     check wm.getWindow(id1).isNone()
@@ -151,7 +151,7 @@ suite "WindowManager Tests":
     check window1.focused == false
 
     # Focus first window
-    wm.focusWindow(id1)
+    check wm.focusWindow(id1) == true
 
     check wm.focusedWindow.get() == id1
     check window1.focused == true
@@ -172,10 +172,27 @@ suite "WindowManager Tests":
     check window2.zIndex < window3.zIndex
 
     # Focus first window should bring it to front
-    wm.focusWindow(id1)
+    check wm.focusWindow(id1) == true
 
     check window1.zIndex > window2.zIndex
     check window1.zIndex > window3.zIndex
+
+  test "focusWindow with invalid ID returns false":
+    let wm = newWindowManager()
+    let window = newWindow(rect(10, 10, 30, 15), "Test")
+    discard wm.addWindow(window)
+
+    # Try to focus non-existent window
+    check wm.focusWindow(WindowId(999)) == false
+
+  test "removeWindow with invalid ID returns false":
+    let wm = newWindowManager()
+    let window = newWindow(rect(10, 10, 30, 15), "Test")
+    discard wm.addWindow(window)
+
+    # Try to remove non-existent window
+    check wm.removeWindow(WindowId(999)) == false
+    check wm.windows.len == 1
 
   test "Modal window handling":
     let wm = newWindowManager()
@@ -488,13 +505,13 @@ suite "Performance and Efficiency Tests":
 
     # Remove half of them
     for i in 0 .. 49:
-      wm.removeWindow(windowIds[i * 2])
+      discard wm.removeWindow(windowIds[i * 2])
 
     check wm.windows.len == 50
 
     # Focus should still work
     if windowIds.len > 1:
-      wm.focusWindow(windowIds[1])
+      discard wm.focusWindow(windowIds[1])
       check wm.focusedWindow.get() == windowIds[1]
 
 suite "Window Event System Tests":
@@ -688,7 +705,7 @@ suite "WindowManager Event System Tests":
     )
 
     let windowId = wm.addWindow(window)
-    wm.focusWindow(windowId)
+    discard wm.focusWindow(windowId)
 
     let keyEvent = Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Enter))
     let result = wm.dispatchEvent(keyEvent)
@@ -827,8 +844,8 @@ suite "Window State Edge Cases":
     check wm.windows.len == 2
 
     # Remove windows - GC will handle cleanup automatically
-    wm.removeWindow(id1)
-    wm.removeWindow(id2)
+    check wm.removeWindow(id1) == true
+    check wm.removeWindow(id2) == true
 
     check:
       wm.windows.len == 0

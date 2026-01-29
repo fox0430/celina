@@ -50,13 +50,13 @@ proc createTestWindow(
           return true
         of "x":
           demo.addMessage(&"Closing window '{win.title}'")
-          app.removeWindow(win.id)
+          discard app.removeWindow(win.id)
           return true
         else:
           discard
       of KeyCode.Delete:
         demo.addMessage(&"Deleting window '{win.title}'")
-        app.removeWindow(win.id)
+        discard app.removeWindow(win.id)
         return true
       else:
         discard
@@ -273,11 +273,11 @@ proc main() =
 
               # Move to next window (cycle)
               let nextIndex = (currentIndex + 1) mod windows.len
-              app.focusWindow(windows[nextIndex].id)
+              discard app.focusWindow(windows[nextIndex].id)
               demo.addMessage(&"Focused window: {windows[nextIndex].title}")
             else:
               # No window focused, focus first one
-              app.focusWindow(windows[0].id)
+              discard app.focusWindow(windows[0].id)
               demo.addMessage(&"Focused first window: {windows[0].title}")
         else:
           discard

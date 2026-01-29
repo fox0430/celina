@@ -436,3 +436,55 @@ suite "AsyncTerminal Common Module Integration":
     check output.len > 0
     check output.find("T") >= 0
     check output.find("E") >= 0
+
+suite "AsyncTerminal Cursor Control":
+  test "Cursor movement sequences are valid":
+    # Test that cursor movement sequences are properly formatted
+    let upSeq = makeCursorMoveSeq(CursorUpSeq, 3)
+    let downSeq = makeCursorMoveSeq(CursorDownSeq, 5)
+    let leftSeq = makeCursorMoveSeq(CursorLeftSeq, 2)
+    let rightSeq = makeCursorMoveSeq(CursorRightSeq, 4)
+
+    check upSeq.contains("3")
+    check downSeq.contains("5")
+    check leftSeq.contains("2")
+    check rightSeq.contains("4")
+
+    # Single step uses shorter sequence
+    let singleUp = makeCursorMoveSeq(CursorUpSeq, 1)
+    check singleUp == CursorUpSeq
+
+  test "Save and restore cursor sequences":
+    check SaveCursorSeq == "\e[s"
+    check RestoreCursorSeq == "\e[u"
+
+  test "Cursor style sequences are valid":
+    check getCursorStyleSeq(CursorStyle.Default) == CursorStyleDefault
+    check getCursorStyleSeq(CursorStyle.BlinkingBlock) == CursorStyleBlinkingBlock
+    check getCursorStyleSeq(CursorStyle.SteadyBlock) == CursorStyleSteadyBlock
+    check getCursorStyleSeq(CursorStyle.BlinkingUnderline) ==
+      CursorStyleBlinkingUnderline
+    check getCursorStyleSeq(CursorStyle.SteadyUnderline) == CursorStyleSteadyUnderline
+    check getCursorStyleSeq(CursorStyle.BlinkingBar) == CursorStyleBlinkingBar
+    check getCursorStyleSeq(CursorStyle.SteadyBar) == CursorStyleSteadyBar
+
+suite "AsyncTerminal Line Clearing":
+  test "Clear line sequences are valid":
+    check ClearLineSeq == "\e[2K"
+    check ClearToEndOfLineSeq == "\e[0K"
+    check ClearToStartOfLineSeq == "\e[1K"
+
+  test "Clear sequences are different":
+    check ClearLineSeq != ClearToEndOfLineSeq
+    check ClearLineSeq != ClearToStartOfLineSeq
+    check ClearToEndOfLineSeq != ClearToStartOfLineSeq
+
+suite "AsyncTerminal Setup Variants":
+  test "setupWithHiddenCursorAsync exists":
+    # Test that the proc exists and has correct signature
+    let terminal = createTestTerminal()
+    # We can't actually call it without a real terminal, but we can verify it compiles
+    when compiles(terminal.setupWithHiddenCursorAsync()):
+      check true
+    else:
+      check false

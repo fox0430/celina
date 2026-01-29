@@ -187,6 +187,53 @@ proc showCursorAt*(pos: Position) {.async.} =
   stdout.write(ShowCursorSeq)
   stdout.flushFile()
 
+proc saveCursor*() {.async.} =
+  ## Save current cursor position asynchronously
+  stdout.write(SaveCursorSeq)
+  stdout.flushFile()
+
+proc restoreCursor*() {.async.} =
+  ## Restore previously saved cursor position asynchronously
+  stdout.write(RestoreCursorSeq)
+  stdout.flushFile()
+
+proc moveCursorUp*(steps: int = 1) {.async.} =
+  ## Move cursor up by specified steps asynchronously
+  stdout.write(makeCursorMoveSeq(CursorUpSeq, steps))
+  stdout.flushFile()
+
+proc moveCursorDown*(steps: int = 1) {.async.} =
+  ## Move cursor down by specified steps asynchronously
+  stdout.write(makeCursorMoveSeq(CursorDownSeq, steps))
+  stdout.flushFile()
+
+proc moveCursorLeft*(steps: int = 1) {.async.} =
+  ## Move cursor left by specified steps asynchronously
+  stdout.write(makeCursorMoveSeq(CursorLeftSeq, steps))
+  stdout.flushFile()
+
+proc moveCursorRight*(steps: int = 1) {.async.} =
+  ## Move cursor right by specified steps asynchronously
+  stdout.write(makeCursorMoveSeq(CursorRightSeq, steps))
+  stdout.flushFile()
+
+proc moveCursor*(dx, dy: int) {.async.} =
+  ## Move cursor relatively by dx, dy asynchronously
+  if dy < 0:
+    await moveCursorUp(-dy)
+  elif dy > 0:
+    await moveCursorDown(dy)
+
+  if dx < 0:
+    await moveCursorLeft(-dx)
+  elif dx > 0:
+    await moveCursorRight(dx)
+
+proc setCursorStyle*(style: CursorStyle) {.async.} =
+  ## Set cursor appearance style asynchronously
+  stdout.write(getCursorStyleSeq(style))
+  stdout.flushFile()
+
 # Async screen control
 proc clearScreen*() {.async.} =
   ## Clear the entire screen asynchronously
@@ -196,6 +243,16 @@ proc clearScreen*() {.async.} =
 proc clearLine*() {.async.} =
   ## Clear the current line asynchronously
   stdout.write(ClearLineSeq)
+  stdout.flushFile()
+
+proc clearToEndOfLine*() {.async.} =
+  ## Clear from cursor to end of line asynchronously
+  stdout.write(ClearToEndOfLineSeq)
+  stdout.flushFile()
+
+proc clearToStartOfLine*() {.async.} =
+  ## Clear from start of line to cursor asynchronously
+  stdout.write(ClearToStartOfLineSeq)
   stdout.flushFile()
 
 # Async buffer rendering
@@ -261,9 +318,13 @@ proc setupAsync*(terminal: AsyncTerminal) {.async.} =
   ## Setup terminal for CLI mode asynchronously
   terminal.enableAlternateScreen()
   terminal.enableRawMode()
-  await hideCursor()
   await clearScreen()
   terminal.updateSize()
+
+proc setupWithHiddenCursorAsync*(terminal: AsyncTerminal) {.async.} =
+  ## Setup terminal for CLI mode with cursor hidden asynchronously
+  await terminal.setupAsync()
+  await hideCursor()
 
 proc setupWithMouseAsync*(terminal: AsyncTerminal) {.async.} =
   ## Setup terminal for CLI mode with mouse support asynchronously
@@ -358,6 +419,45 @@ proc drawAsync*(
   ## Draw an AsyncBuffer to the terminal asynchronously
   let buffer = asyncBuffer.toBufferAsync()
   await terminal.drawAsync(buffer, force)
+
+proc drawWithCursorAsync*(
+    terminal: AsyncTerminal,
+    buffer: Buffer,
+    cursorX, cursorY: int,
+    cursorVisible: bool,
+    cursorStyle: CursorStyle = CursorStyle.Default,
+    lastCursorStyle: CursorStyle,
+    force: bool = false,
+): Future[CursorStyle] {.async.} =
+  ## Draw buffer with cursor positioning in single write operation
+  ## This prevents cursor flickering by including cursor commands in the same output
+  ##
+  ## Output is automatically wrapped with synchronized output sequences (DEC mode 2026)
+  ## to prevent flickering on supported terminals.
+  ##
+  ## Returns the updated lastCursorStyle value. Caller is responsible for tracking this state
+  ## (e.g., via CursorManager.updateLastStyle()).
+  let (rawOutput, newLastCursorStyle) = buildOutputWithCursor(
+    terminal.lastBuffer, buffer, cursorX, cursorY, cursorVisible, cursorStyle,
+    lastCursorStyle, force,
+  )
+
+  if rawOutput.len > 0:
+    # Wrap with synchronized output to prevent flickering
+    # Skip wrapping if sync output is already enabled to avoid double-wrapping
+    let output =
+      if terminal.syncOutputEnabled:
+        rawOutput
+      else:
+        wrapWithSyncOutput(rawOutput)
+    stdout.write(output)
+    stdout.flushFile()
+
+  # Update last buffer and clear dirty region for next frame
+  terminal.lastBuffer = buffer
+  terminal.lastBuffer.clearDirty()
+
+  return newLastCursorStyle
 
 # Terminal state queries
 # Note: getSize and getArea need explicit proc definitions to avoid conflicts

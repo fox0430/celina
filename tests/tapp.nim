@@ -1,6 +1,6 @@
 ## Tests for App core functionality
 
-import std/[unittest, options]
+import std/[unittest, options, monotimes, times]
 
 import ../celina
 
@@ -201,7 +201,7 @@ suite "App Window Management":
 
     check app.getWindowCount() == 1
 
-    app.removeWindow(windowId)
+    check app.removeWindow(windowId) == true
     check app.getWindowCount() == 0
 
   test "getWindow retrieves window by ID":
@@ -233,7 +233,7 @@ suite "App Window Management":
     discard app.addWindow(window2)
 
     # Focus first window
-    app.focusWindow(id1)
+    check app.focusWindow(id1) == true
 
     let focusedOpt = app.getFocusedWindow()
     check focusedOpt.isSome()
@@ -252,6 +252,33 @@ suite "App Window Management":
     let focusedOpt = app.getFocusedWindow()
     check focusedOpt.isSome()
     check focusedOpt.get().id == id2
+
+  test "focusWindow with invalid ID returns false":
+    let app = newApp()
+    app.enableWindowMode()
+
+    let window = newWindow(rect(10, 10, 30, 15), "Test")
+    discard app.addWindow(window)
+
+    check app.focusWindow(WindowId(999)) == false
+
+  test "removeWindow with invalid ID returns false":
+    let app = newApp()
+    app.enableWindowMode()
+
+    let window = newWindow(rect(10, 10, 30, 15), "Test")
+    discard app.addWindow(window)
+
+    check app.removeWindow(WindowId(999)) == false
+    check app.getWindowCount() == 1
+
+  test "focusWindow with no window mode returns false":
+    let app = newApp()
+    check app.focusWindow(WindowId(1)) == false
+
+  test "removeWindow with no window mode returns false":
+    let app = newApp()
+    check app.removeWindow(WindowId(1)) == false
 
   test "getWindows returns all windows":
     let app = newApp()
@@ -310,7 +337,7 @@ suite "App Integration Tests":
     check app.getWindowCount() == 3
 
     # Remove middle window
-    app.removeWindow(id2)
+    check app.removeWindow(id2) == true
     check app.getWindowCount() == 2
 
     # Verify remaining windows
@@ -348,8 +375,107 @@ suite "App Integration Tests":
     check app.getFocusedWindowId().get() == id3
 
     # Change focus
-    app.focusWindow(id1)
+    check app.focusWindow(id1) == true
     check app.getFocusedWindowId().get() == id1
 
-    app.focusWindow(id2)
+    check app.focusWindow(id2) == true
     check app.getFocusedWindowId().get() == id2
+
+suite "App State and Info":
+  test "isRunning initially false":
+    let app = newApp()
+    check app.isRunning() == false
+
+  test "getTerminalSize returns valid size":
+    let app = newApp()
+    let size = app.getTerminalSize()
+    check size.width > 0
+    check size.height > 0
+
+  test "getConfig returns stored config":
+    let config = AppConfig(title: "Test", targetFps: 45)
+    let app = newApp(config)
+    check app.getConfig().title == "Test"
+    check app.getConfig().targetFps == 45
+
+  test "getConfig returns default config when not specified":
+    let app = newApp()
+    let storedConfig = app.getConfig()
+    check storedConfig.alternateScreen == DefaultAppConfig.alternateScreen
+    check storedConfig.mouseCapture == DefaultAppConfig.mouseCapture
+    check storedConfig.rawMode == DefaultAppConfig.rawMode
+    check storedConfig.targetFps == DefaultAppConfig.targetFps
+
+  test "getFrameCount initially zero":
+    let app = newApp()
+    check app.getFrameCount() == 0
+
+  test "getLastFrameTime returns valid MonoTime":
+    let app = newApp()
+    let frameTime = app.getLastFrameTime()
+    # MonoTime should be set to current time at creation
+    let now = getMonoTime()
+    # Check that the frame time is not too far in the past (within last second)
+    check (now - frameTime).inMilliseconds < 1000
+
+suite "App handleWindowEvent":
+  test "handleWindowEvent with no window mode returns false":
+    let app = newApp()
+    let event = Event(kind: Key)
+    check app.handleWindowEvent(event) == false
+
+  test "handleWindowEvent with window mode enabled but no handlers":
+    let config = AppConfig(windowMode: true)
+    let app = newApp(config)
+    let event = Event(kind: Key)
+    # No window has handlers, so should return false
+    check app.handleWindowEvent(event) == false
+
+  test "handleWindowEvent with window that has key handler":
+    let app = newApp()
+    app.enableWindowMode()
+
+    let window = newWindow(rect(10, 10, 30, 15), "Test Window")
+    window.setKeyHandler(
+      proc(w: Window, k: KeyEvent): bool =
+        true
+    )
+    let windowId = app.addWindow(window)
+
+    # Focus the window
+    discard app.focusWindow(windowId)
+
+    let event = Event(kind: Key)
+    # Window has a key handler, so should return true
+    check app.handleWindowEvent(event) == true
+
+  test "handleWindowEvent mouse event with window that has mouse handler":
+    let app = newApp()
+    app.enableWindowMode()
+
+    let window = newWindow(rect(10, 10, 30, 15), "Test Window")
+    window.setMouseHandler(
+      proc(w: Window, m: MouseEvent): bool =
+        true
+    )
+    discard app.addWindow(window)
+
+    # Mouse event within window bounds
+    let event = Event(kind: Mouse, mouse: MouseEvent(x: 15, y: 12))
+    # Window has a mouse handler, so should return true
+    check app.handleWindowEvent(event) == true
+
+  test "handleWindowEvent resize event routes to focused window":
+    let app = newApp()
+    app.enableWindowMode()
+
+    let window = newWindow(rect(10, 10, 30, 15), "Test Window")
+    let windowId = app.addWindow(window)
+
+    # Focus the window
+    discard app.focusWindow(windowId)
+
+    let event = Event(kind: Resize)
+    # Resize events are routed to focused window but window has no handler
+    # so returns false (resize is typically handled separately via dispatchResize)
+    check app.handleWindowEvent(event) == false

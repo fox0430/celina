@@ -692,12 +692,18 @@ proc buildOutputWithCursor*(
     cursorX, cursorY: int,
     cursorVisible: bool,
     cursorStyle: CursorStyle = CursorStyle.Default,
-    lastCursorStyle: var CursorStyle,
+    lastCursorStyle: CursorStyle,
     force: bool = false,
-): string =
+): tuple[output: string, newLastCursorStyle: CursorStyle] =
   ## Build output string with cursor positioning included
   ## This prevents cursor flickering by including cursor commands in the same output
   ## Supports OSC 8 hyperlinks
+  ##
+  ## Returns a tuple with the output string and the updated cursor style.
+  ## Caller is responsible for tracking the lastCursorStyle state.
+  var output = ""
+  var updatedLastCursorStyle = lastCursorStyle
+
   # First, build the buffer diff output
   if force or oldBuffer.area != newBuffer.area:
     # Use full render for different sizes
@@ -708,40 +714,42 @@ proc buildOutputWithCursor*(
         # Render if cell has non-default symbol, foreground, background, or hyperlink
         if cell.symbol != " " or cell.style.fg.kind != Default or
             cell.style.bg.kind != Default or cell.hyperlink.len > 0:
-          result.add(makeCursorPositionSeq(x, y))
+          output.add(makeCursorPositionSeq(x, y))
 
           # Handle hyperlink state change
           if cell.hyperlink != currentHyperlink:
             if currentHyperlink.len > 0:
-              result.add(Osc8Reset)
+              output.add(Osc8Reset)
             if cell.hyperlink.len > 0:
-              result.add(makeHyperlinkStartSeq(cell.hyperlink))
+              output.add(makeHyperlinkStartSeq(cell.hyperlink))
             currentHyperlink = cell.hyperlink
 
           let styleSeq = cell.style.toAnsiSequence()
           if styleSeq.len > 0:
-            result.add(styleSeq)
-          result.add(cell.symbol)
+            output.add(styleSeq)
+          output.add(cell.symbol)
           if styleSeq.len > 0:
-            result.add(resetSequence())
+            output.add(resetSequence())
 
     # Close any open hyperlink
     if currentHyperlink.len > 0:
-      result.add(Osc8Reset)
+      output.add(Osc8Reset)
   else:
     # Use differential rendering
-    result.add(buildDifferentialOutput(oldBuffer, newBuffer))
+    output.add(buildDifferentialOutput(oldBuffer, newBuffer))
 
   # Then append cursor commands to the same output string
   if cursorVisible and cursorX >= 0 and cursorY >= 0:
     # Only apply cursor style if it has changed to avoid interrupting blinking
-    if cursorStyle != lastCursorStyle:
-      result.add(getCursorStyleSeq(cursorStyle))
-      lastCursorStyle = cursorStyle
-    result.add(ShowCursorSeq)
-    result.add(makeCursorPositionSeq(cursorX, cursorY))
+    if cursorStyle != updatedLastCursorStyle:
+      output.add(getCursorStyleSeq(cursorStyle))
+      updatedLastCursorStyle = cursorStyle
+    output.add(ShowCursorSeq)
+    output.add(makeCursorPositionSeq(cursorX, cursorY))
   else:
-    result.add(HideCursorSeq)
+    output.add(HideCursorSeq)
+
+  result = (output: output, newLastCursorStyle: updatedLastCursorStyle)
 
 proc supportsAnsi*(): bool =
   ## Check if terminal supports ANSI escape sequences
