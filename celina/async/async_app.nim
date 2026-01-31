@@ -33,9 +33,6 @@ type
     frameCounter: int ## Total frame count
     lastFrameTime: MonoTime ## Timestamp of last frame
 
-  ## Deprecated: Use AppConfig instead
-  AsyncAppConfig* {.deprecated: "Use AppConfig instead".} = AppConfig
-
   AsyncAppError* = object of CatchableError
 
 # AsyncApp Creation and Configuration
