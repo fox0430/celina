@@ -138,127 +138,127 @@ proc disableSyncOutput*(terminal: AsyncTerminal) =
   disableSyncOutputImpl(terminal)
 
 # Window title control
-proc setWindowTitle*(title: string) {.async.} =
+proc setWindowTitleAsync*(title: string) {.async.} =
   ## Set the terminal window title and icon name
   ## Supported by almost all terminal emulators
   stdout.write(makeWindowTitleSeq(title))
   stdout.flushFile()
 
-proc setIconName*(name: string) {.async.} =
+proc setIconNameAsync*(name: string) {.async.} =
   ## Set the terminal icon name only
   stdout.write(makeIconNameSeq(name))
   stdout.flushFile()
 
-proc setTitleOnly*(title: string) {.async.} =
+proc setTitleOnlyAsync*(title: string) {.async.} =
   ## Set the terminal window title only (not icon name)
   stdout.write(makeTitleOnlySeq(title))
   stdout.flushFile()
 
 # Async cursor control (using stdout for simplicity)
-proc hideCursor*() {.async.} =
+proc hideCursorAsync*() {.async.} =
   ## Hide the cursor asynchronously
   stdout.write(HideCursorSeq)
   stdout.flushFile()
 
-proc showCursor*() {.async.} =
+proc showCursorAsync*() {.async.} =
   ## Show the cursor asynchronously
   stdout.write(ShowCursorSeq)
   stdout.flushFile()
 
-proc setCursorPosition*(x, y: int) {.async.} =
+proc setCursorPositionAsync*(x, y: int) {.async.} =
   ## Set cursor position asynchronously (1-based coordinates)
   stdout.write(makeCursorPositionSeq(x, y))
   stdout.flushFile()
 
-proc setCursorPosition*(pos: Position) {.async.} =
+proc setCursorPositionAsync*(pos: Position) {.async.} =
   ## Set cursor position asynchronously
   stdout.write(makeCursorPositionSeq(pos))
   stdout.flushFile()
 
-proc showCursorAt*(x, y: int) {.async.} =
+proc showCursorAtAsync*(x, y: int) {.async.} =
   ## Set cursor position and show it asynchronously
   stdout.write(makeCursorPositionSeq(x, y))
   stdout.write(ShowCursorSeq)
   stdout.flushFile()
 
-proc showCursorAt*(pos: Position) {.async.} =
+proc showCursorAtAsync*(pos: Position) {.async.} =
   ## Set cursor position and show it asynchronously
   stdout.write(makeCursorPositionSeq(pos))
   stdout.write(ShowCursorSeq)
   stdout.flushFile()
 
-proc saveCursor*() {.async.} =
+proc saveCursorAsync*() {.async.} =
   ## Save current cursor position asynchronously
   stdout.write(SaveCursorSeq)
   stdout.flushFile()
 
-proc restoreCursor*() {.async.} =
+proc restoreCursorAsync*() {.async.} =
   ## Restore previously saved cursor position asynchronously
   stdout.write(RestoreCursorSeq)
   stdout.flushFile()
 
-proc moveCursorUp*(steps: int = 1) {.async.} =
+proc moveCursorUpAsync*(steps: int = 1) {.async.} =
   ## Move cursor up by specified steps asynchronously
   stdout.write(makeCursorMoveSeq(CursorUpSeq, steps))
   stdout.flushFile()
 
-proc moveCursorDown*(steps: int = 1) {.async.} =
+proc moveCursorDownAsync*(steps: int = 1) {.async.} =
   ## Move cursor down by specified steps asynchronously
   stdout.write(makeCursorMoveSeq(CursorDownSeq, steps))
   stdout.flushFile()
 
-proc moveCursorLeft*(steps: int = 1) {.async.} =
+proc moveCursorLeftAsync*(steps: int = 1) {.async.} =
   ## Move cursor left by specified steps asynchronously
   stdout.write(makeCursorMoveSeq(CursorLeftSeq, steps))
   stdout.flushFile()
 
-proc moveCursorRight*(steps: int = 1) {.async.} =
+proc moveCursorRightAsync*(steps: int = 1) {.async.} =
   ## Move cursor right by specified steps asynchronously
   stdout.write(makeCursorMoveSeq(CursorRightSeq, steps))
   stdout.flushFile()
 
-proc moveCursor*(dx, dy: int) {.async.} =
+proc moveCursorAsync*(dx, dy: int) {.async.} =
   ## Move cursor relatively by dx, dy asynchronously
   if dy < 0:
-    await moveCursorUp(-dy)
+    await moveCursorUpAsync(-dy)
   elif dy > 0:
-    await moveCursorDown(dy)
+    await moveCursorDownAsync(dy)
 
   if dx < 0:
-    await moveCursorLeft(-dx)
+    await moveCursorLeftAsync(-dx)
   elif dx > 0:
-    await moveCursorRight(dx)
+    await moveCursorRightAsync(dx)
 
-proc setCursorStyle*(style: CursorStyle) {.async.} =
+proc setCursorStyleAsync*(style: CursorStyle) {.async.} =
   ## Set cursor appearance style asynchronously
   stdout.write(getCursorStyleSeq(style))
   stdout.flushFile()
 
 # Async screen control
-proc clearScreen*() {.async.} =
+proc clearScreenAsync*() {.async.} =
   ## Clear the entire screen asynchronously
   stdout.write(ClearScreenSeq)
   stdout.flushFile()
 
-proc clearLine*() {.async.} =
+proc clearLineAsync*() {.async.} =
   ## Clear the current line asynchronously
   stdout.write(ClearLineSeq)
   stdout.flushFile()
 
-proc clearToEndOfLine*() {.async.} =
+proc clearToEndOfLineAsync*() {.async.} =
   ## Clear from cursor to end of line asynchronously
   stdout.write(ClearToEndOfLineSeq)
   stdout.flushFile()
 
-proc clearToStartOfLine*() {.async.} =
+proc clearToStartOfLineAsync*() {.async.} =
   ## Clear from start of line to cursor asynchronously
   stdout.write(ClearToStartOfLineSeq)
   stdout.flushFile()
 
 # Async buffer rendering
-proc renderCell*(cell: Cell, x, y: int) {.async.} =
+proc renderCellAsync*(cell: Cell, x, y: int) {.async.} =
   ## Render a single cell at the specified position asynchronously
-  await setCursorPosition(x, y)
+  await setCursorPositionAsync(x, y)
 
   let styleSeq = cell.style.toAnsiSequence()
   var output = ""
@@ -318,13 +318,13 @@ proc setupAsync*(terminal: AsyncTerminal) {.async.} =
   ## Setup terminal for CLI mode asynchronously
   terminal.enableAlternateScreen()
   terminal.enableRawMode()
-  await clearScreen()
+  await clearScreenAsync()
   terminal.updateSize()
 
 proc setupWithHiddenCursorAsync*(terminal: AsyncTerminal) {.async.} =
   ## Setup terminal for CLI mode with cursor hidden asynchronously
   await terminal.setupAsync()
-  await hideCursor()
+  await hideCursorAsync()
 
 proc setupWithMouseAsync*(terminal: AsyncTerminal) {.async.} =
   ## Setup terminal for CLI mode with mouse support asynchronously
@@ -344,7 +344,7 @@ proc setupWithMouseAndPasteAsync*(terminal: AsyncTerminal) {.async.} =
 
 proc cleanupAsync*(terminal: AsyncTerminal) {.async.} =
   ## Cleanup and restore terminal asynchronously
-  await showCursor()
+  await showCursorAsync()
   terminal.disableSyncOutput()
   terminal.disableFocusEvents()
   terminal.disableBracketedPaste()
@@ -378,7 +378,7 @@ proc suspendAsync*(terminal: AsyncTerminal) {.async.} =
   saveSuspendState(terminal)
 
   # Return to shell mode
-  await showCursor()
+  await showCursorAsync()
   terminal.disableSyncOutput()
   terminal.disableFocusEvents()
   terminal.disableBracketedPaste()
@@ -398,7 +398,7 @@ proc resumeAsync*(terminal: AsyncTerminal) {.async.} =
 
   # Restore saved state
   restoreSuspendedFeatures(terminal)
-  await hideCursor()
+  await hideCursorAsync()
 
   # Clear lastBuffer to force full redraw on next drawAsync()
   clearLastBufferForResume(terminal)

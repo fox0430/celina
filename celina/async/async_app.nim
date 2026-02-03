@@ -153,12 +153,12 @@ proc setupAsync(app: AsyncApp) {.async.} =
   if app.config.focusEvents:
     app.terminal.enableFocusEvents()
 
-  await hideCursor()
-  await clearScreen()
+  await hideCursorAsync()
+  await clearScreenAsync()
 
 proc cleanupAsync(app: AsyncApp) {.async.} =
   ## Internal async cleanup procedure to restore terminal state
-  await showCursor()
+  await showCursorAsync()
 
   if app.config.focusEvents:
     app.terminal.disableFocusEvents()
@@ -182,7 +182,7 @@ proc handleResizeAsync(app: AsyncApp) {.async.} =
   app.terminal.updateSize()
   app.renderer.resize()
   # Clear screen to avoid artifacts from old content
-  await clearScreen()
+  await clearScreenAsync()
   # Force full render on next frame to ensure clean redraw
   app.forceNextRender = true
 
