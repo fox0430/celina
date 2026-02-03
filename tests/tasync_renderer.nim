@@ -3,7 +3,7 @@ import std/unittest
 import ../celina/async/async_backend
 
 when hasAsyncSupport:
-  import ../celina/async/[async_renderer, async_terminal]
+  import ../celina/async/[async_renderer, async_terminal, async_buffer]
   import ../celina/core/[buffer, cursor, geometry, colors, terminal_common, errors]
 
   suite "AsyncRenderer Module Tests":
@@ -26,6 +26,16 @@ when hasAsyncSupport:
           var buf = rend.getBuffer()
           check buf.area.width > 0
           check buf.area.height > 0
+        except TerminalError:
+          skip()
+
+      test "Get async buffer from async renderer":
+        try:
+          let term = newAsyncTerminal()
+          let rend = newAsyncRenderer(term)
+
+          let asyncBuf = rend.getAsyncBuffer()
+          check asyncBuf != nil
         except TerminalError:
           skip()
 
@@ -95,6 +105,19 @@ when hasAsyncSupport:
           var buf = rend.getBuffer()
           let cell = buf[5, 5]
           check cell.symbol.len > 0
+        except TerminalError:
+          skip()
+
+      test "Set string asynchronously":
+        try:
+          let term = newAsyncTerminal()
+          let rend = newAsyncRenderer(term)
+
+          waitFor rend.setStringAsync(3, 3, "Async", style(Blue))
+
+          var buf = rend.getBuffer()
+          let cell = buf[3, 3]
+          check cell.symbol == "A"
         except TerminalError:
           skip()
 
@@ -221,6 +244,51 @@ when hasAsyncSupport:
 
           rend.setString(0, 0, "Test", defaultStyle())
           waitFor rend.renderDiffAsync()
+        except TerminalError:
+          skip()
+
+    suite "AsyncBuffer Integration":
+      test "AsyncBuffer operations via renderer":
+        try:
+          let term = newAsyncTerminal()
+          let rend = newAsyncRenderer(term)
+
+          # Use async buffer directly
+          let asyncBuf = rend.getAsyncBuffer()
+          asyncBuf.setString(0, 0, "Direct", defaultStyle())
+
+          # Verify via getBuffer
+          var buf = rend.getBuffer()
+          check buf[0, 0].symbol == "D"
+        except TerminalError:
+          skip()
+
+      test "Buffer snapshot for rendering":
+        try:
+          let term = newAsyncTerminal()
+          let rend = newAsyncRenderer(term)
+
+          rend.setString(0, 0, "Snapshot", style(Green))
+
+          # Get snapshot (used internally by renderAsync)
+          let asyncBuf = rend.getAsyncBuffer()
+          let snapshot = asyncBuf.toBufferAsync()
+
+          check snapshot[0, 0].symbol == "S"
+          check snapshot.area.width > 0
+        except TerminalError:
+          skip()
+
+      test "Clear via AsyncBuffer":
+        try:
+          let term = newAsyncTerminal()
+          let rend = newAsyncRenderer(term)
+
+          rend.setString(0, 0, "Test", defaultStyle())
+          rend.clear()
+
+          var buf = rend.getBuffer()
+          check buf[0, 0].symbol == " " or buf[0, 0].symbol == ""
         except TerminalError:
           skip()
 

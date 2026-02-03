@@ -21,7 +21,7 @@
 import std/[sequtils, options]
 
 import async_backend, async_buffer
-import ../core/[geometry, buffer, colors, events, windows]
+import ../core/[geometry, buffer, events, windows]
 
 export
   WindowId, Window, WindowState, WindowBorder, BorderChars, EventPhase, WindowEvent,
@@ -376,6 +376,7 @@ proc renderAsync*(
 
 proc renderSync*(awm: AsyncWindowManager, destBuffer: var Buffer) =
   ## Synchronous render for compatibility with existing sync code
+  ## Uses window.buffer content which should be updated by the application
   var visibleWindows: seq[Window] = @[]
   for window in awm.windows:
     if window.visible and window.state != wsHidden:
@@ -383,13 +384,10 @@ proc renderSync*(awm: AsyncWindowManager, destBuffer: var Buffer) =
 
   for window in visibleWindows:
     if window.state != wsMinimized and window.state != wsHidden:
-      var windowBuffer = newBuffer(window.area)
+      # Use window's buffer content directly
+      var windowBuffer = window.buffer
 
-      # Render basic window content (placeholder)
-      windowBuffer.setString(
-        1, 1, window.title, Style(fg: color(White), modifiers: {Bold})
-      )
-
+      # Draw border if configured
       if window.border.isSome():
         drawAsyncWindowBorder(window, windowBuffer)
 
