@@ -9,3 +9,12 @@ tests/*
 
 examples/*
 !examples/*.*
+
+celina/core/*
+!celina/core/*.*
+
+celina/async/*
+!celina/async/*.*
+
+celina/widgets/*
+!celina/widgets/*.*
