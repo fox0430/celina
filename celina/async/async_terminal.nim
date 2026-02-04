@@ -2,6 +2,18 @@
 ##
 ## This module provides asynchronous terminal control and rendering capabilities
 ## using either Chronos or std/asyncdispatch for non-blocking I/O operations.
+##
+## **Important**: This module exports global cursor functions like `showCursorAsync()`,
+## `hideCursorAsync()`, and `setCursorStyleAsync()`. These write directly to the terminal
+## and do **not** integrate with the `AsyncApp`/`AsyncRenderer` cursor state.
+##
+## When using `AsyncApp`, control the cursor via the app instance instead:
+## ```nim
+## app.onRenderAsync proc(buffer: var Buffer) =
+##   app.showCursorAt(x, y)      # Correct - uses renderer state
+##   app.setCursorStyle(Bar)     # Correct
+##   # await showCursorAsync()   # Wrong - bypasses renderer
+## ```
 
 import std/[termios, posix]
 
@@ -26,11 +38,11 @@ type
 
   AsyncTerminalError* = object of CatchableError
 
-proc getTerminalSizeAsync*(): Size =
+proc getTerminalSizeAsync*(): Size {.inline.} =
   ## Get current terminal size
   return getTerminalSizeWithFallback(80, 24)
 
-proc updateSize*(terminal: AsyncTerminal) =
+proc updateSize*(terminal: AsyncTerminal) {.inline.} =
   ## Update terminal size from current terminal
   terminal.size = getTerminalSizeAsync()
 
@@ -92,48 +104,48 @@ proc disableRawMode*(terminal: AsyncTerminal) =
   terminal.rawModeEnabled = false
 
 # Alternate screen control
-proc enableAlternateScreen*(terminal: AsyncTerminal) =
+proc enableAlternateScreen*(terminal: AsyncTerminal) {.inline.} =
   ## Switch to alternate screen buffer
   enableAlternateScreenImpl(terminal)
 
-proc disableAlternateScreen*(terminal: AsyncTerminal) =
+proc disableAlternateScreen*(terminal: AsyncTerminal) {.inline.} =
   ## Switch back to main screen buffer
   disableAlternateScreenImpl(terminal)
 
 # Mouse control
-proc enableMouse*(terminal: AsyncTerminal) =
+proc enableMouse*(terminal: AsyncTerminal) {.inline.} =
   ## Enable mouse reporting
   enableMouseImpl(terminal)
 
-proc disableMouse*(terminal: AsyncTerminal) =
+proc disableMouse*(terminal: AsyncTerminal) {.inline.} =
   ## Disable mouse reporting
   disableMouseImpl(terminal)
 
 # Bracketed paste control
-proc enableBracketedPaste*(terminal: AsyncTerminal) =
+proc enableBracketedPaste*(terminal: AsyncTerminal) {.inline.} =
   ## Enable bracketed paste mode for paste detection
   enableBracketedPasteImpl(terminal)
 
-proc disableBracketedPaste*(terminal: AsyncTerminal) =
+proc disableBracketedPaste*(terminal: AsyncTerminal) {.inline.} =
   ## Disable bracketed paste mode
   disableBracketedPasteImpl(terminal)
 
 # Focus events control
-proc enableFocusEvents*(terminal: AsyncTerminal) =
+proc enableFocusEvents*(terminal: AsyncTerminal) {.inline.} =
   ## Enable focus event reporting (terminal sends ESC[I/O on focus change)
   enableFocusEventsImpl(terminal)
 
-proc disableFocusEvents*(terminal: AsyncTerminal) =
+proc disableFocusEvents*(terminal: AsyncTerminal) {.inline.} =
   ## Disable focus event reporting
   disableFocusEventsImpl(terminal)
 
 # Synchronized output control
-proc enableSyncOutput*(terminal: AsyncTerminal) =
+proc enableSyncOutput*(terminal: AsyncTerminal) {.inline.} =
   ## Enable synchronized output mode (DEC private mode 2026)
   ## Terminal buffers output until mode is disabled, preventing flickering
   enableSyncOutputImpl(terminal)
 
-proc disableSyncOutput*(terminal: AsyncTerminal) =
+proc disableSyncOutput*(terminal: AsyncTerminal) {.inline.} =
   ## Disable synchronized output mode, flushing buffered output
   disableSyncOutputImpl(terminal)
 
@@ -143,16 +155,19 @@ proc setWindowTitleAsync*(title: string) {.async.} =
   ## Supported by almost all terminal emulators
   stdout.write(makeWindowTitleSeq(title))
   stdout.flushFile()
+  await sleepMs(0) # Yield to allow other async tasks to run
 
 proc setIconNameAsync*(name: string) {.async.} =
   ## Set the terminal icon name only
   stdout.write(makeIconNameSeq(name))
   stdout.flushFile()
+  await sleepMs(0)
 
 proc setTitleOnlyAsync*(title: string) {.async.} =
   ## Set the terminal window title only (not icon name)
   stdout.write(makeTitleOnlySeq(title))
   stdout.flushFile()
+  await sleepMs(0)
 
 # Async cursor control (using stdout for simplicity)
 proc hideCursorAsync*() {.async.} =
@@ -239,21 +254,25 @@ proc clearScreenAsync*() {.async.} =
   ## Clear the entire screen asynchronously
   stdout.write(ClearScreenSeq)
   stdout.flushFile()
+  await sleepMs(0)
 
 proc clearLineAsync*() {.async.} =
   ## Clear the current line asynchronously
   stdout.write(ClearLineSeq)
   stdout.flushFile()
+  await sleepMs(0)
 
 proc clearToEndOfLineAsync*() {.async.} =
   ## Clear from cursor to end of line asynchronously
   stdout.write(ClearToEndOfLineSeq)
   stdout.flushFile()
+  await sleepMs(0)
 
 proc clearToStartOfLineAsync*() {.async.} =
   ## Clear from start of line to cursor asynchronously
   stdout.write(ClearToStartOfLineSeq)
   stdout.flushFile()
+  await sleepMs(0)
 
 # Async buffer rendering
 proc renderCellAsync*(cell: Cell, x, y: int) {.async.} =
@@ -355,7 +374,7 @@ proc cleanupAsync*(terminal: AsyncTerminal) {.async.} =
   # AsyncFD cleanup is handled automatically by Chronos
   # No manual unregistration needed
 
-proc isSuspended*(terminal: AsyncTerminal): bool =
+proc isSuspended*(terminal: AsyncTerminal): bool {.inline.} =
   ## Check if terminal is currently suspended
   terminal.suspendState.isSuspended
 
@@ -463,11 +482,11 @@ proc drawWithCursorAsync*(
 # Note: getSize and getArea need explicit proc definitions to avoid conflicts
 # with async_buffer.getSize in async_app.nim.
 
-proc getSize*(terminal: AsyncTerminal): Size =
+proc getSize*(terminal: AsyncTerminal): Size {.inline.} =
   ## Get current terminal size
   terminal.size
 
-proc getArea*(terminal: AsyncTerminal): Rect =
+proc getArea*(terminal: AsyncTerminal): Rect {.inline.} =
   ## Get terminal area as a Rect
   rect(0, 0, terminal.size.width, terminal.size.height)
 
