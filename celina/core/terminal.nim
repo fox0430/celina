@@ -2,6 +2,18 @@
 ##
 ## This module provides terminal control and rendering capabilities
 ## using ANSI escape sequences for POSIX systems (Linux, macOS, etc.).
+##
+## **Important**: This module exports global cursor functions like `showCursor()`,
+## `hideCursor()`, and `setCursorStyle()`. These write directly to the terminal
+## and do **not** integrate with the `App`/`Renderer` cursor state.
+##
+## When using `App`, control the cursor via the app instance instead:
+## ```nim
+## app.onRender proc(buffer: var Buffer) =
+##   app.showCursorAt(x, y)      # Correct - uses renderer state
+##   app.setCursorStyle(Bar)     # Correct
+##   # showCursor()              # Wrong - bypasses renderer
+## ```
 
 import std/[termios, posix]
 
