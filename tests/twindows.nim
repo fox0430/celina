@@ -1,6 +1,6 @@
 ## Tests for window management system
 
-import std/[unittest, options]
+import std/[unittest, options, strutils]
 
 import ../celina/core/[geometry, buffer, colors, events]
 
@@ -931,3 +931,33 @@ suite "Complex Integration Tests":
     check:
       window1KeyReceived
       not window2KeyReceived
+
+suite "Window String Representation":
+  test "basic window":
+    let area = rect(10, 5, 50, 20)
+    let window = newWindow(area, "Test Window")
+    let s = $window
+    check "Window(" in s
+    check "\"Test Window\"" in s
+    check "wsNormal" in s
+
+  test "window without title":
+    let window = newWindow(rect(0, 0, 10, 10), "")
+    let s = $window
+    check "\"\"" in s
+
+suite "WindowInfo String Representation":
+  test "basic window info":
+    let info = WindowInfo(
+      id: WindowId(1),
+      title: "Info Window",
+      area: rect(0, 0, 40, 20),
+      state: wsNormal,
+      zIndex: 0,
+      visible: true,
+      focused: false,
+    )
+    let s = $info
+    check "WindowInfo(" in s
+    check "\"Info Window\"" in s
+    check "wsNormal" in s

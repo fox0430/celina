@@ -1,6 +1,6 @@
 # Test suite for events module
 
-import std/[unittest, posix]
+import std/[unittest, posix, strutils]
 
 import ../celina/core/events {.all.}
 import ../celina/core/mouse_logic
@@ -1438,3 +1438,97 @@ suite "Events Module Tests":
       check utf8ByteLength(0xEF) == 3 # Max 3-byte
       check utf8ByteLength(0xF0) == 4 # Min 4-byte
       check utf8ByteLength(0xF4) == 4 # Max valid 4-byte (UTF-8 limit)
+
+  suite "KeyEvent String Representation":
+    test "simple character key":
+      let key = KeyEvent(code: Char, char: "a")
+      let s = $key
+      check "KeyEvent(" in s
+      check "Char" in s
+      check "'a'" in s
+
+    test "key with modifiers":
+      let key = KeyEvent(code: Char, char: "c", modifiers: {Ctrl})
+      let s = $key
+      check "Ctrl" in s
+      check "Char" in s
+      check "'c'" in s
+
+    test "key with multiple modifiers":
+      let key = KeyEvent(code: ArrowUp, modifiers: {Ctrl, Shift})
+      let s = $key
+      check "Ctrl" in s
+      check "Shift" in s
+      check "ArrowUp" in s
+
+    test "special key without char":
+      let key = KeyEvent(code: Escape, char: "\x1b")
+      let s = $key
+      check "Escape" in s
+
+    test "function key":
+      let key = KeyEvent(code: F1)
+      let s = $key
+      check "F1" in s
+
+  suite "MouseEvent String Representation":
+    test "simple mouse press":
+      let mouse = MouseEvent(kind: Press, button: Left, x: 10, y: 20)
+      let s = $mouse
+      check "MouseEvent(" in s
+      check "Press" in s
+      check "Left" in s
+      check "(10, 20)" in s
+
+    test "mouse with modifiers":
+      let mouse =
+        MouseEvent(kind: Drag, button: Right, x: 5, y: 3, modifiers: {Ctrl, Alt})
+      let s = $mouse
+      check "Drag" in s
+      check "Right" in s
+      check "Ctrl" in s
+      check "Alt" in s
+
+    test "wheel event":
+      let mouse = MouseEvent(kind: Press, button: WheelUp, x: 0, y: 0)
+      let s = $mouse
+      check "WheelUp" in s
+
+  suite "Event String Representation":
+    test "key event":
+      let event = Event(kind: Key, key: KeyEvent(code: Char, char: "q"))
+      let s = $event
+      check "Event(Key" in s
+      check "Char" in s
+
+    test "mouse event":
+      let event = Event(
+        kind: Mouse, mouse: MouseEvent(kind: Press, button: Left, x: 1, y: 2)
+      )
+      let s = $event
+      check "Event(Mouse" in s
+      check "Press" in s
+
+    test "paste event with short text":
+      let event = Event(kind: Paste, pastedText: "hello")
+      let s = $event
+      check "Event(Paste" in s
+      check "hello" in s
+
+    test "paste event with long text truncated":
+      let event = Event(kind: Paste, pastedText: "a".repeat(50))
+      let s = $event
+      check "..." in s
+
+    test "resize event":
+      check $Event(kind: Resize) == "Event(Resize)"
+
+    test "focus events":
+      check $Event(kind: FocusIn) == "Event(FocusIn)"
+      check $Event(kind: FocusOut) == "Event(FocusOut)"
+
+    test "quit event":
+      check $Event(kind: Quit) == "Event(Quit)"
+
+    test "unknown event":
+      check $Event(kind: Unknown) == "Event(Unknown)"

@@ -3,7 +3,7 @@
 ## This module provides window management capabilities, allowing for
 ## overlapping, resizable, and focusable window areas within the terminal.
 
-import std/[algorithm, sequtils, options]
+import std/[algorithm, sequtils, options, strformat]
 
 import ../core/[geometry, buffer, colors, events]
 
@@ -93,6 +93,24 @@ type
 proc `==`*(a, b: WindowId): bool {.borrow.}
 proc `$`*(id: WindowId): string =
   $int(id)
+
+proc `$`*(window: Window): string =
+  ## String representation of a Window for debugging
+  let titleStr =
+    if window.title.len > 0:
+      &"\"{window.title}\""
+    else:
+      "\"\""
+  &"Window(id: {window.id}, title: {titleStr}, area: {window.area}, state: {window.state}, z: {window.zIndex}, visible: {window.visible}, focused: {window.focused})"
+
+proc `$`*(info: WindowInfo): string =
+  ## String representation of WindowInfo for debugging
+  let titleStr =
+    if info.title.len > 0:
+      &"\"{info.title}\""
+    else:
+      "\"\""
+  &"WindowInfo(id: {info.id}, title: {titleStr}, area: {info.area}, state: {info.state}, z: {info.zIndex}, visible: {info.visible}, focused: {info.focused})"
 
 # BorderChars defaults
 

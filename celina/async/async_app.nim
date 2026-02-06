@@ -3,7 +3,7 @@
 ## This module provides the main AsyncApp type and async event loop
 ## implementation using either Chronos or std/asyncdispatch.
 
-import std/[options, monotimes]
+import std/[options, monotimes, strformat]
 
 import async_backend, async_terminal, async_events, async_windows, async_renderer
 import
@@ -34,6 +34,15 @@ type
     lastFrameTime: MonoTime ## Timestamp of last frame
 
   AsyncAppError* = object of CatchableError
+
+proc `$`*(app: AsyncApp): string =
+  ## String representation of AsyncApp for debugging
+  let windowCount =
+    if app.windowMode and not app.windowManager.isNil:
+      app.windowManager.getWindowCountSync()
+    else:
+      0
+  &"AsyncApp(running: {app.running}, fps: {app.fpsMonitor.getCurrentFps():.1f}, frames: {app.frameCounter}, windows: {windowCount}, config: {app.config})"
 
 # AsyncApp Creation and Configuration
 

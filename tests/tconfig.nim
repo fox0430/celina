@@ -1,6 +1,6 @@
 # Test suite for config module
 
-import std/unittest
+import std/[unittest, strutils]
 
 import ../celina/core/config
 
@@ -164,3 +164,25 @@ suite "Config Module Tests":
       check step3.title == "Step 1"
       check step3.mouseCapture == true
       check step3.targetFps == 30
+
+  suite "String Representation Tests":
+    test "default config string representation":
+      let s = $DefaultAppConfig
+      check "AppConfig(" in s
+      check "\"Celina App\"" in s
+      check "alternateScreen" in s
+      check "rawMode" in s
+      check "targetFps: 60" in s
+      # These are false by default, should not appear
+      check "mouseCapture" notin s
+      check "windowMode" notin s
+
+    test "custom config string representation":
+      let config =
+        AppConfig(title: "My App", mouseCapture: true, rawMode: false, targetFps: 30)
+      let s = $config
+      check "\"My App\"" in s
+      check "mouseCapture" in s
+      check "targetFps: 30" in s
+      # rawMode is false, should not appear
+      check "rawMode" notin s

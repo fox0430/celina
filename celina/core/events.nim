@@ -3,7 +3,7 @@
 ## This module provides comprehensive event handling for keyboard input,
 ## including escape sequences and arrow keys for POSIX systems.
 
-import std/[os, posix, options, strutils]
+import std/[os, posix, options, strutils, strformat]
 
 import errors, mouse_logic, utf8_utils, key_logic, escape_sequence_logic
 
@@ -56,6 +56,59 @@ type
       pastedText*: string
     of Resize, FocusIn, FocusOut, Quit, Unknown:
       discard
+
+proc modifiersToString(modifiers: set[KeyModifier]): string =
+  ## Convert modifier set to string like "Ctrl+Alt+Shift"
+  var mods: seq[string] = @[]
+  if Ctrl in modifiers:
+    mods.add("Ctrl")
+  if Alt in modifiers:
+    mods.add("Alt")
+  if Shift in modifiers:
+    mods.add("Shift")
+  mods.join("+")
+
+proc `$`*(key: KeyEvent): string =
+  ## String representation of a KeyEvent for debugging
+  var parts: seq[string] = @[]
+  if key.modifiers.len > 0:
+    parts.add(modifiersToString(key.modifiers))
+  parts.add($key.code)
+  if key.code == Char and key.char.len > 0:
+    parts.add("'" & key.char & "'")
+  "KeyEvent(" & parts.join(", ") & ")"
+
+proc `$`*(mouse: MouseEvent): string =
+  ## String representation of a MouseEvent for debugging
+  var parts = @[$mouse.kind, $mouse.button, &"({mouse.x}, {mouse.y})"]
+  if mouse.modifiers.len > 0:
+    parts.add(modifiersToString(mouse.modifiers))
+  "MouseEvent(" & parts.join(", ") & ")"
+
+proc `$`*(event: Event): string =
+  ## String representation of an Event for debugging
+  case event.kind
+  of Key:
+    &"Event(Key, {event.key})"
+  of Mouse:
+    &"Event(Mouse, {event.mouse})"
+  of Paste:
+    let preview =
+      if event.pastedText.len <= 20:
+        event.pastedText
+      else:
+        event.pastedText[0 ..< 20] & "..."
+    &"Event(Paste, \"{preview}\")"
+  of Resize:
+    "Event(Resize)"
+  of FocusIn:
+    "Event(FocusIn)"
+  of FocusOut:
+    "Event(FocusOut)"
+  of Quit:
+    "Event(Quit)"
+  of Unknown:
+    "Event(Unknown)"
 
 # Mouse event parsing functions (using shared logic from mouse_logic module)
 

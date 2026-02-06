@@ -4,7 +4,7 @@
 ## Core application management, lifecycle, and event loop handling.
 ## Provides the main App type and orchestrates all components.
 
-import std/[options, monotimes]
+import std/[options, monotimes, strformat]
 
 import
   terminal, buffer, events, renderer, fps, cursor, geometry, errors, terminal_common,
@@ -28,6 +28,15 @@ type App* = ref object ## Main application context for CLI applications
   running: bool ## Whether app is currently running
   frameCounter: int ## Total frame count
   lastFrameTime: MonoTime ## Timestamp of last frame
+
+proc `$`*(app: App): string =
+  ## String representation of App for debugging
+  let windowCount =
+    if app.windowMode and not app.windowManager.isNil:
+      app.windowManager.windows.len
+    else:
+      0
+  &"App(running: {app.running}, fps: {app.fpsMonitor.getCurrentFps():.1f}, frames: {app.frameCounter}, windows: {windowCount}, config: {app.config})"
 
 proc newApp*(config: AppConfig = DefaultAppConfig): App =
   ## Create a new CLI application with the specified configuration

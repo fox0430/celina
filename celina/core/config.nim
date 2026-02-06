@@ -3,6 +3,8 @@
 ## This module provides shared configuration types for both
 ## synchronous and asynchronous application modes.
 
+import std/strutils
+
 type AppConfig* = object ## Application configuration options
   title*: string ## Application title (for window managers)
   alternateScreen*: bool ## Use alternate screen buffer
@@ -12,6 +14,25 @@ type AppConfig* = object ## Application configuration options
   rawMode*: bool ## Enable raw terminal mode (no line buffering)
   windowMode*: bool ## Enable window management
   targetFps*: int ## Target FPS for rendering (default: 60)
+
+proc `$`*(config: AppConfig): string =
+  ## String representation of AppConfig for debugging
+  var parts: seq[string] = @[]
+  parts.add("title: \"" & config.title & "\"")
+  if config.alternateScreen:
+    parts.add("alternateScreen")
+  if config.mouseCapture:
+    parts.add("mouseCapture")
+  if config.bracketedPaste:
+    parts.add("bracketedPaste")
+  if config.focusEvents:
+    parts.add("focusEvents")
+  if config.rawMode:
+    parts.add("rawMode")
+  if config.windowMode:
+    parts.add("windowMode")
+  parts.add("targetFps: " & $config.targetFps)
+  "AppConfig(" & parts.join(", ") & ")"
 
 const DefaultAppConfig* = AppConfig(
   title: "Celina App",
