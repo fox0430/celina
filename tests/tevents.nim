@@ -1502,9 +1502,8 @@ suite "Events Module Tests":
       check "Char" in s
 
     test "mouse event":
-      let event = Event(
-        kind: Mouse, mouse: MouseEvent(kind: Press, button: Left, x: 1, y: 2)
-      )
+      let event =
+        Event(kind: Mouse, mouse: MouseEvent(kind: Press, button: Left, x: 1, y: 2))
       let s = $event
       check "Event(Mouse" in s
       check "Press" in s
