@@ -1,6 +1,6 @@
 ## Tests for App core functionality
 
-import std/[unittest, options, monotimes, times]
+import std/[unittest, options, monotimes, times, strutils]
 
 import ../celina
 
@@ -479,3 +479,18 @@ suite "App handleWindowEvent":
     # Resize events are routed to focused window but window has no handler
     # so returns false (resize is typically handled separately via dispatchResize)
     check app.handleWindowEvent(event) == false
+
+suite "App String Representation":
+  test "new app string representation":
+    let app = newApp()
+    let s = $app
+    check "App(" in s
+    check "running: false" in s
+    check "frames: 0" in s
+    check "windows: 0" in s
+
+  test "app with window mode":
+    let config = AppConfig(windowMode: true)
+    let app = newApp(config)
+    let s = $app
+    check "windows: 0" in s
