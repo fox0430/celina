@@ -20,8 +20,8 @@ type
 
   Buffer* = object ## 2D buffer representing terminal screen content
     area*: Rect # The area this buffer covers
-    content*: seq[seq[Cell]] # 2D grid of cells
-    dirty*: DirtyRegion # Tracks changed region for optimized diff
+    content: seq[seq[Cell]] # 2D grid of cells
+    dirty: DirtyRegion # Tracks changed region for optimized diff
 
 proc cell*(
     symbol: string = " ", style: Style = defaultStyle(), hyperlink: string = ""
@@ -142,13 +142,17 @@ proc clearDirty*(buffer: var Buffer) {.inline.} =
   ## Should be called after buffer has been successfully rendered
   buffer.dirty = DirtyRegion(isDirty: false, minX: 0, minY: 0, maxX: 0, maxY: 0)
 
-proc getDirtyRegionSize*(buffer: Buffer): int {.inline.} =
+proc getDirtyRegionSize*(buffer: Buffer): int =
   ## Get the number of cells in the dirty region
   ## Returns 0 if no changes have been made
   if not buffer.dirty.isDirty:
     return 0
   (buffer.dirty.maxX - buffer.dirty.minX + 1) *
     (buffer.dirty.maxY - buffer.dirty.minY + 1)
+
+proc isDirty*(buffer: Buffer): bool =
+  ## Check if changed region for optimized diff
+  buffer.dirty.isDirty
 
 # Buffer access and manipulation
 proc `[]`*(buffer: Buffer, x, y: int): Cell =

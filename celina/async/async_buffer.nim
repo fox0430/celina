@@ -297,7 +297,7 @@ proc clearDirtyAsync*(asyncBuffer: AsyncBuffer) {.async.} =
 proc isDirty*(asyncBuffer: AsyncBuffer): bool =
   ## Check if the buffer has any dirty regions (thread-safe)
   asyncBuffer.withBuffer:
-    result = buffer.dirty.isDirty
+    result = buffer.isDirty
 
 proc getDirtyRegionSize*(asyncBuffer: AsyncBuffer): int =
   ## Get the size of the dirty region (thread-safe)

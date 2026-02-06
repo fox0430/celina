@@ -495,7 +495,7 @@ suite "AsyncBuffer Module Tests":
       check(asyncBuf.isDirty())
 
       let normalBuf = asyncBuf.toBuffer()
-      check(normalBuf.dirty.isDirty)
+      check(normalBuf.isDirty)
       asyncBuf.destroyAsync()
 
     test "diffAsync benefits from dirty region optimization":
