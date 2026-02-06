@@ -1,6 +1,6 @@
 # Test suite for Buffer module
 
-import std/[unittest, strutils]
+import std/[unittest, strutils, importutils]
 
 import ../celina/core/buffer
 import ../celina/core/geometry
@@ -452,6 +452,8 @@ suite "Buffer Module Tests":
       check not buffer[4, 0].isEmpty()
 
   suite "Dirty Region Tracking":
+    privateAccess(Buffer)
+
     test "New buffer has no dirty region":
       let buf = newBuffer(80, 24)
       check(not buf.dirty.isDirty)
