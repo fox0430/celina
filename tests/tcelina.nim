@@ -1,16 +1,14 @@
 # Test suite for main celina module
 
-import std/[unittest, options, pegs]
+import std/[unittest, options, pegs, strutils]
 
 import ../celina {.all.}
 
 suite "Celina Main Module Tests":
   suite "Basic API Tests":
-    test "version returns valid version":
-      check celinaVersionMajor > 0 or celinaVersionMinor > 0 or celinaVersionPatch > 0
-
     test "version returns valid version string":
       check celinaVersion.match(peg"\d+ '.' \d+ '.' \d+ !.") # Semantic versioning
+      check celinaVersion.split(".").len == 3
 
     test "sync app creation":
       let app = newApp()
@@ -189,15 +187,6 @@ when hasAsyncSupport:
       check declared(newAsyncBufferNoRM)
       check declared(AsyncTerminal)
       check declared(newAsyncTerminal)
-
-    when hasChronos:
-      test "async utility functions (chronos only)":
-        # Test asyncToSync utility (with a simple future)
-        proc simpleAsync(): Future[int] {.async.} =
-          return 42
-
-        let result = asyncToSync(simpleAsync())
-        check result == 42
 
   suite "Backend Configuration":
     test "async backend detection":

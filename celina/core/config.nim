@@ -88,3 +88,14 @@ proc withTargetFps*(config: AppConfig, fps: int): AppConfig {.inline.} =
   ## Return a new config with target FPS setting
   result = config
   result.targetFps = fps
+
+# Version Information
+
+const celinaVersion* = block:
+  ## Full version string parsed from celina.nimble at compile time
+  var v = ""
+  for line in staticRead("../../celina.nimble").splitLines:
+    if strutils.strip(line).startsWith("version"):
+      v = strutils.strip(line.split("=")[1], chars = {'"', ' '})
+      break
+  v
