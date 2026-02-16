@@ -12,12 +12,11 @@ suite "Tabs Widget":
     check tab.content != nil
 
   test "Tabs widget initialization":
-    let tabs =
-      @[
-        tab("Tab 1", newText("Content 1")),
-        tab("Tab 2", newText("Content 2")),
-        tab("Tab 3", newText("Content 3")),
-      ]
+    let tabs = @[
+      tab("Tab 1", newText("Content 1")),
+      tab("Tab 2", newText("Content 2")),
+      tab("Tab 3", newText("Content 3")),
+    ]
 
     let widget = newTabs(tabs, activeIndex = 1)
     check widget.tabs.len == 3
@@ -38,12 +37,11 @@ suite "Tabs Widget":
     check widget.tabs[0].title == "Tab 2"
 
   test "Tab navigation":
-    let tabs =
-      @[
-        tab("Tab 1", newText("Content 1")),
-        tab("Tab 2", newText("Content 2")),
-        tab("Tab 3", newText("Content 3")),
-      ]
+    let tabs = @[
+      tab("Tab 1", newText("Content 1")),
+      tab("Tab 2", newText("Content 2")),
+      tab("Tab 3", newText("Content 3")),
+    ]
 
     var widget = newTabs(tabs, activeIndex = 0)
     check widget.activeIndex == 0
@@ -98,12 +96,11 @@ suite "Tabs Widget":
 
   test "Calculate tab widths":
     # This tests the internal width calculation logic
-    let tabs =
-      @[
-        tab("Short", newText("")),
-        tab("Very Long Tab Title That Should Be Truncated", newText("")),
-        tab("Medium Tab", newText("")),
-      ]
+    let tabs = @[
+      tab("Short", newText("")),
+      tab("Very Long Tab Title That Should Be Truncated", newText("")),
+      tab("Medium Tab", newText("")),
+    ]
 
     let widget = newTabs(tabs)
     var buf = newBuffer(30, 5)
@@ -147,12 +144,11 @@ suite "Tabs Widget":
 
   test "Simple tabs constructor":
     let titles = @["Tab 1", "Tab 2", "Tab 3"]
-    let contents: seq[Widget] =
-      @[
-        Widget(newText("Content 1")),
-        Widget(newText("Content 2")),
-        Widget(newText("Content 3")),
-      ]
+    let contents: seq[Widget] = @[
+      Widget(newText("Content 1")),
+      Widget(newText("Content 2")),
+      Widget(newText("Content 3")),
+    ]
 
     let widget = simpleTabs(titles, contents)
     check widget.tabs.len == 3
@@ -200,12 +196,11 @@ suite "Tabs Widget":
     check widget2.activeIndex == 0 # Should be clamped to 0
 
   test "Remove tab edge cases":
-    let tabs =
-      @[
-        tab("Tab 1", newText("Content 1")),
-        tab("Tab 2", newText("Content 2")),
-        tab("Tab 3", newText("Content 3")),
-      ]
+    let tabs = @[
+      tab("Tab 1", newText("Content 1")),
+      tab("Tab 2", newText("Content 2")),
+      tab("Tab 3", newText("Content 3")),
+    ]
 
     # Test removing tab before active tab
     var widget = newTabs(tabs, activeIndex = 2)
@@ -245,14 +240,13 @@ suite "Tabs Widget":
 
   test "Tab width calculation edge cases":
     # This tests extreme conditions in width calculations
-    let manyTabs =
-      @[
-        tab("A", newText("")),
-        tab("B", newText("")),
-        tab("C", newText("")),
-        tab("D", newText("")),
-        tab("E", newText("")),
-      ]
+    let manyTabs = @[
+      tab("A", newText("")),
+      tab("B", newText("")),
+      tab("C", newText("")),
+      tab("D", newText("")),
+      tab("E", newText("")),
+    ]
 
     let widget = newTabs(manyTabs)
     var buf = newBuffer(8, 5) # Very constrained width
@@ -262,13 +256,12 @@ suite "Tabs Widget":
 
   test "Unicode and wide character handling":
     # Test with Japanese, Chinese, and emojis
-    let unicodeTabs =
-      @[
-        tab("日本語", newText("Japanese content")),
-        tab("中文", newText("Chinese content")),
-        tab("🚀✨", newText("Emoji content")),
-        tab("Mixed英語", newText("Mixed content")),
-      ]
+    let unicodeTabs = @[
+      tab("日本語", newText("Japanese content")),
+      tab("中文", newText("Chinese content")),
+      tab("🚀✨", newText("Emoji content")),
+      tab("Mixed英語", newText("Mixed content")),
+    ]
 
     let widget = newTabs(unicodeTabs)
     var buf = newBuffer(40, 10)
@@ -313,11 +306,10 @@ suite "Tabs Widget":
     check true # Should render successfully
 
   test "Tab bar visual verification":
-    let tabs =
-      @[
-        tab("Active", newText("Active content")),
-        tab("Inactive", newText("Inactive content")),
-      ]
+    let tabs = @[
+      tab("Active", newText("Active content")),
+      tab("Inactive", newText("Inactive content")),
+    ]
 
     let widget = newTabs(tabs, activeIndex = 0)
     var buf = newBuffer(30, 5)

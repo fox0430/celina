@@ -294,12 +294,11 @@ suite "Terminal Common Module Tests":
 
     test "generateRenderBatch with styled changes":
       let redStyle = style(Color.Red)
-      let changes =
-        @[
-          (pos: pos(0, 0), cell: cell("A", redStyle)),
-          (pos: pos(1, 0), cell: cell("B", redStyle)),
-          (pos: pos(2, 0), cell: cell("C", defaultStyle())),
-        ]
+      let changes = @[
+        (pos: pos(0, 0), cell: cell("A", redStyle)),
+        (pos: pos(1, 0), cell: cell("B", redStyle)),
+        (pos: pos(2, 0), cell: cell("C", defaultStyle())),
+      ]
 
       let batch = generateRenderBatch(changes)
       check batch.commands.len >= 1
@@ -438,11 +437,10 @@ suite "Terminal Common Module Tests":
       check makeCursorPositionSeq(999, 999) == "\e[1000;1000H"
 
     test "generateRenderBatch with overlapping positions":
-      let changes =
-        @[
-          (pos: pos(5, 5), cell: cell("A", defaultStyle())),
-          (pos: pos(5, 5), cell: cell("B", defaultStyle())),
-        ]
+      let changes = @[
+        (pos: pos(5, 5), cell: cell("A", defaultStyle())),
+        (pos: pos(5, 5), cell: cell("B", defaultStyle())),
+      ]
 
       let batch = generateRenderBatch(changes)
       check batch.commands.len >= 1

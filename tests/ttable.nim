@@ -200,12 +200,11 @@ suite "Table Widget Tests":
 
   test "Navigation":
     # Test navigation functions
-    let rows =
-      @[
-        tableRow(@["A", "1"]),
-        newTableRow(@["B", "2"], none(Style), false), # Non-selectable
-        tableRow(@["C", "3"]),
-      ]
+    let rows = @[
+      tableRow(@["A", "1"]),
+      newTableRow(@["B", "2"], none(Style), false), # Non-selectable
+      tableRow(@["C", "3"]),
+    ]
     var tableWidget = newTable(@[column("Letter"), column("Number")], rows)
     tableWidget.highlightedIndex = 0
 
@@ -219,11 +218,10 @@ suite "Table Widget Tests":
   test "Column width calculation":
     # Test calculateColumnWidths function
     let columns = @[column("Short"), column("Very Long Header"), column("Med", 10)]
-    let rows =
-      @[
-        tableRow(@["A", "Medium length content", "X"]),
-        tableRow(@["Really long content here", "B", "Y"]),
-      ]
+    let rows = @[
+      tableRow(@["A", "Medium length content", "X"]),
+      tableRow(@["Really long content here", "B", "Y"]),
+    ]
     var tableWidget = newTable(columns, rows)
 
     let widths = tableWidget.calculateColumnWidths(80)
@@ -332,14 +330,13 @@ suite "Table Widget Tests":
 
   test "Five column rendering verification":
     # Test that all 5 columns render correctly (addresses the missing 5th column bug)
-    let columns =
-      @[
-        column("Name", 10),
-        column("Age", 5),
-        column("City", 8),
-        column("Job", 10),
-        column("Salary", 8),
-      ]
+    let columns = @[
+      column("Name", 10),
+      column("Age", 5),
+      column("City", 8),
+      column("Job", 10),
+      column("Salary", 8),
+    ]
     let rows = @[tableRow(@["Alice", "28", "NYC", "Engineer", "$75000"])]
     var tableWidget = newTable(columns, rows)
 
