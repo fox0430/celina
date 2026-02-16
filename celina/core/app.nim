@@ -273,6 +273,15 @@ proc quit*(app: App) =
   ## Signal the application to quit gracefully
   app.shouldQuit = true
 
+# Mouse control
+proc enableMouse*(app: App) =
+  ## Enable mouse reporting at runtime
+  app.terminal.enableMouse()
+
+proc disableMouse*(app: App) =
+  ## Disable mouse reporting at runtime
+  app.terminal.disableMouse()
+
 # Suspend/Resume for shell command execution
 proc suspend*(app: App) =
   ## Temporarily suspend the TUI, restoring normal terminal mode.

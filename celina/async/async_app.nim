@@ -350,6 +350,15 @@ proc quit*(app: AsyncApp) =
   ## Signal the async application to quit gracefully
   app.shouldQuit = true
 
+# Mouse control
+proc enableMouse*(app: AsyncApp) =
+  ## Enable mouse reporting at runtime
+  app.terminal.enableMouse()
+
+proc disableMouse*(app: AsyncApp) =
+  ## Disable mouse reporting at runtime
+  app.terminal.disableMouse()
+
 # Suspend/Resume for shell command execution
 proc suspendAsync*(app: AsyncApp) {.async.} =
   ## Temporarily suspend the TUI, restoring normal terminal mode.
