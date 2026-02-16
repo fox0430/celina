@@ -424,13 +424,12 @@ suite "AsyncBuffer Module Tests":
       let asyncBuffer = newAsyncBuffer(20, 10)
 
       # Start multiple async operations
-      let futures =
-        @[
-          asyncBuffer.setStringAsync(0, 0, "Line1"),
-          asyncBuffer.setStringAsync(0, 1, "Line2"),
-          asyncBuffer.setStringAsync(0, 2, "Line3"),
-          asyncBuffer.fillAsync(rect(10, 5, 5, 3), cell("*")),
-        ]
+      let futures = @[
+        asyncBuffer.setStringAsync(0, 0, "Line1"),
+        asyncBuffer.setStringAsync(0, 1, "Line2"),
+        asyncBuffer.setStringAsync(0, 2, "Line3"),
+        asyncBuffer.fillAsync(rect(10, 5, 5, 3), cell("*")),
+      ]
 
       waitFor allFutures(futures)
 

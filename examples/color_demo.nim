@@ -21,19 +21,18 @@ proc drawGradientBar(
 
 proc drawColorPalette(buf: var Buffer, x, y: int) =
   # Draw predefined true colors
-  let colors =
-    @[
-      ("Hot Pink", hotPink()),
-      ("Deep Sky Blue", deepSkyBlue()),
-      ("Lime Green", limeGreen()),
-      ("Orange", orange()),
-      ("Violet", violet()),
-      ("Gold", gold()),
-      ("Crimson", crimson()),
-      ("Teal", teal()),
-      ("Indigo", indigo()),
-      ("Salmon", salmon()),
-    ]
+  let colors = @[
+    ("Hot Pink", hotPink()),
+    ("Deep Sky Blue", deepSkyBlue()),
+    ("Lime Green", limeGreen()),
+    ("Orange", orange()),
+    ("Violet", violet()),
+    ("Gold", gold()),
+    ("Crimson", crimson()),
+    ("Teal", teal()),
+    ("Indigo", indigo()),
+    ("Salmon", salmon()),
+  ]
 
   buf.setString(
     x, y, "Predefined True Colors:", Style(fg: color(White), modifiers: {Bold})
@@ -48,15 +47,14 @@ proc drawHexColors(buf: var Buffer, x, y: int) =
   # Demonstrate hex color parsing
   buf.setString(x, y, "Hex Colors:", Style(fg: color(White), modifiers: {Bold}))
 
-  let hexColors =
-    @[
-      ("#FF6B6B", "Coral"),
-      ("#4ECDC4", "Turquoise"),
-      ("#45B7D1", "Sky"),
-      ("#96CEB4", "Sage"),
-      ("#FFEAA7", "Butter"),
-      ("#DDA0DD", "Plum"),
-    ]
+  let hexColors = @[
+    ("#FF6B6B", "Coral"),
+    ("#4ECDC4", "Turquoise"),
+    ("#45B7D1", "Sky"),
+    ("#96CEB4", "Sage"),
+    ("#FFEAA7", "Butter"),
+    ("#DDA0DD", "Plum"),
+  ]
 
   for i, (hex, name) in hexColors:
     let row = y + 2 + i
@@ -76,34 +74,32 @@ proc draw16ColorPalette(buf: var Buffer, x, y: int) =
   buf.setString(x, y, "Standard 16 Colors:", Style(fg: color(White), modifiers: {Bold}))
 
   # First row - normal colors
-  let normalColors =
-    @[
-      (Black, "Black"),
-      (Red, "Red"),
-      (Green, "Green"),
-      (Yellow, "Yellow"),
-      (Blue, "Blue"),
-      (Magenta, "Magenta"),
-      (Cyan, "Cyan"),
-      (White, "White"),
-    ]
+  let normalColors = @[
+    (Black, "Black"),
+    (Red, "Red"),
+    (Green, "Green"),
+    (Yellow, "Yellow"),
+    (Blue, "Blue"),
+    (Magenta, "Magenta"),
+    (Cyan, "Cyan"),
+    (White, "White"),
+  ]
 
   for i, (col, name) in normalColors:
     buf.setString(x + i * 20, y + 2, "   ", Style(bg: color(col)))
     buf.setString(x + i * 20, y + 3, name, Style(fg: color(BrightWhite)))
 
   # Second row - bright colors
-  let brightColors =
-    @[
-      (BrightBlack, "Gray"),
-      (BrightRed, "Bright Red"),
-      (BrightGreen, "Bright Green"),
-      (BrightYellow, "Bright Yellow"),
-      (BrightBlue, "Bright Blue"),
-      (BrightMagenta, "Bright Magenta"),
-      (BrightCyan, "Bright Cyan"),
-      (BrightWhite, "Bright White"),
-    ]
+  let brightColors = @[
+    (BrightBlack, "Gray"),
+    (BrightRed, "Bright Red"),
+    (BrightGreen, "Bright Green"),
+    (BrightYellow, "Bright Yellow"),
+    (BrightBlue, "Bright Blue"),
+    (BrightMagenta, "Bright Magenta"),
+    (BrightCyan, "Bright Cyan"),
+    (BrightWhite, "Bright White"),
+  ]
 
   for i, (col, name) in brightColors:
     buf.setString(x + i * 20, y + 5, "   ", Style(bg: color(col)))

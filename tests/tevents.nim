@@ -196,11 +196,10 @@ suite "Events Module Tests":
 
     test "Character event creation - special characters":
       # Test common special characters
-      let specialChars =
-        @[
-          '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '-', '_', '=', '+', '[',
-          ']', '{', '}', '\\', '|', ';', ':', '\'', '"', ',', '.', '<', '>', '/', '?',
-        ]
+      let specialChars = @[
+        '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '-', '_', '=', '+', '[', ']',
+        '{', '}', '\\', '|', ';', ':', '\'', '"', ',', '.', '<', '>', '/', '?',
+      ]
 
       for ch in specialChars:
         let keyEvent = KeyEvent(code: Char, char: $ch, modifiers: {})

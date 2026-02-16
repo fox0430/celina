@@ -17,26 +17,22 @@ proc generateLargeDataset(): seq[seq[string]] =
   randomize()
   result = @[]
 
-  let firstNames =
-    @[
-      "Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Henry", "Ivy",
-      "Jack", "Kate", "Liam", "Mia", "Noah", "Olivia", "Paul",
-    ]
-  let lastNames =
-    @[
-      "Smith", "Johnson", "Brown", "Wilson", "Davis", "Miller", "Lee", "Taylor",
-      "Anderson", "Thomas", "Jackson", "White", "Harris", "Martin", "Thompson",
-    ]
-  let cities =
-    @[
-      "New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "Philadelphia",
-      "San Antonio", "San Diego", "Dallas", "San Jose", "Austin", "Jacksonville",
-    ]
-  let jobs =
-    @[
-      "Engineer", "Designer", "Developer", "Manager", "Analyst", "Consultant",
-      "Director", "Specialist", "Coordinator", "Administrator", "Supervisor",
-    ]
+  let firstNames = @[
+    "Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Henry", "Ivy", "Jack",
+    "Kate", "Liam", "Mia", "Noah", "Olivia", "Paul",
+  ]
+  let lastNames = @[
+    "Smith", "Johnson", "Brown", "Wilson", "Davis", "Miller", "Lee", "Taylor",
+    "Anderson", "Thomas", "Jackson", "White", "Harris", "Martin", "Thompson",
+  ]
+  let cities = @[
+    "New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "Philadelphia",
+    "San Antonio", "San Diego", "Dallas", "San Jose", "Austin", "Jacksonville",
+  ]
+  let jobs = @[
+    "Engineer", "Designer", "Developer", "Manager", "Analyst", "Consultant", "Director",
+    "Specialist", "Coordinator", "Administrator", "Supervisor",
+  ]
 
   for i in 0 ..< 50:
     let firstName = sample(firstNames)
@@ -50,14 +46,13 @@ proc generateLargeDataset(): seq[seq[string]] =
 
 proc main() =
   # Create columns with custom properties
-  let columns =
-    @[
-      newColumn("Name", some(25), AlignLeft),
-      newColumn("Age", some(8), AlignCenter),
-      newColumn("City", some(15), AlignLeft),
-      newColumn("Job Title", some(18), AlignLeft),
-      newColumn("Salary", some(12), AlignRight),
-    ]
+  let columns = @[
+    newColumn("Name", some(25), AlignLeft),
+    newColumn("Age", some(8), AlignCenter),
+    newColumn("City", some(15), AlignLeft),
+    newColumn("Job Title", some(18), AlignLeft),
+    newColumn("Salary", some(12), AlignRight),
+  ]
 
   # Generate sample data
   let data = generateLargeDataset()
@@ -157,12 +152,11 @@ proc main() =
     var currentY = 2
 
     if showHelp:
-      let helpText =
-        @[
-          "Vim Navigation: j/k (↑↓) | g/G (first/last) | u/d (half page) | b/f (full page)",
-          "Selection: Space/v (toggle) | Enter (select) | Esc (clear)",
-          "Commands: '?' Help | 'B' Border | 'M' Mode | 'C' Clear | 'q' Quit",
-        ]
+      let helpText = @[
+        "Vim Navigation: j/k (↑↓) | g/G (first/last) | u/d (half page) | b/f (full page)",
+        "Selection: Space/v (toggle) | Enter (select) | Esc (clear)",
+        "Commands: '?' Help | 'B' Border | 'M' Mode | 'C' Clear | 'q' Quit",
+      ]
       for line in helpText:
         buffer.setString(2, currentY, line, style(Yellow))
         currentY += 1
