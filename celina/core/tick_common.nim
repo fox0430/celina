@@ -66,3 +66,29 @@ proc clampTimeout*(timeout: int, minTimeout: int = 0): int {.inline.} =
   ## Useful for async implementations that need minimum 1ms timeout
   ## to avoid busy waiting.
   if timeout > minTimeout: timeout else: minTimeout
+
+proc calculatePollTimeout*(
+    remainingFrameTime, applicationTimeout, elapsedSinceLastEvent: int
+): int {.inline.} =
+  ## Calculate the poll timeout integrating application timeout with FPS timing.
+  ##
+  ## When applicationTimeout is active (> 0), the poll sleeps for the shorter of:
+  ## - Time until next frame render (remainingFrameTime)
+  ## - Time until application timeout fires (applicationTimeout - elapsed)
+  ##
+  ## This ensures the event loop wakes up precisely when either the next
+  ## render is due or the timeout has elapsed.
+  if applicationTimeout > 0:
+    let remainingUntilTimeout = max(applicationTimeout - elapsedSinceLastEvent, 0)
+    min(remainingFrameTime, remainingUntilTimeout)
+  else:
+    remainingFrameTime
+
+proc isTimeoutReached*(
+    applicationTimeout, elapsedSinceLastEvent: int
+): bool {.inline.} =
+  ## Check if the application timeout has been reached.
+  ##
+  ## Returns true when applicationTimeout is active and enough idle time
+  ## has passed since the last event.
+  applicationTimeout > 0 and elapsedSinceLastEvent >= applicationTimeout

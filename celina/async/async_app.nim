@@ -3,7 +3,7 @@
 ## This module provides the main AsyncApp type and async event loop
 ## implementation using either Chronos or std/asyncdispatch.
 
-import std/[options, monotimes, strformat]
+import std/[options, monotimes, times, strformat]
 
 import async_backend, async_terminal, async_events, async_windows, async_renderer
 import
@@ -32,6 +32,9 @@ type
     running: bool ## Whether app is currently running
     frameCounter: int ## Total frame count
     lastFrameTime: MonoTime ## Timestamp of last frame
+    applicationTimeout: int ## Application timeout in ms (0 = disabled)
+    timeoutHandler: proc(app: AsyncApp): Future[bool] {.async.}
+    lastEventTime: MonoTime ## Timestamp of last received event
 
   AsyncAppError* = object of CatchableError
 
@@ -75,6 +78,7 @@ proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
     running: false,
     frameCounter: 0,
     lastFrameTime: getMonoTime(),
+    lastEventTime: getMonoTime(),
   )
 
   # Initialize async window manager if enabled
@@ -140,6 +144,31 @@ proc onRenderAsync*(app: AsyncApp, handler: proc(buffer: var Buffer)) =
   ##   buffer.setString(10, 5, "Hello!", defaultStyle())
   ## ```
   app.renderHandler = handler
+
+# Application timeout
+proc onTimeoutAsync*(
+    app: AsyncApp, handler: proc(app: AsyncApp): Future[bool] {.async.}
+) =
+  ## Set the async timeout handler for the application.
+  ##
+  ## The handler is called when no input events are received within
+  ## the application timeout period. Return true to continue running,
+  ## false to quit the application.
+  app.timeoutHandler = handler
+
+proc setApplicationTimeout*(app: AsyncApp, timeoutMs: int) =
+  ## Set the application timeout in milliseconds.
+  ##
+  ## When set to a positive value, the timeout handler will be called
+  ## if no input events are received within this duration.
+  ## Set to 0 to disable the application timeout.
+  app.applicationTimeout = timeoutMs
+
+proc getApplicationTimeout*(app: AsyncApp): int =
+  ## Get the current application timeout in milliseconds.
+  ##
+  ## Returns 0 if the timeout is disabled.
+  app.applicationTimeout
 
 # AsyncApp Lifecycle Management
 
@@ -253,11 +282,30 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
     # Calculate remaining time until next render (used as poll timeout)
     let remainingTime = app.fpsMonitor.getRemainingFrameTime()
 
-    # Use remaining time as timeout, minimum 1ms to avoid busy waiting
-    let timeout = clampTimeout(remainingTime, 1)
+    # Calculate poll timeout, integrating application timeout if set
+    let hasTimeout = app.applicationTimeout > 0 and app.timeoutHandler != nil
+    let elapsed =
+      if hasTimeout:
+        (getMonoTime() - app.lastEventTime).inMilliseconds.int
+      else:
+        0
+    let appTimeout = if hasTimeout: app.applicationTimeout else: 0
+    let timeout =
+      clampTimeout(calculatePollTimeout(remainingTime, appTimeout, elapsed), 1)
 
     # Poll for events with timeout - blocks until event arrives OR timeout expires
     let eventsAvailable = await pollEventsAsync(timeout)
+
+    if eventsAvailable:
+      app.lastEventTime = getMonoTime()
+    elif hasTimeout:
+      # Check if enough idle time has passed to fire timeout handler
+      let elapsedAfterPoll = (getMonoTime() - app.lastEventTime).inMilliseconds.int
+      if isTimeoutReached(app.applicationTimeout, elapsedAfterPoll):
+        # Reset timer to prevent busy-loop and enable periodic callbacks
+        app.lastEventTime = getMonoTime()
+        if not (await app.timeoutHandler(app)):
+          return false
 
     if eventsAvailable:
       var eventCount = 0
