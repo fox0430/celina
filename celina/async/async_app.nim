@@ -25,6 +25,8 @@ type
     eventHandler: proc(event: Event): Future[bool] {.async.}
     eventHandlerWithApp: proc(event: Event, app: AsyncApp): Future[bool] {.async.}
     renderHandler: proc(buffer: var Buffer)
+    tickHandler: proc(): Future[bool] {.async.}
+    tickHandlerWithApp: proc(app: AsyncApp): Future[bool] {.async.}
     windowMode: bool ## Whether to use window management
     config: AppConfig
     resizeState: ResizeState ## Shared resize detection state (from tick_common)
@@ -140,6 +142,20 @@ proc onRenderAsync*(app: AsyncApp, handler: proc(buffer: var Buffer)) =
   ##   buffer.setString(10, 5, "Hello!", defaultStyle())
   ## ```
   app.renderHandler = handler
+
+proc onTickAsync*(app: AsyncApp, handler: proc(): Future[bool] {.async.}) =
+  ## Set the async tick handler called each frame between event processing and rendering.
+  ##
+  ## Return true to continue running, false to quit.
+  app.tickHandler = handler
+  app.tickHandlerWithApp = nil
+
+proc onTickAsync*(app: AsyncApp, handler: proc(app: AsyncApp): Future[bool] {.async.}) =
+  ## Set the async tick handler with AsyncApp context called each frame between event processing and rendering.
+  ##
+  ## Return true to continue running, false to quit.
+  app.tickHandlerWithApp = handler
+  app.tickHandler = nil
 
 # AsyncApp Lifecycle Management
 
@@ -278,6 +294,14 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
               discard app.windowManager.handleEventSync(event)
         else:
           break
+
+    # Call tick handler between event processing and rendering
+    if app.tickHandlerWithApp != nil:
+      if not (await app.tickHandlerWithApp(app)):
+        return false
+    elif app.tickHandler != nil:
+      if not (await app.tickHandler()):
+        return false
 
     # Render only if enough time has passed for target FPS
     if app.fpsMonitor.shouldRender():
