@@ -480,6 +480,82 @@ suite "App handleWindowEvent":
     # so returns false (resize is typically handled separately via dispatchResize)
     check app.handleWindowEvent(event) == false
 
+suite "App Application Timeout":
+  test "applicationTimeout default is 0":
+    let app = newApp()
+    check app.getApplicationTimeout() == 0
+
+  test "setApplicationTimeout and getApplicationTimeout":
+    let app = newApp()
+    app.setApplicationTimeout(500)
+    check app.getApplicationTimeout() == 500
+
+    app.setApplicationTimeout(0)
+    check app.getApplicationTimeout() == 0
+
+  test "setApplicationTimeout can update value multiple times":
+    let app = newApp()
+    app.setApplicationTimeout(100)
+    check app.getApplicationTimeout() == 100
+
+    app.setApplicationTimeout(200)
+    check app.getApplicationTimeout() == 200
+
+    app.setApplicationTimeout(0)
+    check app.getApplicationTimeout() == 0
+
+  test "onTimeout sets timeout handler":
+    let app = newApp()
+    var handlerCalled = false
+
+    app.onTimeout proc(app: App): bool =
+      handlerCalled = true
+      return true
+
+    # Handler is set but not called until run
+    check handlerCalled == false
+
+  test "onTimeout replaces previous handler":
+    let app = newApp()
+    var firstCalled = false
+    var secondCalled = false
+
+    app.onTimeout proc(app: App): bool =
+      firstCalled = true
+      return true
+
+    app.onTimeout proc(app: App): bool =
+      secondCalled = true
+      return true
+
+    # Both are set but neither called; second should have replaced first
+    check firstCalled == false
+    check secondCalled == false
+
+  test "onTimeout handler can disable timeout by setting 0":
+    let app = newApp()
+    app.setApplicationTimeout(100)
+
+    app.onTimeout proc(app: App): bool =
+      app.setApplicationTimeout(0)
+      return true
+
+    check app.getApplicationTimeout() == 100
+
+  test "setApplicationTimeout does not affect handler registration":
+    let app = newApp()
+    var handlerSet = false
+
+    app.onTimeout proc(app: App): bool =
+      handlerSet = true
+      return true
+
+    app.setApplicationTimeout(0)
+    app.setApplicationTimeout(500)
+    # Handler should still be registered regardless of timeout value changes
+    check handlerSet == false
+    check app.getApplicationTimeout() == 500
+
 suite "App String Representation":
   test "new app string representation":
     let app = newApp()

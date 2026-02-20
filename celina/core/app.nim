@@ -4,7 +4,7 @@
 ## Core application management, lifecycle, and event loop handling.
 ## Provides the main App type and orchestrates all components.
 
-import std/[options, monotimes, strformat]
+import std/[options, monotimes, times, strformat]
 
 import
   terminal, buffer, events, renderer, fps, cursor, geometry, errors, terminal_common,
@@ -28,6 +28,9 @@ type App* = ref object ## Main application context for CLI applications
   running: bool ## Whether app is currently running
   frameCounter: int ## Total frame count
   lastFrameTime: MonoTime ## Timestamp of last frame
+  applicationTimeout: int ## Application timeout in ms (0 = disabled)
+  timeoutHandler: proc(app: App): bool
+  lastEventTime: MonoTime ## Timestamp of last received event
 
 proc `$`*(app: App): string =
   ## String representation of App for debugging
@@ -56,6 +59,7 @@ proc newApp*(config: AppConfig = DefaultAppConfig): App =
     running: false,
     frameCounter: 0,
     lastFrameTime: getMonoTime(),
+    lastEventTime: getMonoTime(),
   )
 
   # Initialize window manager if enabled
@@ -94,6 +98,29 @@ proc onEvent*(app: App, handler: proc(event: Event, app: App): bool) =
 proc onRender*(app: App, handler: proc(buffer: var Buffer)) =
   ## Set the render handler for the application
   app.renderHandler = handler
+
+# Application timeout
+proc onTimeout*(app: App, handler: proc(app: App): bool) =
+  ## Set the timeout handler for the application.
+  ##
+  ## The handler is called when no input events are received within
+  ## the application timeout period. Return true to continue running,
+  ## false to quit the application.
+  app.timeoutHandler = handler
+
+proc setApplicationTimeout*(app: App, timeoutMs: int) =
+  ## Set the application timeout in milliseconds.
+  ##
+  ## When set to a positive value, the timeout handler will be called
+  ## if no input events are received within this duration.
+  ## Set to 0 to disable the application timeout.
+  app.applicationTimeout = timeoutMs
+
+proc getApplicationTimeout*(app: App): int =
+  ## Get the current application timeout in milliseconds.
+  ##
+  ## Returns 0 if the timeout is disabled.
+  app.applicationTimeout
 
 # Lifecycle management
 proc setup(app: App) =
@@ -204,8 +231,31 @@ proc tick(app: App): bool =
     # Calculate remaining time until next render (used as poll timeout)
     let remainingTime = app.fpsMonitor.getRemainingFrameTime()
 
+    # Calculate poll timeout, integrating application timeout if set
+    let hasTimeout = app.applicationTimeout > 0 and app.timeoutHandler != nil
+    let elapsed =
+      if hasTimeout:
+        (getMonoTime() - app.lastEventTime).inMilliseconds.int
+      else:
+        0
+    let appTimeout = if hasTimeout: app.applicationTimeout else: 0
+    let timeout = calculatePollTimeout(remainingTime, appTimeout, elapsed)
+
     # Poll for events with timeout - blocks until event arrives OR timeout expires
-    if events.pollEvents(remainingTime):
+    let eventsAvailable = events.pollEvents(timeout)
+
+    if eventsAvailable:
+      app.lastEventTime = getMonoTime()
+    elif hasTimeout:
+      # Check if enough idle time has passed to fire timeout handler
+      let elapsedAfterPoll = (getMonoTime() - app.lastEventTime).inMilliseconds.int
+      if isTimeoutReached(app.applicationTimeout, elapsedAfterPoll):
+        # Reset timer to prevent busy-loop and enable periodic callbacks
+        app.lastEventTime = getMonoTime()
+        if not app.timeoutHandler(app):
+          return false
+
+    if eventsAvailable:
       var eventCount = 0
 
       while eventCount < maxEventsPerTick:

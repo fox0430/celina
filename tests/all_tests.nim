@@ -3,7 +3,7 @@ import
   tapp, tapp_windows, tcelina, terror_handling, tterminal_common, tbutton, ttable,
   ttabs, tprogress, tcursor, tfps, trenderer, ttext, tbase, tlist, tinput,
   tescape_sequence_logic, tkey_logic, tmouse_logic, tresources, tutf8_utils, tconfig,
-  tpaste
+  tpaste, ttick_common
 
 import ../celina/async/async_backend
 
