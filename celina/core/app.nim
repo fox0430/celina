@@ -21,6 +21,8 @@ type App* = ref object ## Main application context for CLI applications
   eventHandler: proc(event: Event): bool
   eventHandlerWithApp: proc(event: Event, app: App): bool
   renderHandler: proc(buffer: var Buffer)
+  tickHandler: proc(): bool
+  tickHandlerWithApp: proc(app: App): bool
   windowMode: bool
   config: AppConfig
   resizeState: ResizeState ## Shared resize detection state (from tick_common)
@@ -98,6 +100,20 @@ proc onEvent*(app: App, handler: proc(event: Event, app: App): bool) =
 proc onRender*(app: App, handler: proc(buffer: var Buffer)) =
   ## Set the render handler for the application
   app.renderHandler = handler
+
+proc onTick*(app: App, handler: proc(): bool) =
+  ## Set the tick handler called each frame between event processing and rendering.
+  ##
+  ## Return true to continue running, false to quit.
+  app.tickHandler = handler
+  app.tickHandlerWithApp = nil
+
+proc onTick*(app: App, handler: proc(app: App): bool) =
+  ## Set the tick handler with App context called each frame between event processing and rendering.
+  ##
+  ## Return true to continue running, false to quit.
+  app.tickHandlerWithApp = handler
+  app.tickHandler = nil
 
 # Application timeout
 proc onTimeout*(app: App, handler: proc(app: App): bool) =
@@ -273,6 +289,14 @@ proc tick(app: App): bool =
             discard app.windowManager.handleEvent(event)
         else:
           break
+
+    # Call tick handler between event processing and rendering
+    if app.tickHandlerWithApp != nil:
+      if not app.tickHandlerWithApp(app):
+        return false
+    elif app.tickHandler != nil:
+      if not app.tickHandler():
+        return false
 
     # Render only if enough time has passed for target FPS
     if app.fpsMonitor.shouldRender():

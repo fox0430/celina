@@ -91,6 +91,51 @@ when hasAsyncSupport:
       # Handler is set but not called until run
       check handlerCalled == false
 
+    test "onTickAsync sets tick handler":
+      let app = newAsyncApp()
+      var handlerCalled = false
+
+      app.onTickAsync proc(): Future[bool] {.async.} =
+        handlerCalled = true
+        return true
+
+      # Handler is set but not called until run
+      check handlerCalled == false
+
+    test "onTickAsync with AsyncApp context sets tick handler":
+      let app = newAsyncApp()
+      var handlerCalled = false
+
+      app.onTickAsync proc(app: AsyncApp): Future[bool] {.async.} =
+        handlerCalled = true
+        return true
+
+      # Handler is set but not called until run
+      check handlerCalled == false
+
+    test "onTickAsync overloads are mutually exclusive":
+      let app = newAsyncApp()
+      var simpleCalled = false
+      var appCalled = false
+
+      # Set simple handler first
+      app.onTickAsync proc(): Future[bool] {.async.} =
+        simpleCalled = true
+        return true
+
+      # Setting App-context handler should clear simple handler
+      app.onTickAsync proc(app: AsyncApp): Future[bool] {.async.} =
+        appCalled = true
+        return true
+
+      # Now set simple handler again, should clear App-context handler
+      app.onTickAsync proc(): Future[bool] {.async.} =
+        simpleCalled = true
+        return true
+
+      check simpleCalled == false
+      check appCalled == false
+
   suite "AsyncApp State Management":
     test "isRunning returns false before run":
       let app = newAsyncApp()

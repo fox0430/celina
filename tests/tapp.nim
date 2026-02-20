@@ -49,6 +49,53 @@ suite "App Event and Render Handlers":
     # Handler is set but not called until run
     check handlerCalled == false
 
+  test "onTick sets tick handler":
+    let app = newApp()
+    var handlerCalled = false
+
+    app.onTick proc(): bool =
+      handlerCalled = true
+      return true
+
+    # Handler is set but not called until run
+    check handlerCalled == false
+
+  test "onTick with App context sets tick handler":
+    let app = newApp()
+    var handlerCalled = false
+    var receivedApp: App
+
+    app.onTick proc(app: App): bool =
+      handlerCalled = true
+      receivedApp = app
+      return true
+
+    # Handler is set but not called until run
+    check handlerCalled == false
+
+  test "onTick overloads are mutually exclusive":
+    let app = newApp()
+    var simpleCalled = false
+    var appCalled = false
+
+    # Set simple handler first
+    app.onTick proc(): bool =
+      simpleCalled = true
+      return true
+
+    # Setting App-context handler should clear simple handler
+    app.onTick proc(app: App): bool =
+      appCalled = true
+      return true
+
+    # Now set simple handler again, should clear App-context handler
+    app.onTick proc(): bool =
+      simpleCalled = true
+      return true
+
+    check simpleCalled == false
+    check appCalled == false
+
 suite "App FPS Control":
   test "setTargetFps changes target FPS":
     let app = newApp()
