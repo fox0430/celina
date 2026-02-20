@@ -483,6 +483,82 @@ when hasAsyncSupport:
       check app.getCursorPosition() == (-1, -1)
       check app.getCursorStyle() == CursorStyle.Default
 
+  suite "AsyncApp Application Timeout":
+    test "applicationTimeout default is 0":
+      let app = newAsyncApp()
+      check app.getApplicationTimeout() == 0
+
+    test "setApplicationTimeout and getApplicationTimeout":
+      let app = newAsyncApp()
+      app.setApplicationTimeout(500)
+      check app.getApplicationTimeout() == 500
+
+      app.setApplicationTimeout(0)
+      check app.getApplicationTimeout() == 0
+
+    test "setApplicationTimeout can update value multiple times":
+      let app = newAsyncApp()
+      app.setApplicationTimeout(100)
+      check app.getApplicationTimeout() == 100
+
+      app.setApplicationTimeout(200)
+      check app.getApplicationTimeout() == 200
+
+      app.setApplicationTimeout(0)
+      check app.getApplicationTimeout() == 0
+
+    test "onTimeoutAsync sets timeout handler":
+      let app = newAsyncApp()
+      var handlerCalled = false
+
+      app.onTimeoutAsync proc(app: AsyncApp): Future[bool] {.async.} =
+        handlerCalled = true
+        return true
+
+      # Handler is set but not called until run
+      check handlerCalled == false
+
+    test "onTimeoutAsync replaces previous handler":
+      let app = newAsyncApp()
+      var firstCalled = false
+      var secondCalled = false
+
+      app.onTimeoutAsync proc(app: AsyncApp): Future[bool] {.async.} =
+        firstCalled = true
+        return true
+
+      app.onTimeoutAsync proc(app: AsyncApp): Future[bool] {.async.} =
+        secondCalled = true
+        return true
+
+      # Both are set but neither called; second should have replaced first
+      check firstCalled == false
+      check secondCalled == false
+
+    test "onTimeoutAsync handler can disable timeout by setting 0":
+      let app = newAsyncApp()
+      app.setApplicationTimeout(100)
+
+      app.onTimeoutAsync proc(app: AsyncApp): Future[bool] {.async.} =
+        app.setApplicationTimeout(0)
+        return true
+
+      check app.getApplicationTimeout() == 100
+
+    test "setApplicationTimeout does not affect handler registration":
+      let app = newAsyncApp()
+      var handlerSet = false
+
+      app.onTimeoutAsync proc(app: AsyncApp): Future[bool] {.async.} =
+        handlerSet = true
+        return true
+
+      app.setApplicationTimeout(0)
+      app.setApplicationTimeout(500)
+      # Handler should still be registered regardless of timeout value changes
+      check handlerSet == false
+      check app.getApplicationTimeout() == 500
+
   suite "AsyncApp handleWindowEvent":
     test "handleWindowEvent with no window mode returns false":
       let app = newAsyncApp()

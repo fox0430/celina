@@ -13,7 +13,7 @@
 ## let percentage = progress.getPercentageText()
 ## ```
 
-import std/[strformat, strutils, unicode, math]
+import std/[strformat, unicode, math]
 
 import base
 import ../core/[geometry, buffer, colors]
