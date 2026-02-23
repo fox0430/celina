@@ -20,6 +20,13 @@ suite "Ctrl Letter Key Mapping":
     check resultB.isCtrlKey
     check resultB.keyEvent.char == "b"
 
+    # Test Ctrl-J
+    let resultJ = mapCtrlLetterKey('\x0a')
+    check resultJ.isCtrlKey
+    check resultJ.keyEvent.code == Char
+    check resultJ.keyEvent.char == "j"
+    check resultJ.keyEvent.modifiers == {Ctrl}
+
     # Test Ctrl-Z
     let resultZ = mapCtrlLetterKey('\x1a')
     check resultZ.isCtrlKey
@@ -37,10 +44,6 @@ suite "Ctrl Letter Key Mapping":
     # \x09 = Ctrl-I (Tab)
     let resultI = mapCtrlLetterKey('\x09')
     check not resultI.isCtrlKey
-
-    # \x0a = Ctrl-J (Line Feed)
-    let resultJ = mapCtrlLetterKey('\x0a')
-    check not resultJ.isCtrlKey
 
     # \x0d = Ctrl-M (Enter)
     let resultM = mapCtrlLetterKey('\x0d')
@@ -100,10 +103,6 @@ suite "Basic Key Mapping":
     let resultCR = mapBasicKey('\r')
     check resultCR.code == Enter
     check resultCR.char == "\r"
-
-    let resultLF = mapBasicKey('\n')
-    check resultLF.code == Enter
-    check resultLF.char == "\n"
 
   test "Tab key":
     let result = mapBasicKey('\t')
