@@ -59,7 +59,7 @@ proc mapCtrlLetterKey*(ch: char): CtrlKeyResult =
   ##
   ## \x01-\x1a = Ctrl-A to Ctrl-Z, but exclude already-handled keys:
   ## \x03 = Ctrl-C (Quit), \x08 = Ctrl-H (Backspace), \x09 = Ctrl-I (Tab)
-  ## \x0a = Ctrl-J (Line Feed), \x0d = Ctrl-M (Enter), \x1b = Ctrl-[ (Escape)
+  ## \x0d = Ctrl-M (Enter), \x1b = Ctrl-[ (Escape)
   ##
   ## Example:
   ## ```nim
@@ -68,8 +68,7 @@ proc mapCtrlLetterKey*(ch: char): CtrlKeyResult =
   ## assert result.keyEvent.char == "a"
   ## assert result.keyEvent.modifiers == {Ctrl}
   ## ```
-  if ch >= '\x01' and ch <= '\x1a' and
-      ch notin {'\x03', '\x08', '\x09', '\x0a', '\x0d', '\x1b'}:
+  if ch >= '\x01' and ch <= '\x1a' and ch notin {'\x03', '\x08', '\x09', '\x0d', '\x1b'}:
     let letter = chr(ch.ord + ord('a') - 1)
     return CtrlKeyResult(
       isCtrlKey: true, keyEvent: KeyEvent(code: Char, char: $letter, modifiers: {Ctrl})
@@ -113,7 +112,7 @@ proc mapBasicKey*(ch: char): KeyEvent =
   ## assert mapBasicKey('a').code == Char
   ## ```
   case ch
-  of '\r', '\n':
+  of '\r':
     KeyEvent(code: Enter, char: $ch)
   of '\t':
     KeyEvent(code: Tab, char: $ch)
