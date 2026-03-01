@@ -1,6 +1,6 @@
 # Package
 
-version = "0.9.0"
+version = "0.10.0"
 author = "fox0430"
 description = "A CLI library inspired by Ratatui"
 license = "MIT"
