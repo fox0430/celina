@@ -447,6 +447,20 @@ proc toStrings*(buffer: Buffer): seq[string] =
       line.add(buffer.content[y][x].symbol)
     result[y] = line
 
+proc clone*(buffer: Buffer): Buffer =
+  ## Create a deep copy of the buffer
+  result = Buffer(
+    area: buffer.area,
+    content: newSeq[seq[Cell]](buffer.area.height),
+    dirty: buffer.dirty,
+  )
+  for y in 0 ..< buffer.area.height:
+    result.content[y] = buffer.content[y]
+
+proc getCell*(buffer: Buffer, x, y: int): Cell {.inline.} =
+  ## Get cell at coordinates (alias for [] operator)
+  buffer[x, y]
+
 proc `$`*(buffer: Buffer): string =
   ## String representation of Buffer
   let lines = buffer.toStrings()
