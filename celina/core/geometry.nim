@@ -18,6 +18,16 @@ type
 
   Area* = Rect ## Alias for Rect, commonly used for widget areas
 
+  HAlign* = enum ## Horizontal alignment options
+    hLeft
+    hCenter
+    hRight
+
+  VAlign* = enum ## Vertical alignment options
+    vTop
+    vMiddle
+    vBottom
+
 # Position constructors and utilities
 proc pos*(x, y: int): Position {.inline.} =
   ## Create a new Position

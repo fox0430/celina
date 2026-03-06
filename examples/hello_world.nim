@@ -1,4 +1,4 @@
-# Simple hello world example for Celina library
+# Simple hello world example for Celina
 
 import pkg/celina
 
@@ -10,17 +10,22 @@ proc main() =
   app.onRender(
     proc(buf: var Buffer) =
       # Center "Hello, World!" message on screen
-      let msg = "Hello, World!"
-      let x = (buf.area.width - msg.len) div 2
-      let y = buf.area.height div 2
+      buf.setString(
+        buf.area,
+        "Hello, World!",
+        Style(fg: color(Green)),
+        hAlign = hCenter,
+        vAlign = vMiddle,
+      )
 
-      # Draw the message in green color
-      buf.setString(x, y, msg, Style(fg: color(Green)))
-
-      # Add usage hint below the main message
-      let hint = "Press 'q' to quit"
-      let hintX = (buf.area.width - hint.len) div 2
-      buf.setString(hintX, y + 2, hint, Style(fg: color(BrightBlack)))
+      # Add usage hint 2 lines below the main message
+      buf.setString(
+        rect(0, 2, buf.area.width, buf.area.height),
+        "Press 'q' to quit",
+        Style(fg: color(BrightBlack)),
+        hAlign = hCenter,
+        vAlign = vMiddle,
+      )
   )
 
   # Set up the event handler - processes keyboard/mouse input
@@ -28,8 +33,8 @@ proc main() =
     proc(event: Event): bool =
       # Check if this is a keyboard event
       if event.kind == EventKind.Key:
-        # Quit when 'q' is pressed
         if event.key.code == KeyCode.Char and event.key.char == "q":
+          # Quit when 'q' is pressed
           return false # Returning false exits the app
       return true # Continue running for all other events
   )
