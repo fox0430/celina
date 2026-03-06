@@ -269,6 +269,73 @@ proc setString*(
   ## Set a string starting at the given position
   buffer.setString(pos.x, pos.y, text, style, hyperlink)
 
+proc setString*(
+    buffer: var Buffer,
+    area: Rect,
+    text: string,
+    style: Style = defaultStyle(),
+    hAlign: HAlign = hLeft,
+    vAlign: VAlign = vTop,
+    hyperlink: string = "",
+) =
+  ## Set a string within the given area with alignment
+  ## Text is clipped to the area boundaries.
+  ## Handles Unicode characters and wide characters properly for alignment calculation
+  if text.len == 0 or area.isEmpty:
+    return
+
+  # Calculate display width of text
+  var textWidth = 0
+  for rune in text.runes:
+    textWidth += runeWidth(rune)
+
+  # Calculate x position based on horizontal alignment
+  let x =
+    case hAlign
+    of hLeft:
+      area.x
+    of hCenter:
+      area.x + (area.width - textWidth) div 2
+    of hRight:
+      area.x + area.width - textWidth
+
+  # Calculate y position based on vertical alignment
+  let y =
+    case vAlign
+    of vTop:
+      area.y
+    of vMiddle:
+      area.y + (area.height - 1) div 2
+    of vBottom:
+      area.y + area.height - 1
+
+  var currentX = x
+  try:
+    for rune in text.runes:
+      let width = runeWidth(rune)
+
+      # Skip characters before the area
+      if currentX + width <= area.x:
+        currentX += width
+        continue
+
+      # Stop after the area
+      if currentX >= area.right:
+        break
+      if currentX + width > area.right:
+        break
+
+      if buffer.isValidPos(currentX, y):
+        buffer[currentX, y] = cell($rune, style, hyperlink)
+        if width == 2 and buffer.isValidPos(currentX + 1, y):
+          buffer[currentX + 1, y] = cell("", style, hyperlink)
+
+      currentX += width
+  except ValueError:
+    return
+  except CatchableError:
+    return
+
 proc setRunes*(
     buffer: var Buffer,
     x, y: int,

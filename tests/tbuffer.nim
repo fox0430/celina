@@ -204,6 +204,55 @@ suite "Buffer Module Tests":
       check buffer[3, 3].symbol == "o"
       check buffer[7, 3].symbol == "!"
 
+    test "String setting with alignment":
+      var buffer = newBuffer(20, 10)
+
+      # Horizontal center, vertical middle
+      buffer.setString(buffer.area, "Hello", hAlign = hCenter, vAlign = vMiddle)
+      # "Hello" is 5 chars wide, buffer is 20 wide -> x = (20-5)/2 = 7
+      # Buffer is 10 tall -> y = (10-1)/2 = 4
+      check buffer[7, 4].symbol == "H"
+      check buffer[8, 4].symbol == "e"
+      check buffer[11, 4].symbol == "o"
+
+      # Right aligned, bottom
+      var buffer2 = newBuffer(20, 10)
+      buffer2.setString(buffer2.area, "End", hAlign = hRight, vAlign = vBottom)
+      # "End" is 3 chars wide -> x = 20-3 = 17, y = 10-1 = 9
+      check buffer2[17, 9].symbol == "E"
+      check buffer2[18, 9].symbol == "n"
+      check buffer2[19, 9].symbol == "d"
+
+      # Left aligned, top (default)
+      var buffer3 = newBuffer(20, 10)
+      buffer3.setString(buffer3.area, "Top")
+      check buffer3[0, 0].symbol == "T"
+      check buffer3[1, 0].symbol == "o"
+      check buffer3[2, 0].symbol == "p"
+
+    test "String setting with alignment and wide characters":
+      var buffer = newBuffer(20, 10)
+      # "日本" has display width 4 (2 wide chars)
+      buffer.setString(buffer.area, "日本", hAlign = hCenter, vAlign = vMiddle)
+      # x = (20-4)/2 = 8, y = (10-1)/2 = 4
+      check buffer[8, 4].symbol == "日"
+      check buffer[10, 4].symbol == "本"
+
+    test "String setting with alignment clips to area":
+      var buffer = newBuffer(20, 10)
+      # Text wider than area — should clip, not fail
+      let smallArea = rect(5, 3, 4, 1)
+      buffer.setString(smallArea, "TooLongText", hAlign = hCenter)
+      # Text is 11 chars, area is 4 wide -> x = 5 + (4-11)/2 = 5 + (-3) = 2
+      # Characters before area.x=5 should be skipped, after area.right=9 clipped
+      check buffer[5, 3].symbol == "L"
+      check buffer[6, 3].symbol == "o"
+      check buffer[7, 3].symbol == "n"
+      check buffer[8, 3].symbol == "g"
+      # Outside area should be untouched
+      check buffer[4, 3].symbol == " "
+      check buffer[9, 3].symbol == " "
+
     test "String setting with bounds checking":
       var buffer = newBuffer(5, 3)
 
