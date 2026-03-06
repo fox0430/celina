@@ -641,3 +641,56 @@ suite "Buffer Module Tests":
       let str = $linkCell
       check "hyperlink" in str
       check "https://test.com" in str
+
+  suite "Buffer Clone and Access":
+    test "clone creates independent copy":
+      var original = newBuffer(10, 5)
+      original.setString(0, 0, "Hello")
+      original.setString(0, 1, "World")
+
+      let cloned = original.clone()
+
+      # Content matches
+      check cloned[0, 0].symbol == "H"
+      check cloned[4, 0].symbol == "o"
+      check cloned[0, 1].symbol == "W"
+      check cloned.area == original.area
+
+      # Modifying original doesn't affect clone
+      original.setString(0, 0, "XXXXX")
+      check cloned[0, 0].symbol == "H"
+
+    test "clone preserves styles and hyperlinks":
+      var original = newBuffer(10, 3)
+      let style = Style(
+        fg: ColorValue(kind: Indexed, indexed: Color.Red),
+        modifiers: {StyleModifier.Bold},
+      )
+      original.setString(0, 0, "Link", style, "https://example.com")
+
+      let cloned = original.clone()
+      check cloned[0, 0].symbol == "L"
+      check cloned[0, 0].style == style
+      check cloned[0, 0].hyperlink == "https://example.com"
+
+    test "getCell returns cell at coordinates":
+      var buffer = newBuffer(10, 5)
+      buffer.setString(2, 3, "Test")
+
+      check buffer.getCell(2, 3).symbol == "T"
+      check buffer.getCell(3, 3).symbol == "e"
+
+    test "getCell out of bounds returns empty cell":
+      let buffer = newBuffer(5, 5)
+      let outCell = buffer.getCell(10, 10)
+      check outCell.symbol == " "
+
+    test "toStrings returns text content":
+      var buffer = newBuffer(5, 2)
+      buffer.setString(0, 0, "Hello")
+      buffer.setString(0, 1, "World")
+
+      let content = buffer.toStrings()
+      check content.len == 2
+      check content[0] == "Hello"
+      check content[1] == "World"

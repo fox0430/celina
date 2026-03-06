@@ -554,6 +554,33 @@ proc getLastFrameTime*(app: App): MonoTime =
   ## Get timestamp of last frame
   app.lastFrameTime
 
+# Buffer access for debugging and testing
+
+proc getBuffer*(app: App): Buffer =
+  ## Get a snapshot (deep copy) of the current display buffer
+  ##
+  ## Returns a copy of the buffer, safe to inspect without affecting rendering.
+  ## Useful for debugging and testing to verify rendered content.
+  ##
+  ## Example:
+  ## ```nim
+  ## let buf = app.getBuffer()
+  ## echo buf.toStrings()  # Get text content of each row
+  ## echo buf[5, 3]        # Get cell at x=5, y=3
+  ## ```
+  app.renderer.getBuffer().clone()
+
+proc getBufferCell*(app: App, x, y: int): Cell =
+  ## Get a specific cell from the current display buffer
+  app.renderer.getBuffer()[x, y]
+
+proc getBufferContent*(app: App): seq[string] =
+  ## Get the text content of the current display buffer as a sequence of strings
+  ##
+  ## Each string represents one row of the buffer. Useful for debugging
+  ## and testing to verify what is displayed on screen.
+  app.renderer.getBuffer().toStrings()
+
 # Convenience functions
 
 proc quickRun*(
