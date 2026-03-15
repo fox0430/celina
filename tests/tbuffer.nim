@@ -1,6 +1,6 @@
 # Test suite for Buffer module
 
-import std/[unittest, strutils, importutils]
+import std/[unittest, strutils, unicode, importutils]
 
 import ../celina/core/buffer
 import ../celina/core/geometry
@@ -267,6 +267,135 @@ suite "Buffer Module Tests":
       # String starting outside buffer
       buffer.setString(10, 1, "Outside")
       # Should not crash, but won't set anything
+
+  suite "setCell Operations":
+    test "setCell with narrow character":
+      var buffer = newBuffer(10, 5)
+      buffer.setCell(3, 2, "A", 1)
+      check buffer[3, 2].symbol == "A"
+      check buffer[3, 2].style == defaultStyle()
+
+    test "setCell with wide character":
+      var buffer = newBuffer(10, 5)
+      buffer.setCell(2, 1, "日", 2)
+      check buffer[2, 1].symbol == "日"
+      check buffer[3, 1].symbol == "" # shadow cell
+      check buffer[3, 1].style == defaultStyle()
+
+    test "setCell with style and hyperlink":
+      var buffer = newBuffer(10, 5)
+      let style = Style(
+        fg: ColorValue(kind: Indexed, indexed: Color.Red),
+        modifiers: {StyleModifier.Bold},
+      )
+      buffer.setCell(1, 0, "本", 2, style, "https://example.com")
+      check buffer[1, 0].symbol == "本"
+      check buffer[1, 0].style == style
+      check buffer[1, 0].hyperlink == "https://example.com"
+      # shadow cell inherits style and hyperlink
+      check buffer[2, 0].symbol == ""
+      check buffer[2, 0].style == style
+      check buffer[2, 0].hyperlink == "https://example.com"
+
+    test "setCell out of bounds is ignored":
+      var buffer = newBuffer(5, 3)
+      buffer.setCell(-1, 0, "X", 1)
+      buffer.setCell(5, 0, "X", 1)
+      buffer.setCell(0, -1, "X", 1)
+      buffer.setCell(0, 3, "X", 1)
+      # No crash, buffer unchanged
+      check buffer[0, 0].symbol == " "
+
+    test "setCell wide character at right edge is skipped":
+      var buffer = newBuffer(5, 3)
+      buffer.setCell(4, 0, "日", 2)
+      # No room for shadow cell, character not written at all
+      check buffer[4, 0].symbol == " "
+
+    test "setCell with Rune":
+      var buffer = newBuffer(10, 5)
+      let r = "語".runeAt(0)
+      buffer.setCell(0, 0, r, 2)
+      check buffer[0, 0].symbol == "語"
+      check buffer[1, 0].symbol == "" # shadow cell
+
+    test "setCell with Position":
+      var buffer = newBuffer(10, 5)
+      buffer.setCell(pos(3, 2), "A", 1)
+      check buffer[3, 2].symbol == "A"
+
+      let r = "本".runeAt(0)
+      buffer.setCell(pos(5, 1), r, 2)
+      check buffer[5, 1].symbol == "本"
+      check buffer[6, 1].symbol == "" # shadow cell
+
+    test "setCell marks dirty region":
+      privateAccess(Buffer)
+      var buffer = newBuffer(80, 24)
+      buffer.setCell(10, 5, "X", 1)
+      check buffer.dirty.isDirty
+      check buffer.dirty.minX == 10
+      check buffer.dirty.maxX == 10
+      check buffer.dirty.minY == 5
+
+    test "setCell wide character includes shadow cell in dirty region":
+      privateAccess(Buffer)
+      var buffer = newBuffer(80, 24)
+      buffer.setCell(10, 5, "日", 2)
+      check buffer.dirty.isDirty
+      check buffer.dirty.minX == 10
+      check buffer.dirty.maxX == 11 # shadow cell at x+1
+      check buffer.dirty.minY == 5
+      check buffer.dirty.maxY == 5
+
+    test "setCell narrow character at last column":
+      var buffer = newBuffer(5, 3)
+      buffer.setCell(4, 2, "Z", 1)
+      check buffer[4, 2].symbol == "Z"
+
+    test "setCell overwrites existing cell":
+      var buffer = newBuffer(10, 5)
+      buffer.setCell(3, 1, "A", 1)
+      check buffer[3, 1].symbol == "A"
+      buffer.setCell(3, 1, "B", 1)
+      check buffer[3, 1].symbol == "B"
+
+    test "setCell changes detected by diff":
+      var oldBuf = newBuffer(10, 5)
+      var newBuf = newBuffer(10, 5)
+      newBuf.setCell(2, 1, "X", 1)
+      newBuf.setCell(4, 3, "日", 2)
+
+      let changes = oldBuf.diff(newBuf)
+      var foundX = false
+      var foundWide = false
+      var foundShadow = false
+      for change in changes:
+        if change.pos == pos(2, 1) and change.cell.symbol == "X":
+          foundX = true
+        if change.pos == pos(4, 3) and change.cell.symbol == "日":
+          foundWide = true
+        if change.pos == pos(5, 3) and change.cell.symbol == "":
+          foundShadow = true
+      check foundX
+      check foundWide
+      check foundShadow
+
+    test "setCell overwriting shadow cell of existing wide char":
+      var buffer = newBuffer(10, 5)
+      buffer.setCell(2, 0, "日", 2)
+      check buffer[2, 0].symbol == "日"
+      check buffer[3, 0].symbol == "" # shadow
+
+      # Overwrite the shadow cell — the wide char at x=2 is now orphaned
+      buffer.setCell(3, 0, "A", 1)
+      check buffer[3, 0].symbol == "A"
+      check buffer[2, 0].symbol == "日" # still there, orphaned
+
+    test "setCell wide character on width=1 buffer is skipped":
+      var buffer = newBuffer(1, 1)
+      buffer.setCell(0, 0, "日", 2)
+      check buffer[0, 0].symbol == " " # not written
 
   suite "Buffer Resizing":
     test "Resize to larger buffer":
