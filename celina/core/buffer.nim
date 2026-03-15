@@ -336,6 +336,66 @@ proc setString*(
   except CatchableError:
     return
 
+proc setCell*(
+    buffer: var Buffer,
+    x, y: int,
+    symbol: string,
+    width: int,
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
+) {.inline.} =
+  ## Set a single character cell at (x, y) with a known display width.
+  ## Unlike setString, this skips UTF-8 parsing and width calculation.
+  ## For wide characters (width=2), the next cell is automatically marked empty.
+  ## If there is not enough room for the shadow cell, the character is not written.
+  ## Caller is responsible for providing correct width.
+  ##
+  ## Note: If overwriting a shadow cell of an existing wide character,
+  ## the original wide character at (x-1) will be left in an inconsistent state.
+  ## This is the same behavior as setString.
+  if x < 0 or x >= buffer.area.width or y < 0 or y >= buffer.area.height:
+    return
+  if width == 2 and x + 1 >= buffer.area.width:
+    return
+  buffer.content[y][x] = Cell(symbol: symbol, style: style, hyperlink: hyperlink)
+  buffer.markDirty(x, y)
+  if width == 2:
+    buffer.content[y][x + 1] = Cell(symbol: "", style: style, hyperlink: hyperlink)
+    buffer.markDirty(x + 1, y)
+
+proc setCell*(
+    buffer: var Buffer,
+    x, y: int,
+    rune: Rune,
+    width: int,
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
+) {.inline.} =
+  ## Rune overload — converts to string once, then delegates.
+  buffer.setCell(x, y, $rune, width, style, hyperlink)
+
+proc setCell*(
+    buffer: var Buffer,
+    pos: Position,
+    symbol: string,
+    width: int,
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
+) {.inline.} =
+  ## Position overload for setCell.
+  buffer.setCell(pos.x, pos.y, symbol, width, style, hyperlink)
+
+proc setCell*(
+    buffer: var Buffer,
+    pos: Position,
+    rune: Rune,
+    width: int,
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
+) {.inline.} =
+  ## Position + Rune overload for setCell.
+  buffer.setCell(pos.x, pos.y, $rune, width, style, hyperlink)
+
 proc setRunes*(
     buffer: var Buffer,
     x, y: int,
