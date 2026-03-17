@@ -16,9 +16,7 @@ type
     eventCallback*: proc(event: Event): Future[bool] {.async.}
     lastResizeCounter: int ## Track last seen resize counter
 
-# Define SIGWINCH if not available
-when not declared(SIGWINCH):
-  const SIGWINCH = 28
+const SIGWINCH = 28
 
 # Global counter for resize detection (async version)
 # Note: We use a counter instead of a bool to support multiple AsyncApp instances.
