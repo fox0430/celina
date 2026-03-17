@@ -35,27 +35,28 @@
 ##
 ## This approach prevents excessive rendering while allowing responsive event processing.
 
-import std/times
+import std/[times, monotimes]
 
 type
   FpsMonitor* = ref object ## Frame rate monitoring and control
     targetFps*: int ## Target FPS for rendering
     frameCounter: int ## Frame counter for FPS calculation
-    lastFpsTime: float ## Last time FPS was calculated
+    lastFpsTime: MonoTime ## Last time FPS was calculated
     currentFps: float ## Current calculated FPS
-    lastRenderTime: float ## Last time a frame was rendered
+    lastRenderTime: MonoTime ## Last time a frame was rendered
 
   PerfStats* = object ## Performance statistics
     fps*: float ## Current frames per second
     frameTime*: float ## Average frame time in milliseconds
-    frameCount*: int ## Total frames rendered
+    frameCount*: int
+      ## Frames rendered in current measurement window (resets each second)
 
 const DefaultTargetFps = 60
 
 proc newFpsMonitor*(targetFps: int = DefaultTargetFps): FpsMonitor =
   ## Create a new FPS monitor with specified target FPS.
   ##
-  ## The monitor is initialized to allow immediate rendering (lastRenderTime = 0.0).
+  ## The monitor is initialized to allow immediate rendering (lastRenderTime = MonoTime.default).
   ##
   ## Parameters:
   ##   * `targetFps`: Target frames per second (1-240). Default is 60.
@@ -68,13 +69,13 @@ proc newFpsMonitor*(targetFps: int = DefaultTargetFps): FpsMonitor =
   if targetFps < 1 or targetFps > 240:
     raise newException(ValueError, "FPS must be 1-240")
 
-  let now = epochTime()
   result = FpsMonitor(
     targetFps: targetFps,
     frameCounter: 0,
-    lastFpsTime: now,
+    lastFpsTime: getMonoTime(),
     currentFps: 0.0,
-    lastRenderTime: 0.0, # Initialize to 0 to allow first render immediately
+    lastRenderTime: MonoTime.default,
+      # Initialize to zero to allow first render immediately
   )
 
 proc setTargetFps*(monitor: FpsMonitor, fps: int) =
@@ -89,7 +90,7 @@ proc getTargetFps*(monitor: FpsMonitor): int =
 
 proc getFrameTimeout*(monitor: FpsMonitor): int =
   ## Get the timeout in milliseconds for achieving target FPS
-  1000 div monitor.targetFps
+  (1000 + monitor.targetFps - 1) div monitor.targetFps
 
 proc startFrame*(monitor: FpsMonitor) =
   ## Mark the start of a new frame and update last render time.
@@ -101,7 +102,7 @@ proc startFrame*(monitor: FpsMonitor) =
   ##   * Only call this when you actually render a frame
   ##   * Do not call this every tick - use `shouldRender()` to check first
   ##   * Calling this updates the FPS control timing
-  monitor.lastRenderTime = epochTime()
+  monitor.lastRenderTime = getMonoTime()
 
 proc endFrame*(monitor: FpsMonitor) =
   ## Mark the end of current frame and update performance statistics.
@@ -121,8 +122,9 @@ proc endFrame*(monitor: FpsMonitor) =
   monitor.frameCounter.inc()
 
   # Update FPS calculation every second
-  let currentTime = epochTime()
-  let elapsed = currentTime - monitor.lastFpsTime
+  let currentTime = getMonoTime()
+  let elapsed =
+    (currentTime - monitor.lastFpsTime).inNanoseconds.float / 1_000_000_000.0
 
   if elapsed >= 1.0:
     monitor.currentFps = monitor.frameCounter.float / elapsed
@@ -143,7 +145,7 @@ proc shouldRender*(monitor: FpsMonitor): bool =
   ##   * Uses `lastRenderTime` for timing control
   ##   * Can be called multiple times without side effects
   ##   * Returns false if target FPS interval not reached
-  ##   * Returns true immediately after initialization (lastRenderTime = 0.0)
+  ##   * Returns true immediately after initialization (lastRenderTime = MonoTime.default)
   ##
   ## This allows for efficient CPU usage by skipping renders when called
   ## at high frequency (e.g., event-driven loops).
@@ -151,8 +153,11 @@ proc shouldRender*(monitor: FpsMonitor): bool =
   ## Performance:
   ##   At 60 FPS target with 1000 Hz tick rate, this returns true only
   ##   60 times per second, preventing 940 unnecessary render calls.
+  if monitor.lastRenderTime == MonoTime.default:
+    return true
   let targetFrameTime = 1.0 / monitor.targetFps.float
-  let elapsed = epochTime() - monitor.lastRenderTime
+  let elapsed =
+    (getMonoTime() - monitor.lastRenderTime).inNanoseconds.float / 1_000_000_000.0
   elapsed >= targetFrameTime
 
 proc getRemainingFrameTime*(monitor: FpsMonitor): int =
@@ -172,7 +177,8 @@ proc getRemainingFrameTime*(monitor: FpsMonitor): int =
   ##   Returns 0 if target frame time already exceeded, indicating
   ##   rendering should occur immediately.
   let targetFrameTime = 1.0 / monitor.targetFps.float
-  let elapsed = epochTime() - monitor.lastRenderTime
+  let elapsed =
+    (getMonoTime() - monitor.lastRenderTime).inNanoseconds.float / 1_000_000_000.0
   let remaining = targetFrameTime - elapsed
   if remaining > 0:
     result = int(remaining * 1000)

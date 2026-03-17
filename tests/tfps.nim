@@ -41,13 +41,13 @@ suite "FPS Module Tests":
 
     test "Get frame timeout":
       let monitor60 = newFpsMonitor(60)
-      check monitor60.getFrameTimeout() == 16 # 1000ms / 60fps ≈ 16ms
+      check monitor60.getFrameTimeout() == 17 # ceil(1000ms / 60fps) = 17ms
 
       let monitor30 = newFpsMonitor(30)
-      check monitor30.getFrameTimeout() == 33 # 1000ms / 30fps ≈ 33ms
+      check monitor30.getFrameTimeout() == 34 # ceil(1000ms / 30fps) = 34ms
 
       let monitor120 = newFpsMonitor(120)
-      check monitor120.getFrameTimeout() == 8 # 1000ms / 120fps ≈ 8ms
+      check monitor120.getFrameTimeout() == 9 # ceil(1000ms / 120fps) = 9ms
 
   suite "Frame Tracking":
     test "Start and end frame":

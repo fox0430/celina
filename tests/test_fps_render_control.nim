@@ -1,5 +1,5 @@
 ## Test to verify shouldRender() works correctly with lastRenderTime
-import std/[unittest, os, times]
+import std/[unittest, os, times, monotimes]
 import ../celina/core/fps
 
 suite "FPS Render Control Tests":
@@ -52,7 +52,7 @@ suite "FPS Render Control Tests":
     # Initial render
     check monitor.shouldRender() == true
     monitor.startFrame()
-    let renderTime1 = epochTime()
+    let renderTime1 = getMonoTime()
     monitor.endFrame()
 
     # Should not render immediately
@@ -62,11 +62,11 @@ suite "FPS Render Control Tests":
     sleep(40)
     check monitor.shouldRender() == true
     monitor.startFrame()
-    let renderTime2 = epochTime()
+    let renderTime2 = getMonoTime()
     monitor.endFrame()
 
     # Check that renders were spaced appropriately
-    let spacing = (renderTime2 - renderTime1) * 1000.0
+    let spacing = (renderTime2 - renderTime1).inNanoseconds.float / 1_000_000.0
     check spacing >= 33.0 # Should be at least target frame time
 
   test "getRemainingFrameTime decreases over time":
