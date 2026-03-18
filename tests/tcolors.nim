@@ -730,3 +730,74 @@ suite "Colors Module Tests":
       check teal().rgb == RgbColor(r: 0, g: 128, b: 128)
       check indigo().rgb == RgbColor(r: 75, g: 0, b: 130)
       check salmon().rgb == RgbColor(r: 250, g: 128, b: 114)
+
+  suite "ANSI to RGB Conversion":
+    test "ansiToRgb() - standard colors":
+      check ansiToRgb(Color.Black) == RgbColor(r: 0, g: 0, b: 0)
+      check ansiToRgb(Color.Red) == RgbColor(r: 128, g: 0, b: 0)
+      check ansiToRgb(Color.Green) == RgbColor(r: 0, g: 128, b: 0)
+      check ansiToRgb(Color.Yellow) == RgbColor(r: 128, g: 128, b: 0)
+      check ansiToRgb(Color.Blue) == RgbColor(r: 0, g: 0, b: 128)
+      check ansiToRgb(Color.Magenta) == RgbColor(r: 128, g: 0, b: 128)
+      check ansiToRgb(Color.Cyan) == RgbColor(r: 0, g: 128, b: 128)
+      check ansiToRgb(Color.White) == RgbColor(r: 192, g: 192, b: 192)
+
+    test "ansiToRgb() - bright colors":
+      check ansiToRgb(Color.BrightBlack) == RgbColor(r: 128, g: 128, b: 128)
+      check ansiToRgb(Color.BrightRed) == RgbColor(r: 255, g: 0, b: 0)
+      check ansiToRgb(Color.BrightGreen) == RgbColor(r: 0, g: 255, b: 0)
+      check ansiToRgb(Color.BrightYellow) == RgbColor(r: 255, g: 255, b: 0)
+      check ansiToRgb(Color.BrightBlue) == RgbColor(r: 0, g: 0, b: 255)
+      check ansiToRgb(Color.BrightMagenta) == RgbColor(r: 255, g: 0, b: 255)
+      check ansiToRgb(Color.BrightCyan) == RgbColor(r: 0, g: 255, b: 255)
+      check ansiToRgb(Color.BrightWhite) == RgbColor(r: 255, g: 255, b: 255)
+
+    test "ansiToRgb() - Reset returns black":
+      check ansiToRgb(Color.Reset) == RgbColor(r: 0, g: 0, b: 0)
+
+  suite "ANSI 256 to RGB Conversion":
+    test "ansi256ToRgb() - standard colors (0-15)":
+      check ansi256ToRgb(0) == RgbColor(r: 0, g: 0, b: 0)
+      check ansi256ToRgb(1) == RgbColor(r: 128, g: 0, b: 0)
+      check ansi256ToRgb(9) == RgbColor(r: 255, g: 0, b: 0)
+      check ansi256ToRgb(15) == RgbColor(r: 255, g: 255, b: 255)
+
+    test "ansi256ToRgb() - RGB cube (16-231)":
+      # First color in cube: black
+      check ansi256ToRgb(16) == RgbColor(r: 0, g: 0, b: 0)
+      # Last color in cube: white
+      check ansi256ToRgb(231) == RgbColor(r: 255, g: 255, b: 255)
+      # Pure red (5,0,0)
+      check ansi256ToRgb(196) == RgbColor(r: 255, g: 0, b: 0)
+      # Pure green (0,5,0)
+      check ansi256ToRgb(46) == RgbColor(r: 0, g: 255, b: 0)
+      # Pure blue (0,0,5)
+      check ansi256ToRgb(21) == RgbColor(r: 0, g: 0, b: 255)
+
+    test "ansi256ToRgb() - grayscale ramp (232-255)":
+      # Darkest gray
+      check ansi256ToRgb(232) == RgbColor(r: 8, g: 8, b: 8)
+      # Lightest gray
+      check ansi256ToRgb(255) == RgbColor(r: 238, g: 238, b: 238)
+
+  suite "ColorValue toRgb Conversion":
+    test "toRgb() - Rgb kind":
+      let c = rgb(100, 150, 200)
+      check c.toRgb() == RgbColor(r: 100, g: 150, b: 200)
+
+    test "toRgb() - Indexed kind":
+      let c = color(Color.Red)
+      check c.toRgb() == RgbColor(r: 128, g: 0, b: 0)
+
+    test "toRgb() - Indexed256 kind":
+      let c = color256(196'u8)
+      check c.toRgb() == RgbColor(r: 255, g: 0, b: 0)
+
+    test "toRgb() - Default kind returns default":
+      let c = defaultColor()
+      check c.toRgb() == RgbColor(r: 0, g: 0, b: 0)
+
+    test "toRgb() - Default kind with custom default":
+      let c = defaultColor()
+      let custom = RgbColor(r: 200, g: 200, b: 200)
+      check c.toRgb(custom) == custom

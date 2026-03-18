@@ -74,6 +74,26 @@ type
     bg*: ColorValue = ColorValue(kind: Default) # Background color
     modifiers*: set[StyleModifier] # Text modifiers
 
+# ANSI color to RGB conversion
+const ansi16Table: array[16, RgbColor] = [
+  RgbColor(r: 0, g: 0, b: 0), # Black
+  RgbColor(r: 128, g: 0, b: 0), # Red
+  RgbColor(r: 0, g: 128, b: 0), # Green
+  RgbColor(r: 128, g: 128, b: 0), # Yellow
+  RgbColor(r: 0, g: 0, b: 128), # Blue
+  RgbColor(r: 128, g: 0, b: 128), # Magenta
+  RgbColor(r: 0, g: 128, b: 128), # Cyan
+  RgbColor(r: 192, g: 192, b: 192), # White
+  RgbColor(r: 128, g: 128, b: 128), # BrightBlack
+  RgbColor(r: 255, g: 0, b: 0), # BrightRed
+  RgbColor(r: 0, g: 255, b: 0), # BrightGreen
+  RgbColor(r: 255, g: 255, b: 0), # BrightYellow
+  RgbColor(r: 0, g: 0, b: 255), # BrightBlue
+  RgbColor(r: 255, g: 0, b: 255), # BrightMagenta
+  RgbColor(r: 0, g: 255, b: 255), # BrightCyan
+  RgbColor(r: 255, g: 255, b: 255), # BrightWhite
+]
+
 # Equality comparison for RgbColor
 proc `==`*(a, b: RgbColor): bool {.inline.} =
   ## Compare two RgbColor objects
@@ -451,6 +471,49 @@ proc toAnsiSequence*(style: Style): string =
 proc resetSequence*(): string {.inline.} =
   ## ANSI sequence to reset all formatting
   "\e[0m"
+
+proc ansiToRgb*(c: Color): RgbColor {.inline.} =
+  ## Convert a 16-color ANSI Color to RgbColor.
+  ## Reset is treated as black (0, 0, 0).
+  if ord(c) <= 15:
+    ansi16Table[ord(c)]
+  else:
+    RgbColor(r: 0, g: 0, b: 0)
+
+proc ansi256ToRgb*(index: uint8): RgbColor =
+  ## Convert a 256-color palette index to RgbColor.
+  ## 0-15: standard ANSI colors, 16-231: 6x6x6 RGB cube, 232-255: grayscale ramp.
+  if index <= 15:
+    ansi16Table[index.int]
+  elif index <= 231:
+    let i = index.int - 16
+    let ri = i div 36
+    let gi = (i mod 36) div 6
+    let bi = i mod 6
+    RgbColor(
+      r: (if ri == 0: 0'u8 else: (55 + 40 * ri).uint8),
+      g: (if gi == 0: 0'u8 else: (55 + 40 * gi).uint8),
+      b: (if bi == 0: 0'u8 else: (55 + 40 * bi).uint8),
+    )
+  else:
+    let v = (8 + 10 * (index.int - 232)).uint8
+    RgbColor(r: v, g: v, b: v)
+
+proc toRgb*(
+    c: ColorValue, defaultColor: RgbColor = RgbColor(r: 0, g: 0, b: 0)
+): RgbColor =
+  ## Convert a ColorValue to RgbColor.
+  ## Indexed/Indexed256 are converted using standard ANSI color tables.
+  ## Default returns the provided defaultColor.
+  case c.kind
+  of Rgb:
+    c.rgb
+  of Indexed:
+    ansiToRgb(c.indexed)
+  of Indexed256:
+    ansi256ToRgb(c.indexed256)
+  of Default:
+    defaultColor
 
 # String representation
 proc `$`*(rgb: RgbColor): string {.inline.} =
