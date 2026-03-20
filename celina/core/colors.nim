@@ -68,6 +68,11 @@ type
     Reversed
     Crossed
     Hidden
+    Undercurl
+    DoubleUnderline
+    DottedUnderline
+    DashedUnderline
+    Overline
 
   Style* = object ## Complete styling information for a cell
     fg*: ColorValue = ColorValue(kind: Default) # Foreground color
@@ -443,6 +448,11 @@ proc toAnsiCode*(modifier: StyleModifier): string =
   of Reversed: "7"
   of Hidden: "8"
   of Crossed: "9"
+  of Undercurl: "4:3"
+  of DoubleUnderline: "4:2"
+  of DottedUnderline: "4:4"
+  of DashedUnderline: "4:5"
+  of Overline: "53"
 
 proc toAnsiSequence*(style: Style): string =
   ## Convert Style to complete ANSI escape sequence

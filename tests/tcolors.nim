@@ -212,6 +212,11 @@ suite "Colors Module Tests":
       check StyleModifier.Reversed.ord == 6
       check StyleModifier.Crossed.ord == 7
       check StyleModifier.Hidden.ord == 8
+      check StyleModifier.Undercurl.ord == 9
+      check StyleModifier.DoubleUnderline.ord == 10
+      check StyleModifier.DottedUnderline.ord == 11
+      check StyleModifier.DashedUnderline.ord == 12
+      check StyleModifier.Overline.ord == 13
 
   suite "Style Tests":
     test "Style creation - default":
@@ -499,6 +504,11 @@ suite "Colors Module Tests":
       check Reversed.toAnsiCode() == "7"
       check Hidden.toAnsiCode() == "8"
       check Crossed.toAnsiCode() == "9"
+      check Undercurl.toAnsiCode() == "4:3"
+      check DoubleUnderline.toAnsiCode() == "4:2"
+      check DottedUnderline.toAnsiCode() == "4:4"
+      check DashedUnderline.toAnsiCode() == "4:5"
+      check Overline.toAnsiCode() == "53"
 
     test "Style toAnsiSequence() - default style":
       let s = defaultStyle()
