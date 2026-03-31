@@ -8,8 +8,8 @@ import std/[options, monotimes, times, strformat]
 import async_backend, async_terminal, async_events, async_windows, async_renderer
 import
   ../core/[
-    geometry, buffer, events, fps, config, tick_common, cursor, terminal_common, errors,
-    windows,
+    geometry, buffer, events, fps, config, tick_common, cursor, terminal,
+    terminal_common, errors, windows,
   ]
 
 export config
@@ -421,6 +421,56 @@ proc runAsync*(app: AsyncApp) {.async.} =
 proc quit*(app: AsyncApp) =
   ## Signal the async application to quit gracefully
   app.shouldQuit = true
+
+proc restoreTerminal*(app: AsyncApp) =
+  ## Synchronously restore terminal state for use in crash handlers.
+  ##
+  ## This is a best-effort, non-async cleanup intended for use in situations
+  ## where the async event loop is unavailable (e.g., signal handlers, unhandled
+  ## exception hooks). It restores the terminal to a usable state by disabling
+  ## alternate screen, raw mode, mouse capture, and bracketed paste.
+  ##
+  ## Example:
+  ## ```nim
+  ## proc onCrash() {.noconv.} =
+  ##   app.restoreTerminal()
+  ##   quit(1)
+  ## setControlCHook(onCrash)
+  ## ```
+  try:
+    showCursor()
+  except CatchableError:
+    discard
+
+  try:
+    if app.config.focusEvents:
+      app.terminal.disableFocusEvents()
+  except CatchableError:
+    discard
+
+  try:
+    if app.config.bracketedPaste:
+      app.terminal.disableBracketedPaste()
+  except CatchableError:
+    discard
+
+  try:
+    if app.config.mouseCapture:
+      app.terminal.disableMouse()
+  except CatchableError:
+    discard
+
+  try:
+    if app.config.alternateScreen:
+      app.terminal.disableAlternateScreen()
+  except CatchableError:
+    discard
+
+  try:
+    if app.config.rawMode:
+      app.terminal.disableRawMode()
+  except CatchableError:
+    discard
 
 # Mouse control
 proc enableMouse*(app: AsyncApp) =

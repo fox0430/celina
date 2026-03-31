@@ -621,5 +621,36 @@ when hasAsyncSupport:
       # Resize events are handled separately via dispatchResize, not handleEvent
       # This is consistent with sync WindowManager behavior
       check app.handleWindowEvent(event) == false
+  suite "AsyncApp restoreTerminal":
+    test "restoreTerminal does not crash with default config":
+      let app = newAsyncApp()
+      app.restoreTerminal()
+
+    test "restoreTerminal does not crash with all features enabled":
+      let config = AppConfig(
+        alternateScreen: true,
+        mouseCapture: true,
+        rawMode: true,
+        bracketedPaste: true,
+        focusEvents: true,
+      )
+      let app = newAsyncApp(config)
+      app.restoreTerminal()
+
+    test "restoreTerminal does not crash with no features enabled":
+      let config = AppConfig(
+        alternateScreen: false,
+        mouseCapture: false,
+        rawMode: false,
+        bracketedPaste: false,
+        focusEvents: false,
+      )
+      let app = newAsyncApp(config)
+      app.restoreTerminal()
+
+    test "restoreTerminal can be called multiple times":
+      let app = newAsyncApp()
+      app.restoreTerminal()
+      app.restoreTerminal()
 else:
   echo "Skipping AsyncApp tests - no async backend available"
