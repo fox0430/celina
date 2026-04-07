@@ -4,7 +4,6 @@ import std/[unittest, strutils, unicode]
 
 import ../celina/async/async_backend
 import ../celina/async/async_buffer
-import ../celina/core/resources
 
 # AsyncDispatch compatibility
 when hasAsyncDispatch:
@@ -416,8 +415,6 @@ suite "AsyncBuffer Module Tests":
 
       check stats.area.width == 15
       check stats.area.height == 8
-      # Lock state removed from stats - test resource ID instead
-      check stats.resourceId != ResourceId(0)
 
   suite "Concurrent Access Simulation":
     test "Multiple async operations":
