@@ -56,15 +56,6 @@ proc newAsyncBuffer*(width, height: int): AsyncBuffer {.inline.} =
   ## Create a new async-safe buffer with specified dimensions
   newAsyncBuffer(rect(0, 0, width, height))
 
-proc newAsyncBufferNoRM*(area: Rect): AsyncBuffer =
-  ## Create a new async-safe buffer without resource manager registration
-  ## Used in async contexts to avoid GC safety issues
-  newAsyncBuffer(area)
-
-proc newAsyncBufferNoRM*(width, height: int): AsyncBuffer {.inline.} =
-  ## Create a new async-safe buffer with specified dimensions without resource manager
-  newAsyncBuffer(width, height)
-
 proc clone*(asyncBuffer: AsyncBuffer): AsyncBuffer =
   ## Create a deep copy of an async buffer
   result = AsyncBuffer()
