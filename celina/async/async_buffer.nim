@@ -3,11 +3,11 @@
 ## This module provides memory-safe Buffer types that can be used
 ## in async closures without violating Nim's memory safety requirements.
 
-import std/[locks, strformat, unicode]
+import std/[locks, unicode]
 
 import async_backend
 
-import ../core/[buffer, geometry, colors, resources]
+import ../core/[buffer, geometry, colors]
 
 export buffer, geometry, colors
 
@@ -35,7 +35,6 @@ type
   AsyncBuffer* = ref object ## Thread-safe reference to a Buffer for async operations
     buffer: Buffer
     lock: Lock # Proper lock instead of spinlock
-    resourceId: ResourceId
 
   AsyncBufferPool* = ref object ## Shared buffer pool for efficient memory management
     buffers: seq[AsyncBuffer]
@@ -53,19 +52,6 @@ proc newAsyncBuffer*(area: Rect): AsyncBuffer =
   result.buffer = newBuffer(area)
   initLock(result.lock)
 
-  # Register with resource manager
-  let rm = getGlobalResourceManager()
-  let asyncBuf = result # Capture specific reference
-  result.resourceId = rm.registerResource(
-    RsBuffer,
-    &"AsyncBuffer({area.width}x{area.height})",
-    proc() =
-      try:
-        deinitLock(asyncBuf.lock)
-      except:
-        discard,
-  )
-
 proc newAsyncBuffer*(width, height: int): AsyncBuffer {.inline.} =
   ## Create a new async-safe buffer with specified dimensions
   newAsyncBuffer(rect(0, 0, width, height))
@@ -73,14 +59,11 @@ proc newAsyncBuffer*(width, height: int): AsyncBuffer {.inline.} =
 proc newAsyncBufferNoRM*(area: Rect): AsyncBuffer =
   ## Create a new async-safe buffer without resource manager registration
   ## Used in async contexts to avoid GC safety issues
-  result = AsyncBuffer()
-  result.buffer = newBuffer(area)
-  initLock(result.lock)
-  result.resourceId = ResourceId(0) # No resource tracking
+  newAsyncBuffer(area)
 
 proc newAsyncBufferNoRM*(width, height: int): AsyncBuffer {.inline.} =
   ## Create a new async-safe buffer with specified dimensions without resource manager
-  newAsyncBufferNoRM(rect(0, 0, width, height))
+  newAsyncBuffer(width, height)
 
 proc clone*(asyncBuffer: AsyncBuffer): AsyncBuffer =
   ## Create a deep copy of an async buffer
@@ -89,32 +72,14 @@ proc clone*(asyncBuffer: AsyncBuffer): AsyncBuffer =
     result.buffer = asyncBuffer.buffer # Buffer is copied by value
   initLock(result.lock)
 
-  # Register the cloned buffer
-  let rm = getGlobalResourceManager()
-  let clonedBuf = result # Capture specific reference
-  result.resourceId = rm.registerResource(
-    RsBuffer,
-    &"AsyncBuffer-Clone({result.buffer.area.width}x{result.buffer.area.height})",
-    proc() =
-      try:
-        deinitLock(clonedBuf.lock)
-      except:
-        discard,
-  )
-
 # Thread-Safe Access Methods
 
 template withBuffer*(asyncBuffer: AsyncBuffer, operation: untyped): untyped =
   ## Thread-safe template for accessing the internal buffer
-  ## Uses proper locks instead of spinlock for better performance
   withLock(asyncBuffer.lock):
     # Allow access to 'buffer' variable within the template
     template buffer(): untyped =
       asyncBuffer.buffer
-
-    # Update resource access time
-    let rm = getGlobalResourceManager()
-    rm.touchResource(asyncBuffer.resourceId)
 
     operation
 
@@ -395,19 +360,13 @@ proc `$`*(asyncBuffer: AsyncBuffer): string =
 proc destroyAsync*(asyncBuffer: AsyncBuffer) =
   ## Properly destroy an async buffer and clean up resources
   try:
-    let rm = getGlobalResourceManager()
-    rm.unregisterResource(asyncBuffer.resourceId)
-  except:
-    discard # Skip resource cleanup if manager not available
-
-  try:
     deinitLock(asyncBuffer.lock)
   except:
     discard # Best effort cleanup
 
-proc stats*(asyncBuffer: AsyncBuffer): tuple[area: Rect, resourceId: ResourceId] =
+proc stats*(asyncBuffer: AsyncBuffer): tuple[area: Rect] =
   ## Get buffer statistics
-  (area: asyncBuffer.getArea(), resourceId: asyncBuffer.resourceId)
+  (area: asyncBuffer.getArea())
 
 # Resource Management Integration
 
