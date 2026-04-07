@@ -442,13 +442,13 @@ suite "AsyncBuffer Module Tests":
 
   suite "Dirty Region Tracking":
     test "New async buffer has no dirty region":
-      let asyncBuf = newAsyncBufferNoRM(80, 24)
+      let asyncBuf = newAsyncBuffer(80, 24)
       check(not asyncBuf.isDirty())
       check(asyncBuf.getDirtyRegionSize() == 0)
       asyncBuf.destroyAsync()
 
     test "setString marks dirty region":
-      let asyncBuf = newAsyncBufferNoRM(80, 24)
+      let asyncBuf = newAsyncBuffer(80, 24)
       asyncBuf.setString(10, 5, "Hello")
 
       check(asyncBuf.isDirty())
@@ -456,7 +456,7 @@ suite "AsyncBuffer Module Tests":
       asyncBuf.destroyAsync()
 
     test "clearDirty resets region":
-      let asyncBuf = newAsyncBufferNoRM(80, 24)
+      let asyncBuf = newAsyncBuffer(80, 24)
       asyncBuf.setString(10, 5, "Test")
       check(asyncBuf.isDirty())
 
@@ -466,7 +466,7 @@ suite "AsyncBuffer Module Tests":
       asyncBuf.destroyAsync()
 
     test "clearDirtyAsync resets region":
-      let asyncBuf = newAsyncBufferNoRM(80, 24)
+      let asyncBuf = newAsyncBuffer(80, 24)
       waitFor asyncBuf.setStringAsync(10, 5, "Test")
       check(asyncBuf.isDirty())
 
@@ -476,7 +476,7 @@ suite "AsyncBuffer Module Tests":
       asyncBuf.destroyAsync()
 
     test "fillAsync marks rectangular dirty region":
-      let asyncBuf = newAsyncBufferNoRM(80, 24)
+      let asyncBuf = newAsyncBuffer(80, 24)
       let fillArea = rect(10, 5, 20, 10)
       waitFor asyncBuf.fillAsync(fillArea, cell("#"))
 
@@ -486,7 +486,7 @@ suite "AsyncBuffer Module Tests":
       asyncBuf.destroyAsync()
 
     test "toBuffer preserves dirty state":
-      let asyncBuf = newAsyncBufferNoRM(80, 24)
+      let asyncBuf = newAsyncBuffer(80, 24)
       asyncBuf.setString(10, 5, "Test")
       check(asyncBuf.isDirty())
 
@@ -495,8 +495,8 @@ suite "AsyncBuffer Module Tests":
       asyncBuf.destroyAsync()
 
     test "diffAsync benefits from dirty region optimization":
-      let oldBuf = newAsyncBufferNoRM(300, 100)
-      let newBuf = newAsyncBufferNoRM(300, 100)
+      let oldBuf = newAsyncBuffer(300, 100)
+      let newBuf = newAsyncBuffer(300, 100)
 
       # Fill both with same initial content
       for y in 0 ..< 100:
@@ -617,7 +617,7 @@ suite "AsyncBuffer Module Tests":
       check asyncBuffer.getCell(3, 0).symbol == "" # Continuation
 
     test "setRunes marks dirty region":
-      let asyncBuf = newAsyncBufferNoRM(80, 24)
+      let asyncBuf = newAsyncBuffer(80, 24)
       let runes = "Test".toRunes()
 
       asyncBuf.setRunes(10, 5, runes)

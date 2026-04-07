@@ -184,7 +184,7 @@ when hasAsyncSupport:
       check declared(AsyncApp)
       check declared(newAsyncApp)
       check declared(AsyncBuffer)
-      check declared(newAsyncBufferNoRM)
+      check declared(newAsyncBuffer)
       check declared(AsyncTerminal)
       check declared(newAsyncTerminal)
 

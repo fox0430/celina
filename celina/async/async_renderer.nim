@@ -24,7 +24,7 @@ proc newAsyncRenderer*(terminal: AsyncTerminal): AsyncRenderer =
   let termSize = terminal.getSize()
   result = AsyncRenderer(
     terminal: terminal,
-    asyncBuffer: newAsyncBufferNoRM(termSize.width, termSize.height),
+    asyncBuffer: newAsyncBuffer(termSize.width, termSize.height),
     cursorManager: newCursorManager(),
     lastRenderTime: 0.0,
   )
