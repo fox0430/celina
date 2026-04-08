@@ -140,14 +140,13 @@ proc getApplicationTimeout*(app: App): int =
 
 # Lifecycle management
 proc setup(app: App) =
-  ## Internal setup procedure to initialize terminal state
-  app.terminal.setup()
+  if app.config.alternateScreen:
+    app.terminal.enableAlternateScreen()
 
   if app.config.rawMode:
     app.terminal.enableRawMode()
 
-  if app.config.alternateScreen:
-    app.terminal.enableAlternateScreen()
+  app.terminal.updateSize()
 
   if app.config.mouseCapture:
     app.terminal.enableMouse()

@@ -189,14 +189,13 @@ proc getApplicationTimeout*(app: AsyncApp): int =
 # AsyncApp Lifecycle Management
 
 proc setupAsync(app: AsyncApp) {.async.} =
-  ## Internal async setup procedure to initialize terminal state
-  await app.terminal.setupAsync()
+  if app.config.alternateScreen:
+    app.terminal.enableAlternateScreen()
 
   if app.config.rawMode:
     app.terminal.enableRawMode()
 
-  if app.config.alternateScreen:
-    app.terminal.enableAlternateScreen()
+  app.terminal.updateSize()
 
   if app.config.mouseCapture:
     app.terminal.enableMouse()
