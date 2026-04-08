@@ -44,20 +44,22 @@ type
     trError ## An error occurred
 
   ResizeState* = object ## State for tracking resize events across ticks
-    lastCounter*: int
+    lastWidth*: int
+    lastHeight*: int
 
-proc initResizeState*(initialCounter: int): ResizeState =
-  ## Initialize resize state with the current counter value
-  ResizeState(lastCounter: initialCounter)
+proc initResizeState*(width, height: int): ResizeState =
+  ## Initialize resize state with the current terminal size
+  ResizeState(lastWidth: width, lastHeight: height)
 
-proc checkResize*(state: var ResizeState, currentCounter: int): bool =
-  ## Check if a resize occurred since last check.
+proc checkResize*(state: var ResizeState, currentWidth, currentHeight: int): bool =
+  ## Check if a resize occurred since last check by comparing terminal size.
   ## Updates the state and returns true if resize detected.
   ##
-  ## This approach supports multiple App instances without race conditions
-  ## by using counter-based detection rather than signal flags.
-  if currentCounter != state.lastCounter:
-    state.lastCounter = currentCounter
+  ## This approach avoids signal handlers entirely by polling the terminal
+  ## size each tick. The ioctl cost is negligible at typical frame rates.
+  if currentWidth != state.lastWidth or currentHeight != state.lastHeight:
+    state.lastWidth = currentWidth
+    state.lastHeight = currentHeight
     return true
   return false
 

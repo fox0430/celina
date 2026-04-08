@@ -126,12 +126,6 @@ suite "Async Event Stream Resize Detection":
     check stream != nil
     check stream.running == false
 
-    # Verify resize counter API exists
-    let initialCounter = async_events.getResizeCounter()
-    async_events.incrementResizeCounter()
-    let afterCounter = async_events.getResizeCounter()
-    check afterCounter == initialCounter + 1
-
 suite "Mouse Event Parsing (Async)":
   test "parseMouseEventX10 returns unknown (placeholder)":
     let event = waitFor parseMouseEventX10()
@@ -201,20 +195,6 @@ suite "Async Event Stream":
       check not stream.running
     except CatchableError:
       check false
-
-suite "Global State Management":
-  test "resizeCounter management":
-    # Test the global resize counter
-    let initialCounter = async_events.getResizeCounter()
-
-    # Simulate resize signal
-    async_events.incrementResizeCounter()
-    let afterIncrement = async_events.getResizeCounter()
-
-    check afterIncrement == initialCounter + 1
-
-    # Counter should persist (not auto-reset)
-    check async_events.getResizeCounter() == afterIncrement
 
 suite "Error Handling":
   test "AsyncEventError with custom message":
@@ -298,17 +278,6 @@ suite "Async I/O Integration":
     except CatchableError:
       # Runtime errors are acceptable in test environment
       check true
-
-suite "Signal Handling":
-  test "SIGWINCH constant is defined":
-    # Test that SIGWINCH is properly defined
-    # This is mainly a compilation test
-    check true
-
-  test "sigwinchHandler function exists":
-    # This is mainly a compilation test to ensure the handler is defined
-    # We can't easily test the actual signal handling in a unit test
-    check true
 
 suite "Performance and Resource Management":
   test "Multiple async operations don't block":
