@@ -12,22 +12,6 @@ export mouse_logic.MouseButton, mouse_logic.MouseEventKind, mouse_logic.KeyModif
 export key_logic.KeyCode, key_logic.KeyEvent
 export utf8_utils
 
-# Define SIGWINCH if not available
-when not declared(SIGWINCH):
-  const SIGWINCH = 28
-
-# Global counter for resize detection
-# Note: We use a counter instead of a bool to support multiple App instances.
-# Each App tracks the last counter value it saw, allowing all Apps to receive
-# resize events independently without race conditions.
-var resizeCounter {.global.}: int = 0
-
-# Signal handler for SIGWINCH
-proc sigwinchHandler(sig: cint) {.noconv.} =
-  # Increment counter on each resize signal
-  # This is safe in signal handlers as it's a simple increment
-  resizeCounter.inc()
-
 type
   EventKind* = enum
     Key
@@ -958,25 +942,6 @@ proc waitForAnyKey*(): bool =
   ## Wait for any key press, return true if not quit
   let event = waitForKey()
   return event.kind != Quit
-
-# Initialize signal handling
-proc initSignalHandling*() =
-  ## Initialize signal handling for terminal resize
-  signal(SIGWINCH, sigwinchHandler)
-
-# Get current resize counter value
-proc getResizeCounter*(): int =
-  ## Get the current resize counter value
-  ##
-  ## Apps should track the last value they saw and compare with this
-  ## to detect resize events without race conditions.
-  return resizeCounter
-
-# Test helper: Increment resize counter (for testing only)
-proc incrementResizeCounter*() =
-  ## Increment the resize counter (for testing purposes)
-  ## This simulates a SIGWINCH signal being received
-  resizeCounter.inc()
 
 # Event polling with timeout
 proc pollEvents*(timeoutMs: int): bool =

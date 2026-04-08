@@ -46,6 +46,7 @@ proc `$`*(app: App): string =
 proc newApp*(config: AppConfig = DefaultAppConfig): App =
   ## Create a new CLI application with the specified configuration
   let terminal = newTerminal()
+  let termSize = terminal.getSize()
   result = App(
     terminal: terminal,
     renderer: newRenderer(terminal),
@@ -56,7 +57,7 @@ proc newApp*(config: AppConfig = DefaultAppConfig): App =
     renderHandler: nil,
     windowMode: config.windowMode,
     config: config,
-    resizeState: initResizeState(events.getResizeCounter()),
+    resizeState: initResizeState(termSize.width, termSize.height),
     forceNextRender: false,
     running: false,
     frameCounter: 0,
@@ -235,8 +236,9 @@ proc tick(app: App): bool =
   ## Returns:
   ##   true to continue running, false to exit the application loop
   try:
-    # Check for resize event using shared counter-based detection
-    if app.resizeState.checkResize(events.getResizeCounter()):
+    # Check for resize event by polling terminal size
+    let currentSize = getTerminalSizeOrDefault()
+    if app.resizeState.checkResize(currentSize.width, currentSize.height):
       let resizeEvent = Event(kind: Resize)
       app.handleResize()
 
@@ -317,9 +319,6 @@ proc run*(app: App) =
   try:
     app.setup()
     app.running = true
-
-    # Initialize signal handling for resize detection
-    events.initSignalHandling()
 
     # Main application loop
     while app.tick():

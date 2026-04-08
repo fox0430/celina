@@ -3,10 +3,14 @@
 ## This module provides asynchronous event handling for keyboard input,
 ## mouse events, and other terminal events using either Chronos or std/asyncdispatch.
 
-import std/[posix, options, strutils]
+import std/[options, strutils]
 
 import async_backend, async_io
-import ../core/[events, mouse_logic, utf8_utils, key_logic, escape_sequence_logic]
+import
+  ../core/[
+    events, mouse_logic, utf8_utils, key_logic, escape_sequence_logic, terminal,
+    geometry,
+  ]
 
 type
   AsyncEventError* = object of CatchableError
@@ -14,28 +18,14 @@ type
   AsyncEventStream* = ref object
     running*: bool
     eventCallback*: proc(event: Event): Future[bool] {.async.}
-    lastResizeCounter: int ## Track last seen resize counter
-
-const SIGWINCH = 28
-
-# Global counter for resize detection (async version)
-# Note: We use a counter instead of a bool to support multiple AsyncApp instances.
-# Each AsyncApp tracks the last counter value it saw, allowing all AsyncApps to
-# receive resize events independently without race conditions.
-var resizeCounter {.global.}: int = 0
-
-# Signal handler for SIGWINCH
-proc sigwinchHandler(sig: cint) {.noconv.} =
-  # Increment counter on each resize signal
-  # This is safe in signal handlers as it's a simple increment
-  resizeCounter.inc()
+    lastWidth: int ## Track last seen terminal width
+    lastHeight: int ## Track last seen terminal height
 
 # Initialize async event system
 proc initAsyncEventSystem*() =
   ## Initialize async event handling system
   try:
     initAsyncIO()
-    signal(SIGWINCH, sigwinchHandler)
   except CatchableError as e:
     raise
       newException(AsyncEventError, "Failed to initialize async event system: " & e.msg)
@@ -423,20 +413,6 @@ proc pollKeyAsync*(): Future[Option[Event]] {.async.} =
   except CatchableError:
     return none(Event)
 
-# Get current resize counter value
-proc getResizeCounter*(): int =
-  ## Get the current resize counter value
-  ##
-  ## AsyncApps should track the last value they saw and compare with this
-  ## to detect resize events without race conditions.
-  return resizeCounter
-
-# Test helper: Increment resize counter (for testing only)
-proc incrementResizeCounter*() =
-  ## Increment the resize counter (for testing purposes)
-  ## This simulates a SIGWINCH signal being received
-  resizeCounter.inc()
-
 # Event polling with timeout
 proc pollEventsAsync*(timeoutMs: int): Future[bool] {.async.} =
   ## Poll for available events asynchronously with a timeout
@@ -476,8 +452,12 @@ proc newAsyncEventStream*(
     callback: proc(event: Event): Future[bool] {.async.}
 ): AsyncEventStream =
   ## Create a new async event stream with callback
+  let termSize = getTerminalSizeOrDefault()
   return AsyncEventStream(
-    running: false, eventCallback: callback, lastResizeCounter: getResizeCounter()
+    running: false,
+    eventCallback: callback,
+    lastWidth: termSize.width,
+    lastHeight: termSize.height,
   )
 
 proc startAsync*(stream: AsyncEventStream) {.async.} =
@@ -489,10 +469,11 @@ proc startAsync*(stream: AsyncEventStream) {.async.} =
       # Check for events from multiple sources
       var event: Option[Event]
 
-      # Check resize first (highest priority)
-      let currentCounter = getResizeCounter()
-      if currentCounter != stream.lastResizeCounter:
-        stream.lastResizeCounter = currentCounter
+      # Check resize first (highest priority) by polling terminal size
+      let currentSize = getTerminalSizeOrDefault()
+      if currentSize.width != stream.lastWidth or currentSize.height != stream.lastHeight:
+        stream.lastWidth = currentSize.width
+        stream.lastHeight = currentSize.height
         event = some(Event(kind: Resize))
       else:
         # Check for keyboard events

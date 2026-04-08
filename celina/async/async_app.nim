@@ -65,6 +65,7 @@ proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
   ## var app = newAsyncApp(config)
   ## ```
   let terminal = newAsyncTerminal()
+  let termSize = terminal.getSize()
   result = AsyncApp(
     terminal: terminal,
     renderer: newAsyncRenderer(terminal),
@@ -75,7 +76,7 @@ proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
     renderHandler: nil,
     windowMode: config.windowMode,
     config: config,
-    resizeState: initResizeState(async_events.getResizeCounter()),
+    resizeState: initResizeState(termSize.width, termSize.height),
     forceNextRender: false,
     running: false,
     frameCounter: 0,
@@ -286,8 +287,9 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
   ## Returns:
   ##   true to continue running, false to exit the application loop
   try:
-    # Check for resize event using shared counter-based detection
-    if app.resizeState.checkResize(async_events.getResizeCounter()):
+    # Check for resize event by polling terminal size
+    let currentSize = getTerminalSizeOrDefault()
+    if app.resizeState.checkResize(currentSize.width, currentSize.height):
       let resizeEvent = Event(kind: Resize)
       await app.handleResizeAsync()
 

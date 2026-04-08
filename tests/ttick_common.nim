@@ -20,25 +20,32 @@ suite "clampTimeout":
     check clampTimeout(-1) == 0
 
 suite "ResizeState":
-  test "initResizeState sets initial counter":
-    var state = initResizeState(42)
-    check state.lastCounter == 42
+  test "initResizeState sets initial size":
+    var state = initResizeState(80, 24)
+    check state.lastWidth == 80
+    check state.lastHeight == 24
 
-  test "checkResize returns true when counter changes":
-    var state = initResizeState(0)
-    check state.checkResize(1) == true
-    check state.lastCounter == 1
+  test "checkResize returns true when size changes":
+    var state = initResizeState(80, 24)
+    check state.checkResize(100, 24) == true
+    check state.lastWidth == 100
+    check state.lastHeight == 24
 
-  test "checkResize returns false when counter unchanged":
-    var state = initResizeState(5)
-    check state.checkResize(5) == false
+  test "checkResize returns true when height changes":
+    var state = initResizeState(80, 24)
+    check state.checkResize(80, 30) == true
+    check state.lastHeight == 30
+
+  test "checkResize returns false when size unchanged":
+    var state = initResizeState(80, 24)
+    check state.checkResize(80, 24) == false
 
   test "checkResize detects multiple resizes":
-    var state = initResizeState(0)
-    check state.checkResize(1) == true
-    check state.checkResize(1) == false
-    check state.checkResize(2) == true
-    check state.checkResize(2) == false
+    var state = initResizeState(80, 24)
+    check state.checkResize(100, 30) == true
+    check state.checkResize(100, 30) == false
+    check state.checkResize(120, 40) == true
+    check state.checkResize(120, 40) == false
 
 suite "calculatePollTimeout":
   test "no application timeout returns remainingFrameTime":
