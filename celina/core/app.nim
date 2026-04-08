@@ -324,18 +324,6 @@ proc run*(app: App) =
     # Main application loop
     while app.tick():
       discard
-  except TerminalError as e:
-    try:
-      app.cleanup()
-    except:
-      discard
-    raise e
-  except CatchableError as e:
-    try:
-      app.cleanup()
-    except:
-      discard
-    raise e
   finally:
     app.running = false
     try:
