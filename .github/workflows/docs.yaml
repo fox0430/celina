@@ -41,7 +41,7 @@ jobs:
         nim doc --project --index:on --outdir:./htmldocs/widgets ./celina/widgets/tabs.nim
         nim doc --project --index:on --outdir:./htmldocs/widgets ./celina/widgets/text.nim
 
-    - uses: actions/upload-pages-artifact@v4
+    - uses: actions/upload-pages-artifact@v5
       with:
         path: ./htmldocs
 
