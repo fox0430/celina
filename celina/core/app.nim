@@ -394,6 +394,56 @@ proc quit*(app: App) =
   ## Signal the application to quit gracefully
   app.shouldQuit = true
 
+proc restoreTerminal*(app: App) =
+  ## Best-effort terminal state restoration for use in crash handlers.
+  ##
+  ## Intended for situations where the normal cleanup path is unavailable
+  ## (e.g., signal handlers, unhandled exception hooks). It restores the
+  ## terminal to a usable state by disabling alternate screen, raw mode,
+  ## mouse capture, bracketed paste, and focus events.
+  ##
+  ## Example:
+  ## ```nim
+  ## proc onCrash() {.noconv.} =
+  ##   app.restoreTerminal()
+  ##   quit(1)
+  ## setControlCHook(onCrash)
+  ## ```
+  try:
+    terminal.showCursor()
+  except CatchableError:
+    discard
+
+  try:
+    if app.config.focusEvents:
+      app.terminal.disableFocusEvents()
+  except CatchableError:
+    discard
+
+  try:
+    if app.config.bracketedPaste:
+      app.terminal.disableBracketedPaste()
+  except CatchableError:
+    discard
+
+  try:
+    if app.config.mouseCapture:
+      app.terminal.disableMouse()
+  except CatchableError:
+    discard
+
+  try:
+    if app.config.alternateScreen:
+      app.terminal.disableAlternateScreen()
+  except CatchableError:
+    discard
+
+  try:
+    if app.config.rawMode:
+      app.terminal.disableRawMode()
+  except CatchableError:
+    discard
+
 # Mouse control
 proc enableMouse*(app: App) =
   ## Enable mouse reporting at runtime

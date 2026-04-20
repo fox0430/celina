@@ -694,3 +694,35 @@ suite "App String Representation":
     let app = newApp(config)
     let s = $app
     check "windows: 0" in s
+
+suite "App restoreTerminal":
+  test "restoreTerminal does not crash with default config":
+    let app = newApp()
+    app.restoreTerminal()
+
+  test "restoreTerminal does not crash with all features enabled":
+    let config = AppConfig(
+      alternateScreen: true,
+      mouseCapture: true,
+      rawMode: true,
+      bracketedPaste: true,
+      focusEvents: true,
+    )
+    let app = newApp(config)
+    app.restoreTerminal()
+
+  test "restoreTerminal does not crash with no features enabled":
+    let config = AppConfig(
+      alternateScreen: false,
+      mouseCapture: false,
+      rawMode: false,
+      bracketedPaste: false,
+      focusEvents: false,
+    )
+    let app = newApp(config)
+    app.restoreTerminal()
+
+  test "restoreTerminal can be called multiple times":
+    let app = newApp()
+    app.restoreTerminal()
+    app.restoreTerminal()
