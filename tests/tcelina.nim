@@ -213,9 +213,21 @@ suite "Integration Tests":
       proc testRenderHandler(buffer: var Buffer) =
         discard
 
-      # Verify the handlers have correct types (compilation check)
-      let _ = testEventHandler
-      let _ = testRenderHandler
+      proc testEventHandlerWithApp(event: Event, app: App): bool =
+        false
+
+      proc testRenderHandlerWithApp(buffer: var Buffer, app: App) =
+        discard
+
+      # Verify overload resolution selects the correct overload for each
+      # handler shape. `compiles` is a compile-time check — quickRun itself
+      # cannot be invoked in tests because it drives a real terminal.
+      check compiles(quickRun(testEventHandler, testRenderHandler))
+      check compiles(quickRun(testEventHandlerWithApp, testRenderHandlerWithApp))
+
+      # Mixing basic and App-aware handlers must not match any overload
+      check not compiles(quickRun(testEventHandler, testRenderHandlerWithApp))
+      check not compiles(quickRun(testEventHandlerWithApp, testRenderHandler))
     else:
       fail("quickRun should be available")
 
