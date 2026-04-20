@@ -25,6 +25,7 @@ type
     eventHandler: proc(event: Event): Future[bool] {.async.}
     eventHandlerWithApp: proc(event: Event, app: AsyncApp): Future[bool] {.async.}
     renderHandler: proc(buffer: var Buffer)
+    renderHandlerWithApp: proc(buffer: var Buffer, app: AsyncApp)
     tickHandler: proc(): Future[bool] {.async.}
     tickHandlerWithApp: proc(app: AsyncApp): Future[bool] {.async.}
     windowMode: bool ## Whether to use window management
@@ -74,6 +75,7 @@ proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
     eventHandler: nil,
     eventHandlerWithApp: nil,
     renderHandler: nil,
+    renderHandlerWithApp: nil,
     windowMode: config.windowMode,
     config: config,
     resizeState: initResizeState(termSize.width, termSize.height),
@@ -141,12 +143,33 @@ proc onRenderAsync*(app: AsyncApp, handler: proc(buffer: var Buffer)) =
   ##
   ## This handler is called each frame to update the display buffer.
   ##
+  ## For access to the AsyncApp object (e.g., to query FPS, window state,
+  ## or terminal size during rendering), use the overload that accepts
+  ## `proc(buffer: var Buffer, app: AsyncApp)` instead.
+  ##
   ## Example:
   ## ```nim
   ## app.onRenderAsync proc(buffer: var Buffer) =
   ##   buffer.setString(10, 5, "Hello!", defaultStyle())
   ## ```
   app.renderHandler = handler
+  app.renderHandlerWithApp = nil
+
+proc onRenderAsync*(app: AsyncApp, handler: proc(buffer: var Buffer, app: AsyncApp)) =
+  ## Set the render handler with AsyncApp context for the application
+  ##
+  ## This overload provides access to the AsyncApp object, enabling the
+  ## render handler to query runtime state such as current FPS,
+  ## terminal size, or window manager information.
+  ##
+  ## Example:
+  ## ```nim
+  ## app.onRenderAsync proc(buffer: var Buffer, app: AsyncApp) =
+  ##   let fps = app.getCurrentFps()
+  ##   buffer.setString(0, 0, &"FPS: {fps:.1f}", defaultStyle())
+  ## ```
+  app.renderHandlerWithApp = handler
+  app.renderHandler = nil
 
 proc onTickAsync*(app: AsyncApp, handler: proc(): Future[bool] {.async.}) =
   ## Set the async tick handler called each frame between event processing and rendering.
@@ -246,7 +269,11 @@ proc renderAsync(app: AsyncApp) {.async.} =
   app.renderer.clear()
 
   # Call user render handler first (for background content)
-  if app.renderHandler != nil:
+  if app.renderHandlerWithApp != nil:
+    {.cast(gcsafe).}:
+      {.cast(raises: []).}:
+        app.renderHandlerWithApp(app.renderer.getBuffer(), app)
+  elif app.renderHandler != nil:
     {.cast(gcsafe).}:
       {.cast(raises: []).}:
         app.renderHandler(app.renderer.getBuffer())

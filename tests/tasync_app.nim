@@ -91,6 +91,38 @@ when hasAsyncSupport:
       # Handler is set but not called until run
       check handlerCalled == false
 
+    test "onRenderAsync with AsyncApp context sets render handler":
+      let app = newAsyncApp()
+      var handlerCalled = false
+      var receivedApp: AsyncApp
+
+      app.onRenderAsync proc(buffer: var Buffer, app: AsyncApp) =
+        handlerCalled = true
+        receivedApp = app
+
+      # Handler is set but not called until run
+      check handlerCalled == false
+
+    test "onRenderAsync overloads are mutually exclusive":
+      let app = newAsyncApp()
+      var simpleCalled = false
+      var appCalled = false
+
+      # Set simple handler first
+      app.onRenderAsync proc(buffer: var Buffer) =
+        simpleCalled = true
+
+      # Setting App-context handler should clear simple handler
+      app.onRenderAsync proc(buffer: var Buffer, app: AsyncApp) =
+        appCalled = true
+
+      # Now set simple handler again, should clear App-context handler
+      app.onRenderAsync proc(buffer: var Buffer) =
+        simpleCalled = true
+
+      check simpleCalled == false
+      check appCalled == false
+
     test "onTickAsync sets tick handler":
       let app = newAsyncApp()
       var handlerCalled = false
