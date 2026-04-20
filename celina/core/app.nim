@@ -32,7 +32,8 @@ type App* = ref object ## Main application context for CLI applications
   frameCounter: int ## Total frame count
   lastFrameTime: MonoTime ## Timestamp of last frame
   applicationTimeout: int ## Application timeout in ms (0 = disabled)
-  timeoutHandler: proc(app: App): bool
+  timeoutHandler: proc(): bool
+  timeoutHandlerWithApp: proc(app: App): bool
   lastEventTime: MonoTime ## Timestamp of last received event
 
 proc `$`*(app: App): string =
@@ -57,6 +58,8 @@ proc newApp*(config: AppConfig = DefaultAppConfig): App =
     eventHandlerWithApp: nil,
     renderHandler: nil,
     renderHandlerWithApp: nil,
+    timeoutHandler: nil,
+    timeoutHandlerWithApp: nil,
     windowMode: config.windowMode,
     config: config,
     resizeState: initResizeState(termSize.width, termSize.height),
@@ -140,13 +143,26 @@ proc onTick*(app: App, handler: proc(app: App): bool) =
   app.tickHandler = nil
 
 # Application timeout
-proc onTimeout*(app: App, handler: proc(app: App): bool) =
+proc onTimeout*(app: App, handler: proc(): bool) =
   ## Set the timeout handler for the application.
   ##
   ## The handler is called when no input events are received within
   ## the application timeout period. Return true to continue running,
   ## false to quit the application.
+  ##
+  ## For access to the App object, use the overload that accepts
+  ## `proc(app: App): bool` instead.
   app.timeoutHandler = handler
+  app.timeoutHandlerWithApp = nil
+
+proc onTimeout*(app: App, handler: proc(app: App): bool) =
+  ## Set the timeout handler with App context for the application.
+  ##
+  ## The handler is called when no input events are received within
+  ## the application timeout period. Return true to continue running,
+  ## false to quit the application.
+  app.timeoutHandlerWithApp = handler
+  app.timeoutHandler = nil
 
 proc setApplicationTimeout*(app: App, timeoutMs: int) =
   ## Set the application timeout in milliseconds.
@@ -236,14 +252,34 @@ proc render(app: App) =
   else:
     app.renderer.render()
 
-proc dispatchEvent(app: App, event: Event): bool =
-  ## Helper to dispatch event to the appropriate handler
+proc dispatchEvent*(app: App, event: Event): bool =
+  ## Invoke the configured event handler for the given event.
+  ##
+  ## Prefers the App-context handler when both are set. Returns `true` when
+  ## no handler is configured. Primarily used internally by `tick`, but
+  ## exported so tests and callers can trigger the handler directly.
   if app.eventHandlerWithApp != nil:
     app.eventHandlerWithApp(event, app)
   elif app.eventHandler != nil:
     app.eventHandler(event)
   else:
     true
+
+proc dispatchTimeout*(app: App): bool =
+  ## Invoke the configured timeout handler.
+  ##
+  ## Prefers the App-context handler when both are set. Returns `true` when
+  ## no handler is configured. Primarily used internally by `tick`, but
+  ## exported so tests and callers can trigger the handler directly.
+  if app.timeoutHandlerWithApp != nil:
+    app.timeoutHandlerWithApp(app)
+  elif app.timeoutHandler != nil:
+    app.timeoutHandler()
+  else:
+    true
+
+proc hasTimeoutHandler(app: App): bool {.inline.} =
+  app.timeoutHandlerWithApp != nil or app.timeoutHandler != nil
 
 proc tick(app: App): bool =
   ## Process one application tick (events + render).
@@ -274,7 +310,7 @@ proc tick(app: App): bool =
     let remainingTime = app.fpsMonitor.getRemainingFrameTime()
 
     # Calculate poll timeout, integrating application timeout if set
-    let hasTimeout = app.applicationTimeout > 0 and app.timeoutHandler != nil
+    let hasTimeout = app.applicationTimeout > 0 and app.hasTimeoutHandler()
     let elapsed =
       if hasTimeout:
         (getMonoTime() - app.lastEventTime).inMilliseconds.int
@@ -294,7 +330,7 @@ proc tick(app: App): bool =
       if isTimeoutReached(app.applicationTimeout, elapsedAfterPoll):
         # Reset timer to prevent busy-loop and enable periodic callbacks
         app.lastEventTime = getMonoTime()
-        if not app.timeoutHandler(app):
+        if not app.dispatchTimeout():
           return false
 
     if eventsAvailable:

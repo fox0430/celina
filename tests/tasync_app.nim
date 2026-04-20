@@ -550,6 +550,51 @@ when hasAsyncSupport:
       # Handler is set but not called until run
       check handlerCalled == false
 
+    test "onTimeoutAsync with simple handler sets timeout handler":
+      let app = newAsyncApp()
+      var handlerCalled = false
+
+      app.onTimeoutAsync proc(): Future[bool] {.async.} =
+        handlerCalled = true
+        return true
+
+      # Handler is set but not called until run
+      check handlerCalled == false
+
+    test "onTimeoutAsync overloads are mutually exclusive":
+      let app = newAsyncApp()
+      var simpleCalled = false
+      var appCalled = false
+
+      # Set simple handler first
+      app.onTimeoutAsync proc(): Future[bool] {.async.} =
+        simpleCalled = true
+        return true
+
+      discard waitFor app.dispatchTimeoutAsync()
+      check simpleCalled == true
+      check appCalled == false
+
+      # Setting App-context handler should clear simple handler
+      simpleCalled = false
+      app.onTimeoutAsync proc(app: AsyncApp): Future[bool] {.async.} =
+        appCalled = true
+        return true
+
+      discard waitFor app.dispatchTimeoutAsync()
+      check simpleCalled == false
+      check appCalled == true
+
+      # Setting simple handler again should clear App-context handler
+      appCalled = false
+      app.onTimeoutAsync proc(): Future[bool] {.async.} =
+        simpleCalled = true
+        return true
+
+      discard waitFor app.dispatchTimeoutAsync()
+      check simpleCalled == true
+      check appCalled == false
+
     test "onTimeoutAsync replaces previous handler":
       let app = newAsyncApp()
       var firstCalled = false
