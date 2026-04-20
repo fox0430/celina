@@ -36,7 +36,8 @@ type
     frameCounter: int ## Total frame count
     lastFrameTime: MonoTime ## Timestamp of last frame
     applicationTimeout: int ## Application timeout in ms (0 = disabled)
-    timeoutHandler: proc(app: AsyncApp): Future[bool] {.async.}
+    timeoutHandler: proc(): Future[bool] {.async.}
+    timeoutHandlerWithApp: proc(app: AsyncApp): Future[bool] {.async.}
     lastEventTime: MonoTime ## Timestamp of last received event
 
   AsyncAppError* = object of CatchableError
@@ -76,6 +77,8 @@ proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
     eventHandlerWithApp: nil,
     renderHandler: nil,
     renderHandlerWithApp: nil,
+    timeoutHandler: nil,
+    timeoutHandlerWithApp: nil,
     windowMode: config.windowMode,
     config: config,
     resizeState: initResizeState(termSize.width, termSize.height),
@@ -186,15 +189,28 @@ proc onTickAsync*(app: AsyncApp, handler: proc(app: AsyncApp): Future[bool] {.as
   app.tickHandler = nil
 
 # Application timeout
-proc onTimeoutAsync*(
-    app: AsyncApp, handler: proc(app: AsyncApp): Future[bool] {.async.}
-) =
+proc onTimeoutAsync*(app: AsyncApp, handler: proc(): Future[bool] {.async.}) =
   ## Set the async timeout handler for the application.
   ##
   ## The handler is called when no input events are received within
   ## the application timeout period. Return true to continue running,
   ## false to quit the application.
+  ##
+  ## For access to the AsyncApp object, use the overload that accepts
+  ## `proc(app: AsyncApp): Future[bool]` instead.
   app.timeoutHandler = handler
+  app.timeoutHandlerWithApp = nil
+
+proc onTimeoutAsync*(
+    app: AsyncApp, handler: proc(app: AsyncApp): Future[bool] {.async.}
+) =
+  ## Set the async timeout handler with AsyncApp context for the application.
+  ##
+  ## The handler is called when no input events are received within
+  ## the application timeout period. Return true to continue running,
+  ## false to quit the application.
+  app.timeoutHandlerWithApp = handler
+  app.timeoutHandler = nil
 
 proc setApplicationTimeout*(app: AsyncApp, timeoutMs: int) =
   ## Set the application timeout in milliseconds.
@@ -289,14 +305,34 @@ proc renderAsync(app: AsyncApp) {.async.} =
   else:
     await app.renderer.renderAsync()
 
-proc dispatchEventAsync(app: AsyncApp, event: Event): Future[bool] {.async.} =
-  ## Helper to dispatch event to the appropriate handler
+proc dispatchEventAsync*(app: AsyncApp, event: Event): Future[bool] {.async.} =
+  ## Invoke the configured async event handler for the given event.
+  ##
+  ## Prefers the AsyncApp-context handler when both are set. Returns `true`
+  ## when no handler is configured. Primarily used internally by `tickAsync`,
+  ## but exported so tests and callers can trigger the handler directly.
   if app.eventHandlerWithApp != nil:
     return await app.eventHandlerWithApp(event, app)
   elif app.eventHandler != nil:
     return await app.eventHandler(event)
   else:
     return true
+
+proc dispatchTimeoutAsync*(app: AsyncApp): Future[bool] {.async.} =
+  ## Invoke the configured async timeout handler.
+  ##
+  ## Prefers the AsyncApp-context handler when both are set. Returns `true`
+  ## when no handler is configured. Primarily used internally by `tickAsync`,
+  ## but exported so tests and callers can trigger the handler directly.
+  if app.timeoutHandlerWithApp != nil:
+    return await app.timeoutHandlerWithApp(app)
+  elif app.timeoutHandler != nil:
+    return await app.timeoutHandler()
+  else:
+    return true
+
+proc hasTimeoutHandler(app: AsyncApp): bool {.inline.} =
+  app.timeoutHandlerWithApp != nil or app.timeoutHandler != nil
 
 proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
   ## Process one async application tick (events + render).
@@ -327,7 +363,7 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
     let remainingTime = app.fpsMonitor.getRemainingFrameTime()
 
     # Calculate poll timeout, integrating application timeout if set
-    let hasTimeout = app.applicationTimeout > 0 and app.timeoutHandler != nil
+    let hasTimeout = app.applicationTimeout > 0 and app.hasTimeoutHandler()
     let elapsed =
       if hasTimeout:
         (getMonoTime() - app.lastEventTime).inMilliseconds.int
@@ -348,7 +384,7 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
       if isTimeoutReached(app.applicationTimeout, elapsedAfterPoll):
         # Reset timer to prevent busy-loop and enable periodic callbacks
         app.lastEventTime = getMonoTime()
-        if not (await app.timeoutHandler(app)):
+        if not (await app.dispatchTimeoutAsync()):
           return false
 
     if eventsAvailable:

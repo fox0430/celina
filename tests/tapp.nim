@@ -594,6 +594,51 @@ suite "App Application Timeout":
     # Handler is set but not called until run
     check handlerCalled == false
 
+  test "onTimeout with simple handler sets timeout handler":
+    let app = newApp()
+    var handlerCalled = false
+
+    app.onTimeout proc(): bool =
+      handlerCalled = true
+      return true
+
+    # Handler is set but not called until run
+    check handlerCalled == false
+
+  test "onTimeout overloads are mutually exclusive":
+    let app = newApp()
+    var simpleCalled = false
+    var appCalled = false
+
+    # Set simple handler first
+    app.onTimeout proc(): bool =
+      simpleCalled = true
+      return true
+
+    discard app.dispatchTimeout()
+    check simpleCalled == true
+    check appCalled == false
+
+    # Setting App-context handler should clear simple handler
+    simpleCalled = false
+    app.onTimeout proc(app: App): bool =
+      appCalled = true
+      return true
+
+    discard app.dispatchTimeout()
+    check simpleCalled == false
+    check appCalled == true
+
+    # Setting simple handler again should clear App-context handler
+    appCalled = false
+    app.onTimeout proc(): bool =
+      simpleCalled = true
+      return true
+
+    discard app.dispatchTimeout()
+    check simpleCalled == true
+    check appCalled == false
+
   test "onTimeout replaces previous handler":
     let app = newApp()
     var firstCalled = false
