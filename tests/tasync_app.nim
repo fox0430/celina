@@ -729,5 +729,39 @@ when hasAsyncSupport:
       let app = newAsyncApp()
       app.restoreTerminal()
       app.restoreTerminal()
+
+  suite "quickRunAsync signature":
+    test "quickRunAsync function signature":
+      # Test that quickRunAsync exists and has correct signature
+      # We can't actually run it in tests, but we can verify it compiles
+      when declared(quickRunAsync):
+        check true
+
+        # Test that the function type matches expected signature
+        proc testEventHandler(event: Event): Future[bool] {.async.} =
+          return false
+
+        proc testRenderHandler(buffer: var Buffer) =
+          discard
+
+        proc testEventHandlerWithApp(
+            event: Event, app: AsyncApp
+        ): Future[bool] {.async.} =
+          return false
+
+        proc testRenderHandlerWithApp(buffer: var Buffer, app: AsyncApp) =
+          discard
+
+        # Verify overload resolution selects the correct overload for each
+        # handler shape. `compiles` is a compile-time check — quickRunAsync
+        # itself cannot be invoked in tests because it drives a real terminal.
+        check compiles(quickRunAsync(testEventHandler, testRenderHandler))
+        check compiles(quickRunAsync(testEventHandlerWithApp, testRenderHandlerWithApp))
+
+        # Mixing basic and App-aware handlers must not match any overload
+        check not compiles(quickRunAsync(testEventHandler, testRenderHandlerWithApp))
+        check not compiles(quickRunAsync(testEventHandlerWithApp, testRenderHandler))
+      else:
+        fail("quickRunAsync should be available")
 else:
   echo "Skipping AsyncApp tests - no async backend available"

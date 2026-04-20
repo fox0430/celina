@@ -706,3 +706,34 @@ proc quickRun*(
   app.onEvent(eventHandler)
   app.onRender(renderHandler)
   app.run()
+
+proc quickRun*(
+    eventHandler: proc(event: Event, app: App): bool,
+    renderHandler: proc(buffer: var Buffer, app: App),
+    config: AppConfig = DefaultAppConfig,
+) =
+  ## Quick way to run a simple CLI application with App context handlers.
+  ##
+  ## Both handlers receive the App reference, enabling features like
+  ## `app.quit()`, `app.withSuspend`, FPS queries, and window state access.
+  ##
+  ## Example:
+  ## ```nim
+  ## import std/strformat
+  ##
+  ## quickRun(
+  ##   eventHandler = proc(event: Event, app: App): bool =
+  ##     if event.kind == EventKind.Key and
+  ##        event.key.code == KeyCode.Char and event.key.char == "q":
+  ##       app.quit()
+  ##     return true,
+  ##
+  ##   renderHandler = proc(buffer: var Buffer, app: App) =
+  ##     let size = app.getTerminalSize()
+  ##     buffer.setString(0, 0, &"{size.width}x{size.height}", defaultStyle())
+  ## )
+  ## ```
+  var app = newApp(config)
+  app.onEvent(eventHandler)
+  app.onRender(renderHandler)
+  app.run()

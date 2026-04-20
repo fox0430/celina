@@ -801,3 +801,34 @@ proc quickRunAsync*(
   app.onEventAsync(eventHandler)
   app.onRenderAsync(renderHandler)
   await app.runAsync()
+
+proc quickRunAsync*(
+    eventHandler: proc(event: Event, app: AsyncApp): Future[bool] {.async.},
+    renderHandler: proc(buffer: var Buffer, app: AsyncApp),
+    config: AppConfig = DefaultAppConfig,
+) {.async.} =
+  ## Quick way to run a simple async CLI application with AsyncApp context handlers.
+  ##
+  ## Both handlers receive the AsyncApp reference, enabling features like
+  ## `app.quit()`, `app.withSuspendAsync`, FPS queries, and window state access.
+  ##
+  ## Example:
+  ## ```nim
+  ## import std/strformat
+  ##
+  ## await quickRunAsync(
+  ##   eventHandler = proc(event: Event, app: AsyncApp): Future[bool] {.async.} =
+  ##     if event.kind == EventKind.Key and
+  ##        event.key.code == KeyCode.Char and event.key.char == "q":
+  ##       app.quit()
+  ##     return true,
+  ##
+  ##   renderHandler = proc(buffer: var Buffer, app: AsyncApp) =
+  ##     let size = app.getTerminalSize()
+  ##     buffer.setString(0, 0, &"{size.width}x{size.height}", defaultStyle())
+  ## )
+  ## ```
+  var app = newAsyncApp(config)
+  app.onEventAsync(eventHandler)
+  app.onRenderAsync(renderHandler)
+  await app.runAsync()
