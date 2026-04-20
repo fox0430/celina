@@ -21,6 +21,7 @@ type App* = ref object ## Main application context for CLI applications
   eventHandler: proc(event: Event): bool
   eventHandlerWithApp: proc(event: Event, app: App): bool
   renderHandler: proc(buffer: var Buffer)
+  renderHandlerWithApp: proc(buffer: var Buffer, app: App)
   tickHandler: proc(): bool
   tickHandlerWithApp: proc(app: App): bool
   windowMode: bool
@@ -55,6 +56,7 @@ proc newApp*(config: AppConfig = DefaultAppConfig): App =
     eventHandler: nil,
     eventHandlerWithApp: nil,
     renderHandler: nil,
+    renderHandlerWithApp: nil,
     windowMode: config.windowMode,
     config: config,
     resizeState: initResizeState(termSize.width, termSize.height),
@@ -100,7 +102,28 @@ proc onEvent*(app: App, handler: proc(event: Event, app: App): bool) =
 
 proc onRender*(app: App, handler: proc(buffer: var Buffer)) =
   ## Set the render handler for the application
+  ##
+  ## For access to the App object (e.g., to query FPS, window state,
+  ## or terminal size during rendering), use the overload that accepts
+  ## `proc(buffer: var Buffer, app: App)` instead.
   app.renderHandler = handler
+  app.renderHandlerWithApp = nil
+
+proc onRender*(app: App, handler: proc(buffer: var Buffer, app: App)) =
+  ## Set the render handler with App context for the application
+  ##
+  ## This overload provides access to the App object, enabling the
+  ## render handler to query runtime state such as current FPS,
+  ## terminal size, or window manager information.
+  ##
+  ## Example:
+  ## ```nim
+  ## app.onRender proc(buffer: var Buffer, app: App) =
+  ##   let fps = app.getCurrentFps()
+  ##   buffer.setString(0, 0, &"FPS: {fps:.1f}", defaultStyle())
+  ## ```
+  app.renderHandlerWithApp = handler
+  app.renderHandler = nil
 
 proc onTick*(app: App, handler: proc(): bool) =
   ## Set the tick handler called each frame between event processing and rendering.
@@ -197,7 +220,9 @@ proc render(app: App) =
   app.renderer.clear()
 
   # Call user render handler first (for background content)
-  if app.renderHandler != nil:
+  if app.renderHandlerWithApp != nil:
+    app.renderHandlerWithApp(app.renderer.getBuffer(), app)
+  elif app.renderHandler != nil:
     app.renderHandler(app.renderer.getBuffer())
 
   # If window mode is enabled, render windows on top
