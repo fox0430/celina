@@ -144,210 +144,39 @@ proc readUtf8CharAsync(firstByte: byte): Future[string] {.async.} =
 
   return buildUtf8String(firstByte, continuationBytes)
 
-# Async escape sequence parsing (ordered by dependencies)
+# Async escape sequence parsing
+# Uses the shared `parseEscapeSequenceUnified` template from core/events.
+# Each reader expression is `await`-wrapped so the template's repeated use
+# of the parameter becomes a fresh async byte read at each occurrence.
 
-proc parseEscapeSequenceVT100Async(): Future[Event] {.async.} =
-  ## Parse VT100-style function keys: ESC O P/Q/R/S (async mode)
-  let funcKey = await readCharAsync()
-  let r = processVT100FunctionKey(funcKey, funcKey != '\0')
-  return Event(kind: Key, key: r.keyEvent)
-
-type PasteEndStateAsync = enum
-  ## State machine for detecting paste end sequence ESC[201~
-  PesNoneAsync # Not in sequence
-  PesEscAsync # Saw ESC
-  PesBracketAsync # Saw ESC [
-  Pes2Async # Saw ESC [ 2
-  Pes20Async # Saw ESC [ 2 0
-  Pes201Async # Saw ESC [ 2 0 1
+proc readByteTupleAsync(): Future[tuple[success: bool, ch: char]] {.async.} =
+  ## Async adapter that exposes readCharAsync() with the same shape the
+  ## unified routing template expects (sentinel '\0' becomes success=false).
+  let ch = await readCharAsync()
+  return (success: ch != '\0', ch: ch)
 
 proc readPasteContentAsync(): Future[string] {.async.} =
-  ## Read all content until paste end sequence ESC[201~ (async mode)
-  ## Returns the pasted text (without the end sequence)
+  ## Read all content until paste end sequence ESC[201~ (async mode).
+  ## Uses the shared paste-end state machine from escape_sequence_logic;
+  ## differs from the sync versions only in how each byte is awaited.
   var resultStr = ""
-  var state = PesNoneAsync
-  var pendingBytes: string = ""
+  var state = PesNone
+  var pending = ""
 
   while true:
     # Check for data with reasonable timeout
     let hasData = await hasInputAsync(1000) # 1 second timeout
     if not hasData:
-      # Timeout - return what we have
-      resultStr.add(pendingBytes)
+      resultStr.add(pending)
       return resultStr
 
     let ch = await readCharAsync()
     if ch == '\0':
-      resultStr.add(pendingBytes)
+      resultStr.add(pending)
       return resultStr
 
-    case state
-    of PesNoneAsync:
-      if ch == '\x1b':
-        state = PesEscAsync
-        pendingBytes = $ch
-      else:
-        resultStr.add(ch)
-    of PesEscAsync:
-      if ch == '[':
-        state = PesBracketAsync
-        pendingBytes.add(ch)
-      elif ch == '\x1b':
-        # New potential sequence, flush previous ESC
-        resultStr.add(pendingBytes)
-        pendingBytes = $ch
-        # state stays PesEscAsync
-      else:
-        resultStr.add(pendingBytes)
-        resultStr.add(ch)
-        pendingBytes = ""
-        state = PesNoneAsync
-    of PesBracketAsync:
-      if ch == '2':
-        state = Pes2Async
-        pendingBytes.add(ch)
-      elif ch == '\x1b':
-        resultStr.add(pendingBytes)
-        pendingBytes = $ch
-        state = PesEscAsync
-      else:
-        resultStr.add(pendingBytes)
-        resultStr.add(ch)
-        pendingBytes = ""
-        state = PesNoneAsync
-    of Pes2Async:
-      if ch == '0':
-        state = Pes20Async
-        pendingBytes.add(ch)
-      elif ch == '\x1b':
-        resultStr.add(pendingBytes)
-        pendingBytes = $ch
-        state = PesEscAsync
-      else:
-        resultStr.add(pendingBytes)
-        resultStr.add(ch)
-        pendingBytes = ""
-        state = PesNoneAsync
-    of Pes20Async:
-      if ch == '1':
-        state = Pes201Async
-        pendingBytes.add(ch)
-      elif ch == '\x1b':
-        resultStr.add(pendingBytes)
-        pendingBytes = $ch
-        state = PesEscAsync
-      else:
-        resultStr.add(pendingBytes)
-        resultStr.add(ch)
-        pendingBytes = ""
-        state = PesNoneAsync
-    of Pes201Async:
-      if ch == '~':
-        # Found paste end sequence ESC[201~
-        return resultStr
-      elif ch == '\x1b':
-        resultStr.add(pendingBytes)
-        pendingBytes = $ch
-        state = PesEscAsync
-      else:
-        resultStr.add(pendingBytes)
-        resultStr.add(ch)
-        pendingBytes = ""
-        state = PesNoneAsync
-
-proc parseMultiDigitFunctionKeyAsync(
-    firstDigit, secondDigit: char
-): Future[Event] {.async.} =
-  ## Parse multi-digit function keys like ESC[15~, ESC[200~, ESC[201~ (async mode)
-  let thirdChar = await readCharAsync()
-
-  # Check for 3-digit sequences (paste markers: 200~, 201~)
-  if thirdChar != '\0' and thirdChar in {'0' .. '9'}:
-    # This is a 3-digit sequence, read one more byte for the tilde
-    let tildeChar = await readCharAsync()
-    if tildeChar == '~':
-      # Check for paste start: ESC[200~
-      if isPasteStartSequence(firstDigit, secondDigit, thirdChar, '~'):
-        let pastedText = await readPasteContentAsync()
-        return Event(kind: Paste, pastedText: pastedText)
-      # Check for paste end (orphaned)
-      if isPasteEndSequence(firstDigit, secondDigit, thirdChar, '~'):
-        return Event(kind: Unknown)
-    # Unknown 3-digit sequence
-    return Event(kind: Key, key: escapeKey())
-
-  # Standard 2-digit function key: ESC[15~
-  let r =
-    processMultiDigitFunctionKey(firstDigit, secondDigit, thirdChar, thirdChar != '\0')
-  return Event(kind: Key, key: r.keyEvent)
-
-proc parseModifiedKeySequenceAsync(digit: char): Future[Event] {.async.} =
-  ## Parse modified key sequences like ESC[1;2A (async mode)
-  let modChar = await readCharAsync()
-  let keyChar = await readCharAsync()
-  let r = processModifiedKeySequence(
-    digit, modChar, modChar != '\0', keyChar, keyChar != '\0'
-  )
-  return Event(kind: Key, key: r.keyEvent)
-
-proc parseNumericKeySequenceAsync(digit: char): Future[Event] {.async.} =
-  ## Parse numeric key sequences like ESC[1~, ESC[15~, ESC[1;2A, etc. (async mode)
-  let nextChar = await readCharAsync()
-  let seqKind = classifyNumericSequence(nextChar, nextChar != '\0')
-
-  case seqKind
-  of NskSingleDigitWithTilde:
-    let r = processSingleDigitNumeric(digit)
-    return Event(kind: Key, key: r.keyEvent)
-  of NskMultiDigit:
-    return await parseMultiDigitFunctionKeyAsync(digit, nextChar)
-  of NskModifiedKey:
-    return await parseModifiedKeySequenceAsync(digit)
-  of NskInvalid:
-    return Event(kind: Key, key: escapeKey())
-
-proc parseEscapeSequenceBracketAsync(): Future[Event] {.async.} =
-  ## Parse ESC [ sequences (CSI sequences) (async mode)
-  let final = await readCharAsync()
-  let seqKind = classifyBracketSequence(final)
-
-  case seqKind
-  of BskArrowKey, BskNavigationKey:
-    let r = processSimpleBracketSequence(final, final != '\0')
-    return Event(kind: Key, key: r.keyEvent)
-  of BskMouseX10:
-    return await parseMouseEventX10()
-  of BskMouseSGR:
-    return await parseMouseEventSGR()
-  of BskNumeric:
-    return await parseNumericKeySequenceAsync(final)
-  of BskFocusIn:
-    return Event(kind: FocusIn)
-  of BskFocusOut:
-    return Event(kind: FocusOut)
-  of BskInvalid:
-    return Event(kind: Key, key: escapeKey())
-
-proc parseEscapeSequenceAsync(): Future[Event] {.async.} =
-  ## Parse escape sequences in async mode
-  ## Assumes ESC has already been read
-
-  # Check if more data is available with 20ms timeout
-  let hasMoreData = await hasInputAsync(20)
-
-  if not hasMoreData:
-    # No more data after timeout - standalone ESC key
-    return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
-
-  # Try to read escape sequence
-  let next = await readCharAsync()
-
-  if next == '[':
-    return await parseEscapeSequenceBracketAsync()
-  elif next == 'O':
-    return await parseEscapeSequenceVT100Async()
-  else:
-    return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
+    if stepPasteEnd(state, pending, ch, resultStr):
+      return resultStr
 
 # Async key reading with escape sequence support
 proc readKeyAsync*(): Future[Event] {.async.} =
@@ -377,9 +206,19 @@ proc readKeyAsync*(): Future[Event] {.async.} =
     if basicKey.code in {Enter, Tab, Space, Backspace}:
       return Event(kind: Key, key: basicKey)
 
-    # Handle escape sequences
+    # Handle escape sequences via the unified routing template.
+    # The 20ms post-ESC timeout check distinguishes standalone ESC from a
+    # sequence start; if no follow-up byte arrives, return a bare ESC.
     if ch == '\x1b':
-      return await parseEscapeSequenceAsync()
+      let hasMoreData = await hasInputAsync(20)
+      if not hasMoreData:
+        return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
+      return parseEscapeSequenceUnified(
+        await readByteTupleAsync(),
+        await readPasteContentAsync(),
+        await parseMouseEventX10(),
+        await parseMouseEventSGR(),
+      )
 
     # Handle regular UTF-8 characters
     let utf8Char = await readUtf8CharAsync(ch.byte)

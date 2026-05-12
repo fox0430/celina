@@ -320,3 +320,107 @@ suite "Escape Sequence Logic Tests":
       let r2 = processMultiDigitFunctionKey('1', '5', '~', false)
       check r1.keyEvent.code == KeyCode.Escape
       check r2.keyEvent.code == KeyCode.Escape
+
+  suite "Paste End State Machine":
+    proc feed(input: string): tuple[output: string, completed: bool, residual: string] =
+      ## Run stepPasteEnd over `input` and return the accumulated output,
+      ## whether the paste-end terminator was hit, and any pending bytes left
+      ## buffered when the input was exhausted (residual).
+      var state = PesNone
+      var pending = ""
+      var output = ""
+      var completed = false
+      for ch in input:
+        if stepPasteEnd(state, pending, ch, output):
+          completed = true
+          break
+      return (output, completed, pending)
+
+    test "plain text is appended verbatim":
+      let r = feed("hello world")
+      check r.output == "hello world"
+      check r.completed == false
+      check r.residual == ""
+
+    test "ESC[201~ is detected and consumed as paste end":
+      let r = feed("abc\x1b[201~")
+      check r.output == "abc"
+      check r.completed == true
+
+    test "terminator bytes are not appended to output":
+      let r = feed("\x1b[201~")
+      check r.output == ""
+      check r.completed == true
+
+    test "ESC[200~ in content is not paste end and is preserved":
+      let r = feed("a\x1b[200~b")
+      check r.output == "a\x1b[200~b"
+      check r.completed == false
+
+    test "non-matching ESC[ sequence is flushed back to output":
+      let r = feed("a\x1b[Ab")
+      check r.output == "a\x1b[Ab"
+      check r.completed == false
+
+    test "incomplete ESC[2 prefix at end is left in residual":
+      let r = feed("xy\x1b[2")
+      check r.output == "xy"
+      check r.residual == "\x1b[2"
+      check r.completed == false
+
+    test "incomplete ESC[20 prefix at end is left in residual":
+      let r = feed("\x1b[20")
+      check r.output == ""
+      check r.residual == "\x1b[20"
+      check r.completed == false
+
+    test "incomplete ESC[201 prefix (no tilde) is left in residual":
+      let r = feed("\x1b[201")
+      check r.output == ""
+      check r.residual == "\x1b[201"
+      check r.completed == false
+
+    test "ESC[202~ is not paste end and is flushed":
+      let r = feed("\x1b[202~done")
+      check r.output == "\x1b[202~done"
+      check r.completed == false
+
+    test "new ESC mid-sequence restarts matching":
+      # First ESC[ is incomplete, then a valid ESC[201~ follows
+      let r = feed("\x1b[\x1b[201~")
+      check r.output == "\x1b["
+      check r.completed == true
+
+    test "double ESC stays in PesEsc and flushes the first":
+      let r = feed("\x1b\x1b[201~")
+      check r.output == "\x1b"
+      check r.completed == true
+
+    test "ESC at end of input is left in residual":
+      let r = feed("text\x1b")
+      check r.output == "text"
+      check r.residual == "\x1b"
+      check r.completed == false
+
+    test "content after partial match is preserved when match fails":
+      let r = feed("\x1b[2X")
+      check r.output == "\x1b[2X"
+      check r.completed == false
+
+    test "Pes201 with non-tilde non-ESC byte flushes pending and continues":
+      let r = feed("\x1b[201X")
+      check r.output == "\x1b[201X"
+      check r.completed == false
+
+    test "bytes after terminator are not consumed":
+      var state = PesNone
+      var pending = ""
+      var output = ""
+      let input = "ab\x1b[201~more"
+      var consumed = 0
+      for ch in input:
+        consumed.inc()
+        if stepPasteEnd(state, pending, ch, output):
+          break
+      check output == "ab"
+      check consumed == "ab\x1b[201~".len
