@@ -10,9 +10,19 @@ export key_logic.mapVT100FunctionKey, key_logic.mapFunctionKey
 export key_logic.mapNumericKeyCode, key_logic.parseModifierCode
 export key_logic.applyModifiers, key_logic.mapArrowKey, key_logic.mapNavigationKey
 
-type EscapeResult* = object ## Result of escape sequence processing
-  isValid*: bool
-  keyEvent*: KeyEvent
+type
+  EscapeResult* = object ## Result of escape sequence processing
+    isValid*: bool
+    keyEvent*: KeyEvent
+
+  PasteEndState* = enum
+    ## State machine for detecting paste end sequence ESC[201~
+    PesNone ## Not in sequence
+    PesEsc ## Saw ESC
+    PesBracket ## Saw ESC [
+    Pes2 ## Saw ESC [ 2
+    Pes20 ## Saw ESC [ 2 0
+    Pes201 ## Saw ESC [ 2 0 1
 
 proc escapeKey*(): KeyEvent {.inline.} =
   ## Create an Escape key event
@@ -156,15 +166,6 @@ proc isPasteEndSequence*(d1, d2, d3, final: char): bool {.inline.} =
   d1 == '2' and d2 == '0' and d3 == '1' and final == '~'
 
 # Bracketed paste content reading (I/O independent state machine)
-
-type PasteEndState* = enum
-  ## State machine for detecting paste end sequence ESC[201~
-  PesNone ## Not in sequence
-  PesEsc ## Saw ESC
-  PesBracket ## Saw ESC [
-  Pes2 ## Saw ESC [ 2
-  Pes20 ## Saw ESC [ 2 0
-  Pes201 ## Saw ESC [ 2 0 1
 
 proc stepPasteEnd*(
     state: var PasteEndState, pending: var string, ch: char, output: var string
