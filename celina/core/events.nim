@@ -174,205 +174,111 @@ proc readByteBlocking(): tuple[success: bool, ch: char] =
   else:
     return (false, '\0')
 
-# Escape sequence parsing for blocking mode (ordered by dependencies)
-
-proc parseEscapeSequenceVT100Blocking(): Event =
-  ## Parse VT100-style function keys: ESC O P/Q/R/S (blocking mode)
-  let funcResult = readByteBlocking()
-  let parseResult = processVT100FunctionKey(funcResult.ch, funcResult.success)
-  return Event(kind: Key, key: parseResult.keyEvent)
-
-type PasteEndState = enum
-  ## State machine for detecting paste end sequence ESC[201~
-  PesNone # Not in sequence
-  PesEsc # Saw ESC
-  PesBracket # Saw ESC [
-  Pes2 # Saw ESC [ 2
-  Pes20 # Saw ESC [ 2 0
-  Pes201 # Saw ESC [ 2 0 1
+# Bracketed paste content reader (blocking mode)
+# Uses the shared paste-end state machine from escape_sequence_logic.
 
 proc readPasteContentBlocking(): string =
-  ## Read all content until paste end sequence ESC[201~
-  ## Returns the pasted text (without the end sequence)
+  ## Read all content until paste end sequence ESC[201~ (blocking mode).
+  ## Returns the pasted text without the end sequence.
   result = ""
   var state = PesNone
-  var pendingBytes: string = ""
-
+  var pending = ""
   while true:
-    let readResult = readByteBlocking()
-    if not readResult.success:
-      # On read failure, return what we have
-      result.add(pendingBytes)
+    let r = readByteBlocking()
+    if not r.success:
+      # On read failure, flush any buffered partial-match bytes and return.
+      result.add(pending)
+      return
+    if stepPasteEnd(state, pending, r.ch, result):
       return
 
-    let ch = readResult.ch
+# Unified escape sequence parsing routing (shared with async via template).
+#
+# The template body lives here (rather than escape_sequence_logic.nim) because
+# it constructs `Event` values, and `Event` is defined in this module. Async
+# callers reach it through `import ../core/events`.
+#
+# Each of the four parameters is an *expression* re-evaluated at every textual
+# occurrence in the template body. Synchronous callers pass direct proc calls
+# (`readByteBlocking()`); async callers pass `await ...` expressions. Because
+# the template body itself contains no `await`, it is type-checked under the
+# enclosing proc's sync/async context, so each context sees only its own form.
+#
+# Required shapes:
+#   readByte      -> tuple with `.success: bool` and `.ch: char` fields
+#                    (extra fields are ignored; e.g. non-blocking adds `.isTimeout`)
+#   readPaste     -> string                          (paste content w/o terminator)
+#   parseMouseX10 -> Event
+#   parseMouseSGR -> Event
 
-    case state
-    of PesNone:
-      if ch == '\x1b':
-        state = PesEsc
-        pendingBytes = $ch
+template parseEscapeSequenceUnified*(
+    readByte, readPaste, parseMouseX10, parseMouseSGR: untyped
+): Event =
+  ## Parse an ESC sequence (ESC has already been consumed by the caller).
+  ## For non-blocking callers, the post-ESC timeout check (standalone ESC vs
+  ## start of a sequence) must be performed by the caller before invocation.
+  block:
+    let first = readByte
+    if not first.success:
+      Event(kind: Key, key: KeyEvent(code: KeyCode.Escape, char: "\x1b"))
+    else:
+      case first.ch
+      of '[':
+        let bracket = readByte
+        case classifyBracketSequence(bracket.ch)
+        of BskArrowKey, BskNavigationKey:
+          let p = processSimpleBracketSequence(bracket.ch, bracket.success)
+          Event(kind: Key, key: p.keyEvent)
+        of BskMouseX10:
+          parseMouseX10
+        of BskMouseSGR:
+          parseMouseSGR
+        of BskNumeric:
+          let digit = bracket.ch
+          let numeric = readByte
+          case classifyNumericSequence(numeric.ch, numeric.success)
+          of NskSingleDigitWithTilde:
+            let p = processSingleDigitNumeric(digit)
+            Event(kind: Key, key: p.keyEvent)
+          of NskMultiDigit:
+            let second = numeric.ch
+            let third = readByte
+            if third.success and third.ch in {'0' .. '9'}:
+              let tilde = readByte
+              let tildeMatched = tilde.success and tilde.ch == '~'
+              if tildeMatched and isPasteStartSequence(digit, second, third.ch, '~'):
+                Event(kind: Paste, pastedText: readPaste)
+              elif tildeMatched and isPasteEndSequence(digit, second, third.ch, '~'):
+                # Orphaned paste end - shouldn't happen in normal flow
+                Event(kind: Unknown)
+              else:
+                # Unknown 3-digit sequence (tilde missing or unrecognized)
+                Event(kind: Key, key: escapeKey())
+            else:
+              let p =
+                processMultiDigitFunctionKey(digit, second, third.ch, third.success)
+              Event(kind: Key, key: p.keyEvent)
+          of NskModifiedKey:
+            let modifier = readByte
+            let key = readByte
+            let p = processModifiedKeySequence(
+              digit, modifier.ch, modifier.success, key.ch, key.success
+            )
+            Event(kind: Key, key: p.keyEvent)
+          of NskInvalid:
+            Event(kind: Key, key: escapeKey())
+        of BskFocusIn:
+          Event(kind: FocusIn)
+        of BskFocusOut:
+          Event(kind: FocusOut)
+        of BskInvalid:
+          Event(kind: Key, key: escapeKey())
+      of 'O':
+        let vt = readByte
+        let p = processVT100FunctionKey(vt.ch, vt.success)
+        Event(kind: Key, key: p.keyEvent)
       else:
-        result.add(ch)
-    of PesEsc:
-      if ch == '[':
-        state = PesBracket
-        pendingBytes.add(ch)
-      elif ch == '\x1b':
-        # New potential sequence, flush previous ESC
-        result.add(pendingBytes)
-        pendingBytes = $ch
-        # state stays PesEsc
-      else:
-        # Not a sequence, flush pending and continue
-        result.add(pendingBytes)
-        result.add(ch)
-        pendingBytes = ""
-        state = PesNone
-    of PesBracket:
-      if ch == '2':
-        state = Pes2
-        pendingBytes.add(ch)
-      elif ch == '\x1b':
-        # New potential sequence, flush and restart
-        result.add(pendingBytes)
-        pendingBytes = $ch
-        state = PesEsc
-      else:
-        # Not paste end, flush pending
-        result.add(pendingBytes)
-        result.add(ch)
-        pendingBytes = ""
-        state = PesNone
-    of Pes2:
-      if ch == '0':
-        state = Pes20
-        pendingBytes.add(ch)
-      elif ch == '\x1b':
-        result.add(pendingBytes)
-        pendingBytes = $ch
-        state = PesEsc
-      else:
-        result.add(pendingBytes)
-        result.add(ch)
-        pendingBytes = ""
-        state = PesNone
-    of Pes20:
-      if ch == '1':
-        state = Pes201
-        pendingBytes.add(ch)
-      elif ch == '\x1b':
-        result.add(pendingBytes)
-        pendingBytes = $ch
-        state = PesEsc
-      else:
-        result.add(pendingBytes)
-        result.add(ch)
-        pendingBytes = ""
-        state = PesNone
-    of Pes201:
-      if ch == '~':
-        # Found paste end sequence ESC[201~
-        # Don't add pendingBytes or this char to result
-        return
-      elif ch == '\x1b':
-        result.add(pendingBytes)
-        pendingBytes = $ch
-        state = PesEsc
-      else:
-        result.add(pendingBytes)
-        result.add(ch)
-        pendingBytes = ""
-        state = PesNone
-
-proc parseMultiDigitFunctionKeyBlocking(firstDigit, secondDigit: char): Event =
-  ## Parse multi-digit function keys like ESC[15~, ESC[200~, ESC[201~ (blocking mode)
-  let thirdResult = readByteBlocking()
-
-  # Check for 3-digit sequences (paste markers: 200~, 201~)
-  if thirdResult.success and thirdResult.ch in {'0' .. '9'}:
-    # This is a 3-digit sequence, read one more byte for the tilde
-    let tildeResult = readByteBlocking()
-    if tildeResult.success and tildeResult.ch == '~':
-      # Check for paste start: ESC[200~
-      if isPasteStartSequence(firstDigit, secondDigit, thirdResult.ch, '~'):
-        let pastedText = readPasteContentBlocking()
-        return Event(kind: Paste, pastedText: pastedText)
-      # Check for paste end (orphaned - shouldn't happen in normal flow)
-      if isPasteEndSequence(firstDigit, secondDigit, thirdResult.ch, '~'):
-        return Event(kind: Unknown)
-    # Unknown 3-digit sequence, return escape key
-    return Event(kind: Key, key: escapeKey())
-
-  # Standard 2-digit function key: ESC[15~
-  let parseResult = processMultiDigitFunctionKey(
-    firstDigit, secondDigit, thirdResult.ch, thirdResult.success
-  )
-  return Event(kind: Key, key: parseResult.keyEvent)
-
-proc parseModifiedKeySequenceBlocking(digit: char): Event =
-  ## Parse modified key sequences like ESC[1;2A (blocking mode)
-  let modResult = readByteBlocking()
-  let keyResult = readByteBlocking()
-  let parseResult = processModifiedKeySequence(
-    digit, modResult.ch, modResult.success, keyResult.ch, keyResult.success
-  )
-  return Event(kind: Key, key: parseResult.keyEvent)
-
-proc parseNumericKeySequenceBlocking(digit: char): Event =
-  ## Parse numeric key sequences like ESC[1~, ESC[15~, ESC[1;2A, etc. (blocking mode)
-  let nextResult = readByteBlocking()
-  let seqKind = classifyNumericSequence(nextResult.ch, nextResult.success)
-
-  case seqKind
-  of NskSingleDigitWithTilde:
-    let parseResult = processSingleDigitNumeric(digit)
-    return Event(kind: Key, key: parseResult.keyEvent)
-  of NskMultiDigit:
-    return parseMultiDigitFunctionKeyBlocking(digit, nextResult.ch)
-  of NskModifiedKey:
-    return parseModifiedKeySequenceBlocking(digit)
-  of NskInvalid:
-    return Event(kind: Key, key: escapeKey())
-
-proc parseEscapeSequenceBracketBlocking(): Event =
-  ## Parse ESC [ sequences (CSI sequences) (blocking mode)
-  let finalResult = readByteBlocking()
-  let seqKind = classifyBracketSequence(finalResult.ch)
-
-  case seqKind
-  of BskArrowKey, BskNavigationKey:
-    let parseResult = processSimpleBracketSequence(finalResult.ch, finalResult.success)
-    return Event(kind: Key, key: parseResult.keyEvent)
-  of BskMouseX10:
-    return parseMouseEventX10()
-  of BskMouseSGR:
-    return parseMouseEventSGR()
-  of BskNumeric:
-    return parseNumericKeySequenceBlocking(finalResult.ch)
-  of BskFocusIn:
-    return Event(kind: FocusIn)
-  of BskFocusOut:
-    return Event(kind: FocusOut)
-  of BskInvalid:
-    return Event(kind: Key, key: escapeKey())
-
-proc parseEscapeSequenceBlocking(): Event =
-  ## Parse escape sequences in blocking mode
-  ## Assumes ESC has already been read
-  let nextResult = readByteBlocking()
-  if not nextResult.success:
-    return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
-
-  let next = nextResult.ch
-
-  if next == '[':
-    return parseEscapeSequenceBracketBlocking()
-  elif next == 'O':
-    return parseEscapeSequenceVT100Blocking()
-  else:
-    # Not an escape sequence we recognize
-    return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
+        Event(kind: Key, key: KeyEvent(code: KeyCode.Escape, char: "\x1b"))
 
 # UTF-8 helper functions (using shared logic from utf8_utils module)
 proc readUtf8Char(firstByte: byte): string =
@@ -492,9 +398,14 @@ proc readKey*(): Event =
     if basicKey.code in {Enter, Tab, Space, Backspace}:
       return Event(kind: Key, key: basicKey)
 
-    # Handle escape sequences
+    # Handle escape sequences via the unified routing template (blocking I/O)
     if ch == '\x1b':
-      return parseEscapeSequenceBlocking()
+      return parseEscapeSequenceUnified(
+        readByteBlocking(),
+        readPasteContentBlocking(),
+        parseMouseEventX10(),
+        parseMouseEventSGR(),
+      )
 
     # Handle regular UTF-8 characters
     let utf8Char = readUtf8Char(ch.byte)
@@ -568,7 +479,7 @@ proc readByteNonBlocking(fd: cint): tuple[success: bool, ch: char, isTimeout: bo
 
 # Non-blocking mouse event parsing
 
-proc parseMouseEventX10NonBlocking(): Option[Event] =
+proc parseMouseEventX10NonBlocking(): Event =
   ## Parse X10 mouse format: ESC[Mbxy (non-blocking mode)
   ## where b is button byte, x,y are coordinate bytes
   ##
@@ -585,18 +496,18 @@ proc parseMouseEventX10NonBlocking(): Option[Event] =
     let selectResult = select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout)
     if selectResult <= 0:
       # Timeout or error - incomplete sequence
-      return some(Event(kind: Unknown))
+      return Event(kind: Unknown)
 
     let readResult = readByteNonBlocking(STDIN_FILENO)
     if not readResult.success:
-      return some(Event(kind: Unknown))
+      return Event(kind: Unknown)
 
     data[i] = readResult.ch
 
   # Use shared parsing logic - no duplication with async version!
-  return some(parseMouseDataX10(data).toEvent())
+  return parseMouseDataX10(data).toEvent()
 
-proc parseMouseEventSGRNonBlocking(): Option[Event] =
+proc parseMouseEventSGRNonBlocking(): Event =
   ## Parse SGR mouse format: ESC[<button;x;y;M/m (non-blocking mode)
   ## M for press, m for release
   ##
@@ -617,11 +528,11 @@ proc parseMouseEventSGRNonBlocking(): Option[Event] =
     let selectResult = select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout)
     if selectResult <= 0:
       # Timeout or error - incomplete sequence
-      return some(Event(kind: Unknown))
+      return Event(kind: Unknown)
 
     let readResult = readByteNonBlocking(STDIN_FILENO)
     if not readResult.success:
-      return some(Event(kind: Unknown))
+      return Event(kind: Unknown)
 
     ch = readResult.ch
     readCount.inc()
@@ -632,7 +543,7 @@ proc parseMouseEventSGRNonBlocking(): Option[Event] =
 
   # If we didn't find a terminator, return unknown event
   if readCount >= maxReadCount or (ch != 'M' and ch != 'm'):
-    return some(Event(kind: Unknown))
+    return Event(kind: Unknown)
 
   # Parse the SGR format: button;x;y
   let parts = buffer.split(';')
@@ -644,223 +555,43 @@ proc parseMouseEventSGRNonBlocking(): Option[Event] =
       let isRelease = (ch == 'm')
 
       # Use shared parsing logic - no duplication with async version!
-      return some(parseMouseDataSGR(buttonCode, x, y, isRelease).toEvent())
+      return parseMouseDataSGR(buttonCode, x, y, isRelease).toEvent()
     except ValueError:
-      return some(Event(kind: Unknown))
+      return Event(kind: Unknown)
 
-  return some(Event(kind: Unknown))
+  return Event(kind: Unknown)
 
-# Escape sequence parsing helpers (ordered by dependencies)
+# Bracketed paste content reader (non-blocking mode)
+# Uses the shared paste-end state machine; differs from the blocking version
+# only in how each byte is acquired (select() + non-blocking read with 1s
+# timeout per byte vs unconditional blocking read).
 
-proc parseEscapeSequenceVT100(): Option[Event] =
-  ## Parse VT100-style function keys: ESC O P/Q/R/S
-  let funcResult = readByteNonBlocking(STDIN_FILENO)
-  let parseResult = processVT100FunctionKey(funcResult.ch, funcResult.success)
-  return some(Event(kind: Key, key: parseResult.keyEvent))
-
-proc readPasteContentNonBlocking(): Option[string] =
-  ## Read paste content in non-blocking mode until ESC[201~
-  ## Uses select() with timeout to wait for data
-  var resultStr = ""
+proc readPasteContentNonBlocking(): string =
+  ## Read paste content in non-blocking mode until ESC[201~.
+  ## Uses select() with a 1-second timeout per byte; returns whatever has been
+  ## buffered if the timeout fires.
+  result = ""
   var state = PesNone
-  var pendingBytes: string = ""
+  var pending = ""
 
   while true:
-    # Wait for data with reasonable timeout
     var readSet: TFdSet
     FD_ZERO(readSet)
     FD_SET(STDIN_FILENO, readSet)
-    var timeout = Timeval(tv_sec: Time(1), tv_usec: Suseconds(0)) # 1 second max
+    var timeout = Timeval(tv_sec: Time(1), tv_usec: Suseconds(0))
 
     let selectResult = select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout)
     if selectResult <= 0:
-      # Timeout or error - return what we have
-      resultStr.add(pendingBytes)
-      return some(resultStr)
+      result.add(pending)
+      return
 
-    let readResult = readByteNonBlocking(STDIN_FILENO)
-    if not readResult.success:
-      resultStr.add(pendingBytes)
-      return some(resultStr)
+    let r = readByteNonBlocking(STDIN_FILENO)
+    if not r.success:
+      result.add(pending)
+      return
 
-    let ch = readResult.ch
-
-    case state
-    of PesNone:
-      if ch == '\x1b':
-        state = PesEsc
-        pendingBytes = $ch
-      else:
-        resultStr.add(ch)
-    of PesEsc:
-      if ch == '[':
-        state = PesBracket
-        pendingBytes.add(ch)
-      elif ch == '\x1b':
-        # New potential sequence, flush previous ESC
-        resultStr.add(pendingBytes)
-        pendingBytes = $ch
-        # state stays PesEsc
-      else:
-        resultStr.add(pendingBytes)
-        resultStr.add(ch)
-        pendingBytes = ""
-        state = PesNone
-    of PesBracket:
-      if ch == '2':
-        state = Pes2
-        pendingBytes.add(ch)
-      elif ch == '\x1b':
-        resultStr.add(pendingBytes)
-        pendingBytes = $ch
-        state = PesEsc
-      else:
-        resultStr.add(pendingBytes)
-        resultStr.add(ch)
-        pendingBytes = ""
-        state = PesNone
-    of Pes2:
-      if ch == '0':
-        state = Pes20
-        pendingBytes.add(ch)
-      elif ch == '\x1b':
-        resultStr.add(pendingBytes)
-        pendingBytes = $ch
-        state = PesEsc
-      else:
-        resultStr.add(pendingBytes)
-        resultStr.add(ch)
-        pendingBytes = ""
-        state = PesNone
-    of Pes20:
-      if ch == '1':
-        state = Pes201
-        pendingBytes.add(ch)
-      elif ch == '\x1b':
-        resultStr.add(pendingBytes)
-        pendingBytes = $ch
-        state = PesEsc
-      else:
-        resultStr.add(pendingBytes)
-        resultStr.add(ch)
-        pendingBytes = ""
-        state = PesNone
-    of Pes201:
-      if ch == '~':
-        # Found paste end sequence ESC[201~
-        return some(resultStr)
-      elif ch == '\x1b':
-        resultStr.add(pendingBytes)
-        pendingBytes = $ch
-        state = PesEsc
-      else:
-        resultStr.add(pendingBytes)
-        resultStr.add(ch)
-        pendingBytes = ""
-        state = PesNone
-
-proc parseMultiDigitFunctionKey(firstDigit, secondDigit: char): Option[Event] =
-  ## Parse multi-digit function keys like ESC[15~, ESC[200~, ESC[201~
-  let thirdResult = readByteNonBlocking(STDIN_FILENO)
-
-  # Check for 3-digit sequences (paste markers: 200~, 201~)
-  if thirdResult.success and thirdResult.ch in {'0' .. '9'}:
-    # This is a 3-digit sequence, read one more byte for the tilde
-    let tildeResult = readByteNonBlocking(STDIN_FILENO)
-    if tildeResult.success and tildeResult.ch == '~':
-      # Check for paste start: ESC[200~
-      if isPasteStartSequence(firstDigit, secondDigit, thirdResult.ch, '~'):
-        let pastedText = readPasteContentNonBlocking()
-        if pastedText.isSome:
-          return some(Event(kind: Paste, pastedText: pastedText.get))
-        return some(Event(kind: Unknown))
-      # Check for paste end (orphaned)
-      if isPasteEndSequence(firstDigit, secondDigit, thirdResult.ch, '~'):
-        return some(Event(kind: Unknown))
-    # Unknown 3-digit sequence
-    return some(Event(kind: Key, key: escapeKey()))
-
-  # Standard 2-digit function key: ESC[15~
-  let parseResult = processMultiDigitFunctionKey(
-    firstDigit, secondDigit, thirdResult.ch, thirdResult.success
-  )
-  return some(Event(kind: Key, key: parseResult.keyEvent))
-
-proc parseModifiedKeySequence(digit: char): Option[Event] =
-  ## Parse modified key sequences like ESC[1;2A
-  let modResult = readByteNonBlocking(STDIN_FILENO)
-  let keyResult = readByteNonBlocking(STDIN_FILENO)
-  let parseResult = processModifiedKeySequence(
-    digit, modResult.ch, modResult.success, keyResult.ch, keyResult.success
-  )
-  return some(Event(kind: Key, key: parseResult.keyEvent))
-
-proc parseNumericKeySequence(digit: char): Option[Event] =
-  ## Parse numeric key sequences like ESC[1~, ESC[15~, ESC[1;2A, etc.
-  let nextResult = readByteNonBlocking(STDIN_FILENO)
-  let seqKind = classifyNumericSequence(nextResult.ch, nextResult.success)
-
-  case seqKind
-  of NskSingleDigitWithTilde:
-    let parseResult = processSingleDigitNumeric(digit)
-    return some(Event(kind: Key, key: parseResult.keyEvent))
-  of NskMultiDigit:
-    return parseMultiDigitFunctionKey(digit, nextResult.ch)
-  of NskModifiedKey:
-    return parseModifiedKeySequence(digit)
-  of NskInvalid:
-    return some(Event(kind: Key, key: escapeKey()))
-
-proc parseEscapeSequenceBracket(): Option[Event] =
-  ## Parse ESC [ sequences (CSI sequences) (non-blocking mode)
-  let finalResult = readByteNonBlocking(STDIN_FILENO)
-  let seqKind = classifyBracketSequence(finalResult.ch)
-
-  case seqKind
-  of BskArrowKey, BskNavigationKey:
-    let parseResult = processSimpleBracketSequence(finalResult.ch, finalResult.success)
-    return some(Event(kind: Key, key: parseResult.keyEvent))
-  of BskMouseX10:
-    return parseMouseEventX10NonBlocking()
-  of BskMouseSGR:
-    return parseMouseEventSGRNonBlocking()
-  of BskNumeric:
-    return parseNumericKeySequence(finalResult.ch)
-  of BskFocusIn:
-    return some(Event(kind: FocusIn))
-  of BskFocusOut:
-    return some(Event(kind: FocusOut))
-  of BskInvalid:
-    return some(Event(kind: Key, key: escapeKey()))
-
-proc parseEscapeSequenceNonBlocking(): Option[Event] =
-  ## Parse escape sequences in non-blocking mode
-  ## Returns Some(Event) if a valid sequence is parsed, None if incomplete/invalid
-  ## Assumes ESC has already been read
-
-  # Use select with timeout to detect escape sequences
-  var readSet: TFdSet
-  FD_ZERO(readSet)
-  FD_SET(STDIN_FILENO, readSet)
-  var timeout = Timeval(tv_sec: Time(0), tv_usec: Suseconds(20000)) # 20ms
-
-  # If no more data available in 20ms, it's a standalone ESC
-  if select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout) == 0:
-    return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
-
-  let nextResult = readByteNonBlocking(STDIN_FILENO)
-  if not nextResult.success:
-    return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
-
-  let next = nextResult.ch
-
-  if next == '[':
-    return parseEscapeSequenceBracket()
-  elif next == 'O':
-    return parseEscapeSequenceVT100()
-  else:
-    # Not an escape sequence we recognize
-    return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
+    if stepPasteEnd(state, pending, r.ch, result):
+      return
 
 # Non-blocking event reading
 proc readKeyInput*(): Option[Event] =
@@ -887,9 +618,25 @@ proc readKeyInput*(): Option[Event] =
   defer:
     flags.restore()
 
-  # Handle escape sequences
+  # Handle escape sequences via the unified routing template (non-blocking I/O).
+  # The 20ms post-ESC select() distinguishes a standalone ESC keypress from the
+  # start of a real sequence; this check is unique to non-blocking mode.
   if ch == '\x1b':
-    return parseEscapeSequenceNonBlocking()
+    var readSet: TFdSet
+    FD_ZERO(readSet)
+    FD_SET(STDIN_FILENO, readSet)
+    var timeout = Timeval(tv_sec: Time(0), tv_usec: Suseconds(20000))
+    if select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout) == 0:
+      return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
+
+    return some(
+      parseEscapeSequenceUnified(
+        readByteNonBlocking(STDIN_FILENO),
+        readPasteContentNonBlocking(),
+        parseMouseEventX10NonBlocking(),
+        parseMouseEventSGRNonBlocking(),
+      )
+    )
 
   # Handle Ctrl+C (quit signal)
   if ch == '\x03':

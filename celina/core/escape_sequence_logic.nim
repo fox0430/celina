@@ -10,9 +10,19 @@ export key_logic.mapVT100FunctionKey, key_logic.mapFunctionKey
 export key_logic.mapNumericKeyCode, key_logic.parseModifierCode
 export key_logic.applyModifiers, key_logic.mapArrowKey, key_logic.mapNavigationKey
 
-type EscapeResult* = object ## Result of escape sequence processing
-  isValid*: bool
-  keyEvent*: KeyEvent
+type
+  EscapeResult* = object ## Result of escape sequence processing
+    isValid*: bool
+    keyEvent*: KeyEvent
+
+  PasteEndState* = enum
+    ## State machine for detecting paste end sequence ESC[201~
+    PesNone ## Not in sequence
+    PesEsc ## Saw ESC
+    PesBracket ## Saw ESC [
+    Pes2 ## Saw ESC [ 2
+    Pes20 ## Saw ESC [ 2 0
+    Pes201 ## Saw ESC [ 2 0 1
 
 proc escapeKey*(): KeyEvent {.inline.} =
   ## Create an Escape key event
@@ -154,3 +164,94 @@ proc isPasteStartSequence*(d1, d2, d3, final: char): bool {.inline.} =
 proc isPasteEndSequence*(d1, d2, d3, final: char): bool {.inline.} =
   ## Check if sequence is ESC[201~ (paste end)
   d1 == '2' and d2 == '0' and d3 == '1' and final == '~'
+
+# Bracketed paste content reading (I/O independent state machine)
+
+proc stepPasteEnd*(
+    state: var PasteEndState, pending: var string, ch: char, output: var string
+): bool =
+  ## Advance the paste-end state machine by one byte.
+  ##
+  ## Bytes are buffered in `pending` while a candidate ESC[201~ sequence is
+  ## being matched, and flushed into `output` if the match fails. Returns true
+  ## when the paste end terminator (ESC[201~) is consumed; the caller should
+  ## then stop reading. The terminator bytes themselves are not appended to
+  ## `output`.
+  ##
+  ## Shared by blocking, non-blocking, and async paste readers - only the
+  ## byte-source differs between them.
+  case state
+  of PesNone:
+    if ch == '\x1b':
+      state = PesEsc
+      pending = $ch
+    else:
+      output.add(ch)
+  of PesEsc:
+    if ch == '[':
+      state = PesBracket
+      pending.add(ch)
+    elif ch == '\x1b':
+      # New potential sequence, flush previous ESC
+      output.add(pending)
+      pending = $ch
+      # state stays PesEsc
+    else:
+      # Not a sequence, flush pending and continue
+      output.add(pending)
+      output.add(ch)
+      pending = ""
+      state = PesNone
+  of PesBracket:
+    if ch == '2':
+      state = Pes2
+      pending.add(ch)
+    elif ch == '\x1b':
+      output.add(pending)
+      pending = $ch
+      state = PesEsc
+    else:
+      output.add(pending)
+      output.add(ch)
+      pending = ""
+      state = PesNone
+  of Pes2:
+    if ch == '0':
+      state = Pes20
+      pending.add(ch)
+    elif ch == '\x1b':
+      output.add(pending)
+      pending = $ch
+      state = PesEsc
+    else:
+      output.add(pending)
+      output.add(ch)
+      pending = ""
+      state = PesNone
+  of Pes20:
+    if ch == '1':
+      state = Pes201
+      pending.add(ch)
+    elif ch == '\x1b':
+      output.add(pending)
+      pending = $ch
+      state = PesEsc
+    else:
+      output.add(pending)
+      output.add(ch)
+      pending = ""
+      state = PesNone
+  of Pes201:
+    if ch == '~':
+      # Found paste end sequence ESC[201~
+      return true
+    elif ch == '\x1b':
+      output.add(pending)
+      pending = $ch
+      state = PesEsc
+    else:
+      output.add(pending)
+      output.add(ch)
+      pending = ""
+      state = PesNone
+  return false
