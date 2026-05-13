@@ -293,11 +293,12 @@ suite "AsyncTerminal Integration Tests":
     let terminal = createTestTerminal()
     var buffer = newBuffer(20, 10)
 
-    # Add unicode characters
+    # Add unicode characters - wide chars go through setCell so shadow cells
+    # are placed correctly.
     buffer[0, 0] = cell("α")
     buffer[1, 0] = cell("β")
-    buffer[2, 0] = cell("🚀")
-    buffer[3, 0] = cell("🌟")
+    buffer.setCell(2, 0, "🚀", 2)
+    buffer.setCell(4, 0, "🌟", 2)
 
     # Terminal should handle unicode content in lastBuffer
     terminal.lastBuffer = buffer

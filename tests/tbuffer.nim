@@ -381,21 +381,125 @@ suite "Buffer Module Tests":
       check foundWide
       check foundShadow
 
-    test "setCell overwriting shadow cell of existing wide char":
+    test "setCell overwriting shadow cell clears orphaned wide-char lead":
       var buffer = newBuffer(10, 5)
       buffer.setCell(2, 0, "日", 2)
       check buffer[2, 0].symbol == "日"
       check buffer[3, 0].symbol == "" # shadow
 
-      # Overwrite the shadow cell — the wide char at x=2 is now orphaned
+      # Overwriting the shadow cell must crush the orphaned lead to a space
       buffer.setCell(3, 0, "A", 1)
       check buffer[3, 0].symbol == "A"
-      check buffer[2, 0].symbol == "日" # still there, orphaned
+      check buffer[2, 0].symbol == " "
 
     test "setCell wide character on width=1 buffer is skipped":
       var buffer = newBuffer(1, 1)
       buffer.setCell(0, 0, "日", 2)
       check buffer[0, 0].symbol == " " # not written
+
+  suite "Wide-character consistency":
+    test "[]= overwriting shadow with narrow clears orphaned lead":
+      var buffer = newBuffer(10, 1)
+      buffer.setCell(2, 0, "日", 2)
+      buffer[3, 0] = cell("A")
+      check buffer[2, 0].symbol == " "
+      check buffer[3, 0].symbol == "A"
+
+    test "[]= overwriting wide lead with narrow clears orphaned shadow":
+      var buffer = newBuffer(10, 1)
+      buffer.setCell(2, 0, "日", 2)
+      buffer[2, 0] = cell("A")
+      check buffer[2, 0].symbol == "A"
+      check buffer[3, 0].symbol == " "
+
+    test "[]= overwriting wide lead with another wide leaves no orphan":
+      var buffer = newBuffer(10, 1)
+      buffer.setCell(2, 0, "日", 2)
+      buffer.setCell(2, 0, "本", 2)
+      check buffer[2, 0].symbol == "本"
+      check buffer[3, 0].symbol == "" # new shadow, not orphan space
+
+    test "[]= wide on shadow installs new wide and clears old lead":
+      var buffer = newBuffer(10, 1)
+      buffer.setCell(2, 0, "日", 2)
+      check buffer[3, 0].symbol == ""
+      # Place a wide char starting on the old shadow position
+      buffer.setCell(3, 0, "英", 2)
+      check buffer[2, 0].symbol == " " # old lead cleared
+      check buffer[3, 0].symbol == "英"
+      check buffer[4, 0].symbol == ""
+
+    test "[]= cleanup preserves style of crushed wide lead":
+      var buffer = newBuffer(10, 1)
+      let style = Style(
+        fg: ColorValue(kind: Indexed, indexed: Color.Red),
+        modifiers: {StyleModifier.Bold},
+      )
+      buffer.setCell(2, 0, "日", 2, style, "https://example.com")
+      # Overwrite the shadow to trigger crushing the lead
+      buffer[3, 0] = cell("A")
+      check buffer[2, 0].symbol == " "
+      check buffer[2, 0].style == style
+      # Hyperlink is dropped because the anchor char is gone
+      check buffer[2, 0].hyperlink == ""
+
+    test "[]= cleanup preserves style of crushed wide shadow":
+      var buffer = newBuffer(10, 1)
+      let style = Style(
+        fg: ColorValue(kind: Indexed, indexed: Color.Green),
+        modifiers: {StyleModifier.Underline},
+      )
+      buffer.setCell(2, 0, "本", 2, style, "https://example.com")
+      # Overwrite the lead with a narrow char - shadow should be crushed
+      buffer[2, 0] = cell("X")
+      check buffer[3, 0].symbol == " "
+      check buffer[3, 0].style == style
+      check buffer[3, 0].hyperlink == ""
+
+    test "setString writing consecutive wide chars stays consistent":
+      var buffer = newBuffer(10, 1)
+      buffer.setString(0, 0, "日本語")
+      check buffer[0, 0].symbol == "日"
+      check buffer[1, 0].symbol == ""
+      check buffer[2, 0].symbol == "本"
+      check buffer[3, 0].symbol == ""
+      check buffer[4, 0].symbol == "語"
+      check buffer[5, 0].symbol == ""
+
+    test "setString overwriting wide chars with wide chars stays consistent":
+      var buffer = newBuffer(10, 1)
+      buffer.setString(0, 0, "日本")
+      buffer.setString(1, 0, "英") # straddles shadow of 日 and lead of 本
+      check buffer[0, 0].symbol == " " # old 日 lead crushed
+      check buffer[1, 0].symbol == "英"
+      check buffer[2, 0].symbol == ""
+      check buffer[3, 0].symbol == " " # old 本 shadow crushed
+
+    test "setString of ASCII over wide chars leaves no orphans":
+      var buffer = newBuffer(10, 1)
+      buffer.setString(0, 0, "日本")
+      buffer.setString(1, 0, "AB")
+      check buffer[0, 0].symbol == " " # old 日 lead crushed
+      check buffer[1, 0].symbol == "A"
+      check buffer[2, 0].symbol == "B"
+      check buffer[3, 0].symbol == " " # old 本 shadow crushed
+
+    test "fill over wide chars produces a consistent buffer":
+      var buffer = newBuffer(6, 1)
+      buffer.setString(0, 0, "日本")
+      buffer.fill(rect(0, 0, 6, 1), cell(" "))
+      for x in 0 ..< 6:
+        check buffer[x, 0].symbol == " "
+
+    test "[]= cleanup marks neighbour cells dirty":
+      privateAccess(Buffer)
+      var buffer = newBuffer(10, 1)
+      buffer.setCell(2, 0, "日", 2)
+      buffer.clearDirty()
+      buffer[3, 0] = cell("A") # overwrites shadow; (2,0) must also become dirty
+      check buffer.dirty.isDirty
+      check buffer.dirty.minX == 2
+      check buffer.dirty.maxX == 3
 
   suite "Buffer Resizing":
     test "Resize to larger buffer":
@@ -596,18 +700,20 @@ suite "Buffer Module Tests":
     test "Unicode character handling":
       var buffer = newBuffer(10, 3)
 
-      # Set Unicode characters
+      # Set Unicode characters - wide chars go through setCell so the shadow
+      # cells are placed correctly; using []= directly for wide chars without
+      # a shadow leaves the buffer in an inconsistent state.
       buffer[0, 0] = cell("α")
       buffer[1, 0] = cell("β")
       buffer[2, 0] = cell("γ")
-      buffer[0, 1] = cell("🚀")
-      buffer[1, 1] = cell("🌟")
+      buffer.setCell(0, 1, "🚀", 2)
+      buffer.setCell(2, 1, "🌟", 2)
 
       check buffer[0, 0].symbol == "α"
       check buffer[1, 0].symbol == "β"
       check buffer[2, 0].symbol == "γ"
       check buffer[0, 1].symbol == "🚀"
-      check buffer[1, 1].symbol == "🌟"
+      check buffer[2, 1].symbol == "🌟"
 
       # Unicode width handling
       check buffer[0, 0].width() == 1 # α is narrow

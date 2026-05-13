@@ -46,6 +46,13 @@ proc isEmpty*(cell: Cell): bool {.inline.} =
   ## Check if cell is truly empty (no content at all)
   cell.symbol.len == 0
 
+proc isShadow*(cell: Cell): bool {.inline.} =
+  ## True when this cell is a shadow (right half) of a wide character.
+  ## Shadow cells carry an empty symbol; a blank cell holds " " instead.
+  ## Alias of `isEmpty` — the predicates share an implementation because
+  ## a shadow cell is, by definition, the only legitimate empty cell.
+  cell.isEmpty
+
 proc runeWidth*(r: Rune): int =
   ## Get the display width of a rune using Unicode standard width detection
   if int(r) > 0x10FFFF:
@@ -166,11 +173,54 @@ proc `[]`*(buffer: Buffer, pos: Position): Cell {.inline.} =
   ## Get cell at position
   buffer[pos.x, pos.y]
 
-proc `[]=`*(buffer: var Buffer, x, y: int, cell: Cell) =
-  ## Set cell at coordinates
-  if x >= 0 and x < buffer.area.width and y >= 0 and y < buffer.area.height:
-    buffer.content[y][x] = cell
-    buffer.markDirty(x, y) # Track this change for optimized diff
+proc `[]=`*(buffer: var Buffer, x, y: int, newCell: Cell) =
+  ## Set cell at coordinates.
+  ##
+  ## Maintains wide-character consistency:
+  ## - If overwriting the shadow cell of a wide character at (x-1), the
+  ##   orphaned lead at (x-1) is replaced with a space (preserving its
+  ##   style; the hyperlink, if any, is dropped because the link anchor
+  ##   is gone).
+  ## - If the old cell at (x, y) was a wide-character lead, its shadow
+  ##   at (x+1) is replaced with a space (preserving the lead's style).
+  ##
+  ## Writes with an empty symbol (shadow cells) skip the left-side
+  ## cleanup so that sequential wide-character writes (lead followed by
+  ## shadow) do not erase the lead just written.
+  ##
+  ## NOTE: This is a low-level single-cell write. When `newCell` is a
+  ## wide character (width == 2) the matching shadow at (x+1) is NOT
+  ## placed automatically — callers must write the shadow themselves or
+  ## use `setCell` / `setString` which handle it. Likewise, writing a
+  ## wide character at the rightmost column leaves the buffer in an
+  ## inconsistent state (no room for a shadow); use `setCell`, which
+  ## performs the right-edge check.
+  if not (x >= 0 and x < buffer.area.width and y >= 0 and y < buffer.area.height):
+    return
+
+  let isShadowWrite = newCell.isShadow
+  var minX = x
+  var maxX = x
+
+  if not isShadowWrite and x > 0:
+    let leftCell = buffer.content[y][x - 1]
+    if not leftCell.isShadow and leftCell.width == 2:
+      buffer.content[y][x - 1] = cell(" ", leftCell.style)
+      minX = x - 1
+
+  let oldCell = buffer.content[y][x]
+  if not oldCell.isShadow and oldCell.width == 2 and x + 1 < buffer.area.width:
+    buffer.content[y][x + 1] = cell(" ", oldCell.style)
+    maxX = x + 1
+
+  buffer.content[y][x] = newCell
+
+  # markDirty(min) then markDirty(max) expands the region to cover the
+  # whole [minX..maxX] range; x always sits inside so we don't mark it
+  # separately when there was a neighbour cleanup.
+  buffer.markDirty(minX, y)
+  if maxX != minX:
+    buffer.markDirty(maxX, y)
 
 proc `[]=`*(buffer: var Buffer, pos: Position, cell: Cell) {.inline.} =
   ## Set cell at position
@@ -186,7 +236,10 @@ proc isValidPos*(buffer: Buffer, pos: Position): bool {.inline.} =
 
 # Buffer operations
 proc clear*(buffer: var Buffer, cell: Cell = cell()) =
-  ## Clear the entire buffer with the given cell
+  ## Clear the entire buffer with the given cell.
+  ##
+  ## Bypasses `[]=` (and its wide-character consistency check) because
+  ## every cell is overwritten by `cell`, so there is no orphan to crush.
   for y in 0 ..< buffer.area.height:
     for x in 0 ..< buffer.area.width:
       buffer.content[y][x] = cell
@@ -344,18 +397,14 @@ proc setCell*(
   ## If there is not enough room for the shadow cell, the character is not written.
   ## Caller is responsible for providing correct width.
   ##
-  ## Note: If overwriting a shadow cell of an existing wide character,
-  ## the original wide character at (x-1) will be left in an inconsistent state.
-  ## This is the same behavior as setString.
+  ## Wide-character consistency is maintained via `[]=` (see its doc).
   if x < 0 or x >= buffer.area.width or y < 0 or y >= buffer.area.height:
     return
   if width == 2 and x + 1 >= buffer.area.width:
     return
-  buffer.content[y][x] = Cell(symbol: symbol, style: style, hyperlink: hyperlink)
-  buffer.markDirty(x, y)
+  buffer[x, y] = Cell(symbol: symbol, style: style, hyperlink: hyperlink)
   if width == 2:
-    buffer.content[y][x + 1] = Cell(symbol: "", style: style, hyperlink: hyperlink)
-    buffer.markDirty(x + 1, y)
+    buffer[x + 1, y] = Cell(symbol: "", style: style, hyperlink: hyperlink)
 
 proc setCell*(
     buffer: var Buffer,
