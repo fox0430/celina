@@ -733,10 +733,11 @@ suite "Terminal Common Module Tests":
       var buffer1 = newBuffer(10, 1)
       var buffer2 = newBuffer(10, 1)
 
-      # Various Unicode characters
+      # Various Unicode characters - wide chars must go through setCell so
+      # their shadow cells are placed correctly.
       buffer2[0, 0] = cell("→", defaultStyle()) # Arrow (1 width)
-      buffer2[1, 0] = cell("😀", defaultStyle()) # Emoji (2 width typically)
-      buffer2[2, 0] = cell("中", defaultStyle()) # CJK (2 width)
+      buffer2.setCell(1, 0, "😀", 2, defaultStyle()) # Emoji (2 width typically)
+      buffer2.setCell(3, 0, "中", 2, defaultStyle()) # CJK (2 width)
 
       let output = buildDifferentialOutput(buffer1, buffer2)
 
