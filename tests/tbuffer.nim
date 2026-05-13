@@ -658,6 +658,50 @@ suite "Buffer Module Tests":
       check(buf.dirty.minY == 5)
       check(buf.dirty.maxY == 5)
 
+    test "setString with wide characters marks dirty region including shadow cells":
+      var buf = newBuffer(80, 24)
+      buf.setString(10, 5, "日本")
+      # "日本" = 2 wide runes, each occupying 2 cells (rune + shadow)
+      # Cells written: x=10 ('日'), x=11 (shadow), x=12 ('本'), x=13 (shadow)
+      check(buf.dirty.isDirty)
+      check(buf.dirty.minX == 10)
+      check(buf.dirty.maxX == 13)
+      check(buf.dirty.minY == 5)
+      check(buf.dirty.maxY == 5)
+
+    test "setRunes marks dirty region with exact range":
+      var buf = newBuffer(80, 24)
+      let runes = "Hello".toRunes()
+      buf.setRunes(10, 5, runes)
+
+      check(buf.dirty.isDirty)
+      check(buf.dirty.minX == 10)
+      check(buf.dirty.maxX == 14) # 5 ASCII runes
+      check(buf.dirty.minY == 5)
+      check(buf.dirty.maxY == 5)
+
+    test "setRunes with wide characters marks dirty region including shadow cells":
+      var buf = newBuffer(80, 24)
+      let runes = "日本".toRunes()
+      buf.setRunes(10, 5, runes)
+
+      check(buf.dirty.isDirty)
+      check(buf.dirty.minX == 10)
+      check(buf.dirty.maxX == 13) # 2 wide runes + 2 shadow cells
+      check(buf.dirty.minY == 5)
+      check(buf.dirty.maxY == 5)
+
+    test "multiple setString calls extend bounding box across rows":
+      var buf = newBuffer(80, 24)
+      buf.setString(5, 2, "abc") # x=5..7, y=2
+      buf.setString(20, 8, "xyz") # x=20..22, y=8
+
+      check(buf.dirty.isDirty)
+      check(buf.dirty.minX == 5)
+      check(buf.dirty.maxX == 22)
+      check(buf.dirty.minY == 2)
+      check(buf.dirty.maxY == 8)
+
     test "fill marks rectangular dirty region":
       var buf = newBuffer(80, 24)
       let fillArea = rect(10, 5, 20, 10)
