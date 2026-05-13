@@ -39,6 +39,28 @@ suite "App Event and Render Handlers":
     # Handler is set but not called until run
     check handlerCalled == false
 
+  test "onEvent(nil) resets handler":
+    let app = newApp()
+    app.onEvent proc(event: Event, app: App): bool =
+      return false
+
+    check app.dispatchEvent(Event(kind: Resize)) == false
+
+    let nilHandler: proc(event: Event, app: App): bool = nil
+    app.onEvent(nilHandler)
+    check app.dispatchEvent(Event(kind: Resize)) == true
+
+  test "onEvent(nil) resets simple-form handler":
+    let app = newApp()
+    app.onEvent proc(event: Event): bool =
+      return false
+
+    check app.dispatchEvent(Event(kind: Resize)) == false
+
+    let nilHandler: proc(event: Event): bool = nil
+    app.onEvent(nilHandler)
+    check app.dispatchEvent(Event(kind: Resize)) == true
+
   test "onRender sets render handler":
     let app = newApp()
     var handlerCalled = false
@@ -70,16 +92,57 @@ suite "App Event and Render Handlers":
     app.onRender proc(buffer: var Buffer) =
       simpleCalled = true
 
+    app.dispatchRender()
+    check simpleCalled == true
+    check appCalled == false
+
     # Setting App-context handler should clear simple handler
+    simpleCalled = false
     app.onRender proc(buffer: var Buffer, app: App) =
       appCalled = true
 
-    # Now set simple handler again, should clear App-context handler
+    app.dispatchRender()
+    check simpleCalled == false
+    check appCalled == true
+
+    # Setting simple handler again should clear App-context handler
+    appCalled = false
     app.onRender proc(buffer: var Buffer) =
       simpleCalled = true
 
-    check simpleCalled == false
+    app.dispatchRender()
+    check simpleCalled == true
     check appCalled == false
+
+  test "onRender(nil) resets handler":
+    let app = newApp()
+    var called = false
+    app.onRender proc(buffer: var Buffer, app: App) =
+      called = true
+
+    app.dispatchRender()
+    check called == true
+
+    called = false
+    let nilHandler: proc(buffer: var Buffer, app: App) = nil
+    app.onRender(nilHandler)
+    app.dispatchRender()
+    check called == false
+
+  test "onRender(nil) resets simple-form handler":
+    let app = newApp()
+    var called = false
+    app.onRender proc(buffer: var Buffer) =
+      called = true
+
+    app.dispatchRender()
+    check called == true
+
+    called = false
+    let nilHandler: proc(buffer: var Buffer) = nil
+    app.onRender(nilHandler)
+    app.dispatchRender()
+    check called == false
 
   test "onTick sets tick handler":
     let app = newApp()
@@ -115,18 +178,51 @@ suite "App Event and Render Handlers":
       simpleCalled = true
       return true
 
+    discard app.dispatchTick()
+    check simpleCalled == true
+    check appCalled == false
+
     # Setting App-context handler should clear simple handler
+    simpleCalled = false
     app.onTick proc(app: App): bool =
       appCalled = true
       return true
 
-    # Now set simple handler again, should clear App-context handler
+    discard app.dispatchTick()
+    check simpleCalled == false
+    check appCalled == true
+
+    # Setting simple handler again should clear App-context handler
+    appCalled = false
     app.onTick proc(): bool =
       simpleCalled = true
       return true
 
-    check simpleCalled == false
+    discard app.dispatchTick()
+    check simpleCalled == true
     check appCalled == false
+
+  test "onTick(nil) resets handler":
+    let app = newApp()
+    app.onTick proc(app: App): bool =
+      return false
+
+    check app.dispatchTick() == false
+
+    let nilHandler: proc(app: App): bool = nil
+    app.onTick(nilHandler)
+    check app.dispatchTick() == true
+
+  test "onTick(nil) resets simple-form handler":
+    let app = newApp()
+    app.onTick proc(): bool =
+      return false
+
+    check app.dispatchTick() == false
+
+    let nilHandler: proc(): bool = nil
+    app.onTick(nilHandler)
+    check app.dispatchTick() == true
 
 suite "App FPS Control":
   test "setTargetFps changes target FPS":
@@ -655,6 +751,28 @@ suite "App Application Timeout":
     # Both are set but neither called; second should have replaced first
     check firstCalled == false
     check secondCalled == false
+
+  test "onTimeout(nil) resets handler":
+    let app = newApp()
+    app.onTimeout proc(app: App): bool =
+      return false
+
+    check app.dispatchTimeout() == false
+
+    let nilHandler: proc(app: App): bool = nil
+    app.onTimeout(nilHandler)
+    check app.dispatchTimeout() == true
+
+  test "onTimeout(nil) resets simple-form handler":
+    let app = newApp()
+    app.onTimeout proc(): bool =
+      return false
+
+    check app.dispatchTimeout() == false
+
+    let nilHandler: proc(): bool = nil
+    app.onTimeout(nilHandler)
+    check app.dispatchTimeout() == true
 
   test "onTimeout handler can disable timeout by setting 0":
     let app = newApp()
