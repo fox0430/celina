@@ -18,12 +18,9 @@ type App* = ref object ## Main application context for CLI applications
   fpsMonitor: FpsMonitor
   windowManager: WindowManager
   shouldQuit: bool
-  eventHandler: proc(event: Event): bool
-  eventHandlerWithApp: proc(event: Event, app: App): bool
-  renderHandler: proc(buffer: var Buffer)
-  renderHandlerWithApp: proc(buffer: var Buffer, app: App)
-  tickHandler: proc(): bool
-  tickHandlerWithApp: proc(app: App): bool
+  eventHandler: proc(event: Event, app: App): bool
+  renderHandler: proc(buffer: var Buffer, app: App)
+  tickHandler: proc(app: App): bool
   windowMode: bool
   config: AppConfig
   resizeState: ResizeState ## Shared resize detection state (from tick_common)
@@ -32,8 +29,7 @@ type App* = ref object ## Main application context for CLI applications
   frameCounter: int ## Total frame count
   lastFrameTime: MonoTime ## Timestamp of last frame
   applicationTimeout: int ## Application timeout in ms (0 = disabled)
-  timeoutHandler: proc(): bool
-  timeoutHandlerWithApp: proc(app: App): bool
+  timeoutHandler: proc(app: App): bool
   lastEventTime: MonoTime ## Timestamp of last received event
 
 proc `$`*(app: App): string =
@@ -55,11 +51,8 @@ proc newApp*(config: AppConfig = DefaultAppConfig): App =
     fpsMonitor: newFpsMonitor(if config.targetFps > 0: config.targetFps else: 60),
     shouldQuit: false,
     eventHandler: nil,
-    eventHandlerWithApp: nil,
     renderHandler: nil,
-    renderHandlerWithApp: nil,
     timeoutHandler: nil,
-    timeoutHandlerWithApp: nil,
     windowMode: config.windowMode,
     config: config,
     resizeState: initResizeState(termSize.width, termSize.height),
@@ -80,8 +73,14 @@ proc onEvent*(app: App, handler: proc(event: Event): bool) =
   ##
   ## For access to the App object (e.g., for suspend/resume), use the
   ## overload that accepts `proc(event: Event, app: App): bool` instead.
-  app.eventHandler = handler
-  app.eventHandlerWithApp = nil
+  app.eventHandler =
+    if handler.isNil:
+      nil
+    else:
+      # Bind to a local so the wrapping closure captures the handler value.
+      let captured = handler
+      proc(event: Event, app: App): bool =
+        captured(event)
 
 proc onEvent*(app: App, handler: proc(event: Event, app: App): bool) =
   ## Set the event handler with App context for the application
@@ -100,8 +99,7 @@ proc onEvent*(app: App, handler: proc(event: Event, app: App): bool) =
   ##     return true
   ##   return true
   ## ```
-  app.eventHandlerWithApp = handler
-  app.eventHandler = nil
+  app.eventHandler = handler
 
 proc onRender*(app: App, handler: proc(buffer: var Buffer)) =
   ## Set the render handler for the application
@@ -109,8 +107,13 @@ proc onRender*(app: App, handler: proc(buffer: var Buffer)) =
   ## For access to the App object (e.g., to query FPS, window state,
   ## or terminal size during rendering), use the overload that accepts
   ## `proc(buffer: var Buffer, app: App)` instead.
-  app.renderHandler = handler
-  app.renderHandlerWithApp = nil
+  app.renderHandler =
+    if handler.isNil:
+      nil
+    else:
+      let captured = handler
+      proc(buffer: var Buffer, app: App) =
+        captured(buffer)
 
 proc onRender*(app: App, handler: proc(buffer: var Buffer, app: App)) =
   ## Set the render handler with App context for the application
@@ -125,22 +128,25 @@ proc onRender*(app: App, handler: proc(buffer: var Buffer, app: App)) =
   ##   let fps = app.getCurrentFps()
   ##   buffer.setString(0, 0, &"FPS: {fps:.1f}", defaultStyle())
   ## ```
-  app.renderHandlerWithApp = handler
-  app.renderHandler = nil
+  app.renderHandler = handler
 
 proc onTick*(app: App, handler: proc(): bool) =
   ## Set the tick handler called each frame between event processing and rendering.
   ##
   ## Return true to continue running, false to quit.
-  app.tickHandler = handler
-  app.tickHandlerWithApp = nil
+  app.tickHandler =
+    if handler.isNil:
+      nil
+    else:
+      let captured = handler
+      proc(app: App): bool =
+        captured()
 
 proc onTick*(app: App, handler: proc(app: App): bool) =
   ## Set the tick handler with App context called each frame between event processing and rendering.
   ##
   ## Return true to continue running, false to quit.
-  app.tickHandlerWithApp = handler
-  app.tickHandler = nil
+  app.tickHandler = handler
 
 # Application timeout
 proc onTimeout*(app: App, handler: proc(): bool) =
@@ -152,8 +158,13 @@ proc onTimeout*(app: App, handler: proc(): bool) =
   ##
   ## For access to the App object, use the overload that accepts
   ## `proc(app: App): bool` instead.
-  app.timeoutHandler = handler
-  app.timeoutHandlerWithApp = nil
+  app.timeoutHandler =
+    if handler.isNil:
+      nil
+    else:
+      let captured = handler
+      proc(app: App): bool =
+        captured()
 
 proc onTimeout*(app: App, handler: proc(app: App): bool) =
   ## Set the timeout handler with App context for the application.
@@ -161,8 +172,7 @@ proc onTimeout*(app: App, handler: proc(app: App): bool) =
   ## The handler is called when no input events are received within
   ## the application timeout period. Return true to continue running,
   ## false to quit the application.
-  app.timeoutHandlerWithApp = handler
-  app.timeoutHandler = nil
+  app.timeoutHandler = handler
 
 proc setApplicationTimeout*(app: App, timeoutMs: int) =
   ## Set the application timeout in milliseconds.
@@ -230,16 +240,58 @@ proc handleResize(app: App) =
   # Force full render on next frame to ensure clean redraw
   app.forceNextRender = true
 
+proc dispatchEvent*(app: App, event: Event): bool =
+  ## Invoke the configured event handler for the given event.
+  ##
+  ## Returns `true` when no handler is configured. Primarily used internally
+  ## by `tick`, but exported so tests and callers can trigger the handler
+  ## directly.
+  if app.eventHandler != nil:
+    app.eventHandler(event, app)
+  else:
+    true
+
+proc dispatchRender*(app: App) =
+  ## Invoke the configured render handler against the app's current buffer.
+  ##
+  ## Does nothing when no handler is configured. Primarily used internally
+  ## by `render`, but exported so tests and callers can trigger the handler
+  ## directly.
+  if app.renderHandler != nil:
+    app.renderHandler(app.renderer.getBuffer(), app)
+
+proc dispatchTick*(app: App): bool =
+  ## Invoke the configured tick handler.
+  ##
+  ## Returns `true` when no handler is configured. Primarily used internally
+  ## by `tick`, but exported so tests and callers can trigger the handler
+  ## directly.
+  if app.tickHandler != nil:
+    app.tickHandler(app)
+  else:
+    true
+
+proc dispatchTimeout*(app: App): bool =
+  ## Invoke the configured timeout handler.
+  ##
+  ## Returns `true` when no handler is configured. Primarily used internally
+  ## by `tick`, but exported so tests and callers can trigger the handler
+  ## directly.
+  if app.timeoutHandler != nil:
+    app.timeoutHandler(app)
+  else:
+    true
+
+proc hasTimeoutHandler(app: App): bool {.inline.} =
+  app.timeoutHandler != nil
+
 proc render(app: App) =
   ## Render the current frame
   # Clear the buffer
   app.renderer.clear()
 
   # Call user render handler first (for background content)
-  if app.renderHandlerWithApp != nil:
-    app.renderHandlerWithApp(app.renderer.getBuffer(), app)
-  elif app.renderHandler != nil:
-    app.renderHandler(app.renderer.getBuffer())
+  app.dispatchRender()
 
   # If window mode is enabled, render windows on top
   if app.windowMode and not app.windowManager.isNil:
@@ -251,35 +303,6 @@ proc render(app: App) =
     app.forceNextRender = false
   else:
     app.renderer.render()
-
-proc dispatchEvent*(app: App, event: Event): bool =
-  ## Invoke the configured event handler for the given event.
-  ##
-  ## Prefers the App-context handler when both are set. Returns `true` when
-  ## no handler is configured. Primarily used internally by `tick`, but
-  ## exported so tests and callers can trigger the handler directly.
-  if app.eventHandlerWithApp != nil:
-    app.eventHandlerWithApp(event, app)
-  elif app.eventHandler != nil:
-    app.eventHandler(event)
-  else:
-    true
-
-proc dispatchTimeout*(app: App): bool =
-  ## Invoke the configured timeout handler.
-  ##
-  ## Prefers the App-context handler when both are set. Returns `true` when
-  ## no handler is configured. Primarily used internally by `tick`, but
-  ## exported so tests and callers can trigger the handler directly.
-  if app.timeoutHandlerWithApp != nil:
-    app.timeoutHandlerWithApp(app)
-  elif app.timeoutHandler != nil:
-    app.timeoutHandler()
-  else:
-    true
-
-proc hasTimeoutHandler(app: App): bool {.inline.} =
-  app.timeoutHandlerWithApp != nil or app.timeoutHandler != nil
 
 proc tick(app: App): bool =
   ## Process one application tick (events + render).
@@ -353,12 +376,8 @@ proc tick(app: App): bool =
           break
 
     # Call tick handler between event processing and rendering
-    if app.tickHandlerWithApp != nil:
-      if not app.tickHandlerWithApp(app):
-        return false
-    elif app.tickHandler != nil:
-      if not app.tickHandler():
-        return false
+    if not app.dispatchTick():
+      return false
 
     # Render only if enough time has passed for target FPS
     if app.fpsMonitor.shouldRender():

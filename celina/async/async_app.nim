@@ -22,12 +22,9 @@ type
     fpsMonitor: FpsMonitor
     windowManager: AsyncWindowManager
     shouldQuit: bool
-    eventHandler: proc(event: Event): Future[bool] {.async.}
-    eventHandlerWithApp: proc(event: Event, app: AsyncApp): Future[bool] {.async.}
-    renderHandler: proc(buffer: var Buffer)
-    renderHandlerWithApp: proc(buffer: var Buffer, app: AsyncApp)
-    tickHandler: proc(): Future[bool] {.async.}
-    tickHandlerWithApp: proc(app: AsyncApp): Future[bool] {.async.}
+    eventHandler: proc(event: Event, app: AsyncApp): Future[bool] {.async.}
+    renderHandler: proc(buffer: var Buffer, app: AsyncApp)
+    tickHandler: proc(app: AsyncApp): Future[bool] {.async.}
     windowMode: bool ## Whether to use window management
     config: AppConfig
     resizeState: ResizeState ## Shared resize detection state (from tick_common)
@@ -36,8 +33,7 @@ type
     frameCounter: int ## Total frame count
     lastFrameTime: MonoTime ## Timestamp of last frame
     applicationTimeout: int ## Application timeout in ms (0 = disabled)
-    timeoutHandler: proc(): Future[bool] {.async.}
-    timeoutHandlerWithApp: proc(app: AsyncApp): Future[bool] {.async.}
+    timeoutHandler: proc(app: AsyncApp): Future[bool] {.async.}
     lastEventTime: MonoTime ## Timestamp of last received event
 
   AsyncAppError* = object of CatchableError
@@ -74,11 +70,8 @@ proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
     fpsMonitor: newFpsMonitor(if config.targetFps > 0: config.targetFps else: 60),
     shouldQuit: false,
     eventHandler: nil,
-    eventHandlerWithApp: nil,
     renderHandler: nil,
-    renderHandlerWithApp: nil,
     timeoutHandler: nil,
-    timeoutHandlerWithApp: nil,
     windowMode: config.windowMode,
     config: config,
     resizeState: initResizeState(termSize.width, termSize.height),
@@ -116,8 +109,14 @@ proc onEventAsync*(app: AsyncApp, handler: proc(event: Event): Future[bool] {.as
   ##     discard
   ##   return true  # Continue running
   ## ```
-  app.eventHandler = handler
-  app.eventHandlerWithApp = nil
+  app.eventHandler =
+    if handler.isNil:
+      nil
+    else:
+      # Bind to a local so the wrapping closure captures the handler value.
+      let captured = handler
+      proc(event: Event, app: AsyncApp): Future[bool] {.async.} =
+        return await captured(event)
 
 proc onEventAsync*(
     app: AsyncApp, handler: proc(event: Event, app: AsyncApp): Future[bool] {.async.}
@@ -138,8 +137,7 @@ proc onEventAsync*(
   ##     return true
   ##   return true
   ## ```
-  app.eventHandlerWithApp = handler
-  app.eventHandler = nil
+  app.eventHandler = handler
 
 proc onRenderAsync*(app: AsyncApp, handler: proc(buffer: var Buffer)) =
   ## Set the render handler for the application
@@ -155,8 +153,13 @@ proc onRenderAsync*(app: AsyncApp, handler: proc(buffer: var Buffer)) =
   ## app.onRenderAsync proc(buffer: var Buffer) =
   ##   buffer.setString(10, 5, "Hello!", defaultStyle())
   ## ```
-  app.renderHandler = handler
-  app.renderHandlerWithApp = nil
+  app.renderHandler =
+    if handler.isNil:
+      nil
+    else:
+      let captured = handler
+      proc(buffer: var Buffer, app: AsyncApp) =
+        captured(buffer)
 
 proc onRenderAsync*(app: AsyncApp, handler: proc(buffer: var Buffer, app: AsyncApp)) =
   ## Set the render handler with AsyncApp context for the application
@@ -171,22 +174,25 @@ proc onRenderAsync*(app: AsyncApp, handler: proc(buffer: var Buffer, app: AsyncA
   ##   let fps = app.getCurrentFps()
   ##   buffer.setString(0, 0, &"FPS: {fps:.1f}", defaultStyle())
   ## ```
-  app.renderHandlerWithApp = handler
-  app.renderHandler = nil
+  app.renderHandler = handler
 
 proc onTickAsync*(app: AsyncApp, handler: proc(): Future[bool] {.async.}) =
   ## Set the async tick handler called each frame between event processing and rendering.
   ##
   ## Return true to continue running, false to quit.
-  app.tickHandler = handler
-  app.tickHandlerWithApp = nil
+  app.tickHandler =
+    if handler.isNil:
+      nil
+    else:
+      let captured = handler
+      proc(app: AsyncApp): Future[bool] {.async.} =
+        return await captured()
 
 proc onTickAsync*(app: AsyncApp, handler: proc(app: AsyncApp): Future[bool] {.async.}) =
   ## Set the async tick handler with AsyncApp context called each frame between event processing and rendering.
   ##
   ## Return true to continue running, false to quit.
-  app.tickHandlerWithApp = handler
-  app.tickHandler = nil
+  app.tickHandler = handler
 
 # Application timeout
 proc onTimeoutAsync*(app: AsyncApp, handler: proc(): Future[bool] {.async.}) =
@@ -198,8 +204,13 @@ proc onTimeoutAsync*(app: AsyncApp, handler: proc(): Future[bool] {.async.}) =
   ##
   ## For access to the AsyncApp object, use the overload that accepts
   ## `proc(app: AsyncApp): Future[bool]` instead.
-  app.timeoutHandler = handler
-  app.timeoutHandlerWithApp = nil
+  app.timeoutHandler =
+    if handler.isNil:
+      nil
+    else:
+      let captured = handler
+      proc(app: AsyncApp): Future[bool] {.async.} =
+        return await captured()
 
 proc onTimeoutAsync*(
     app: AsyncApp, handler: proc(app: AsyncApp): Future[bool] {.async.}
@@ -209,8 +220,7 @@ proc onTimeoutAsync*(
   ## The handler is called when no input events are received within
   ## the application timeout period. Return true to continue running,
   ## false to quit the application.
-  app.timeoutHandlerWithApp = handler
-  app.timeoutHandler = nil
+  app.timeoutHandler = handler
 
 proc setApplicationTimeout*(app: AsyncApp, timeoutMs: int) =
   ## Set the application timeout in milliseconds.
@@ -279,20 +289,60 @@ proc handleResizeAsync(app: AsyncApp) {.async.} =
   # Force full render on next frame to ensure clean redraw
   app.forceNextRender = true
 
+proc dispatchEventAsync*(app: AsyncApp, event: Event): Future[bool] {.async.} =
+  ## Invoke the configured async event handler for the given event.
+  ##
+  ## Returns `true` when no handler is configured. Primarily used internally
+  ## by `tickAsync`, but exported so tests and callers can trigger the handler
+  ## directly.
+  if app.eventHandler != nil:
+    return await app.eventHandler(event, app)
+  else:
+    return true
+
+proc dispatchRenderAsync*(app: AsyncApp) =
+  ## Invoke the configured render handler against the app's current buffer.
+  ##
+  ## Does nothing when no handler is configured. Primarily used internally
+  ## by `renderAsync`, but exported so tests and callers can trigger the
+  ## handler directly.
+  if app.renderHandler != nil:
+    {.cast(gcsafe).}:
+      {.cast(raises: []).}:
+        app.renderHandler(app.renderer.getBuffer(), app)
+
+proc dispatchTickAsync*(app: AsyncApp): Future[bool] {.async.} =
+  ## Invoke the configured async tick handler.
+  ##
+  ## Returns `true` when no handler is configured. Primarily used internally
+  ## by `tickAsync`, but exported so tests and callers can trigger the handler
+  ## directly.
+  if app.tickHandler != nil:
+    return await app.tickHandler(app)
+  else:
+    return true
+
+proc dispatchTimeoutAsync*(app: AsyncApp): Future[bool] {.async.} =
+  ## Invoke the configured async timeout handler.
+  ##
+  ## Returns `true` when no handler is configured. Primarily used internally
+  ## by `tickAsync`, but exported so tests and callers can trigger the handler
+  ## directly.
+  if app.timeoutHandler != nil:
+    return await app.timeoutHandler(app)
+  else:
+    return true
+
+proc hasTimeoutHandler(app: AsyncApp): bool {.inline.} =
+  app.timeoutHandler != nil
+
 proc renderAsync(app: AsyncApp) {.async.} =
   ## Render the current frame asynchronously
   # Clear the buffer
   app.renderer.clear()
 
   # Call user render handler first (for background content)
-  if app.renderHandlerWithApp != nil:
-    {.cast(gcsafe).}:
-      {.cast(raises: []).}:
-        app.renderHandlerWithApp(app.renderer.getBuffer(), app)
-  elif app.renderHandler != nil:
-    {.cast(gcsafe).}:
-      {.cast(raises: []).}:
-        app.renderHandler(app.renderer.getBuffer())
+  app.dispatchRenderAsync()
 
   # If window mode is enabled, render windows on top
   if app.windowMode and not app.windowManager.isNil:
@@ -304,35 +354,6 @@ proc renderAsync(app: AsyncApp) {.async.} =
     app.forceNextRender = false
   else:
     await app.renderer.renderAsync()
-
-proc dispatchEventAsync*(app: AsyncApp, event: Event): Future[bool] {.async.} =
-  ## Invoke the configured async event handler for the given event.
-  ##
-  ## Prefers the AsyncApp-context handler when both are set. Returns `true`
-  ## when no handler is configured. Primarily used internally by `tickAsync`,
-  ## but exported so tests and callers can trigger the handler directly.
-  if app.eventHandlerWithApp != nil:
-    return await app.eventHandlerWithApp(event, app)
-  elif app.eventHandler != nil:
-    return await app.eventHandler(event)
-  else:
-    return true
-
-proc dispatchTimeoutAsync*(app: AsyncApp): Future[bool] {.async.} =
-  ## Invoke the configured async timeout handler.
-  ##
-  ## Prefers the AsyncApp-context handler when both are set. Returns `true`
-  ## when no handler is configured. Primarily used internally by `tickAsync`,
-  ## but exported so tests and callers can trigger the handler directly.
-  if app.timeoutHandlerWithApp != nil:
-    return await app.timeoutHandlerWithApp(app)
-  elif app.timeoutHandler != nil:
-    return await app.timeoutHandler()
-  else:
-    return true
-
-proc hasTimeoutHandler(app: AsyncApp): bool {.inline.} =
-  app.timeoutHandlerWithApp != nil or app.timeoutHandler != nil
 
 proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
   ## Process one async application tick (events + render).
@@ -408,12 +429,8 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
           break
 
     # Call tick handler between event processing and rendering
-    if app.tickHandlerWithApp != nil:
-      if not (await app.tickHandlerWithApp(app)):
-        return false
-    elif app.tickHandler != nil:
-      if not (await app.tickHandler()):
-        return false
+    if not (await app.dispatchTickAsync()):
+      return false
 
     # Render only if enough time has passed for target FPS
     if app.fpsMonitor.shouldRender():
