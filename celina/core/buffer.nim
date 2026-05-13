@@ -225,7 +225,6 @@ proc setString*(
   if not buffer.isValidPos(x, y):
     return
 
-  let startX = x
   var currentX = x
 
   try:
@@ -247,11 +246,6 @@ proc setString*(
           buffer[currentX + 1, y] = cell("", style, hyperlink)
 
       currentX += width
-
-    # Mark the changed region as dirty
-    if currentX > startX:
-      buffer.markDirty(startX, y)
-      buffer.markDirty(currentX - 1, y)
   except ValueError:
     # Handle malformed Unicode gracefully by stopping
     return
@@ -405,7 +399,6 @@ proc setRunes*(
 ) =
   ## Set a sequence of runes starting at the given coordinates
   ## If hyperlink is provided, the text becomes a clickable link (OSC 8)
-  let startX = x
   var currentX = x
 
   for rune in runes:
@@ -421,11 +414,6 @@ proc setRunes*(
         buffer[currentX + 1, y] = cell("", style, hyperlink)
 
     currentX += width
-
-  # Mark the changed region as dirty
-  if currentX > startX:
-    buffer.markDirty(startX, y)
-    buffer.markDirty(currentX - 1, y)
 
 proc setRunes*(
     buffer: var Buffer,
