@@ -30,10 +30,9 @@ export
 
 type
   ## Async window manager for cooperative multitasking
-  AsyncWindowManager* = ref object
+  AsyncWindowManager* = ref object of BaseWindowManager
     windows: seq[Window]
     nextWindowId: int
-    focusedWindow: Option[WindowId]
 
   AsyncWindowError* = object of CatchableError
 
@@ -49,12 +48,6 @@ proc getWindowHelper(awm: AsyncWindowManager, windowId: WindowId): Option[Window
 proc focusWindowHelper(awm: AsyncWindowManager, windowIndex: int, window: Window) =
   ## Internal helper to focus a window and bring it to front.
   ## Does not check visibility - caller must ensure window is visible.
-  # Unfocus all windows
-  for w in awm.windows:
-    if not w.isNil:
-      w.focused = false
-  # Focus target window and bring to front
-  window.focused = true
   awm.focusedWindow = some(window.id)
   awm.windows.delete(windowIndex)
   awm.windows.add(window)
@@ -86,9 +79,12 @@ proc getWindowAsync*(
   return none(Window)
 
 proc addWindowAsync*(
-    awm: AsyncWindowManager, window: Window
+    awm: AsyncWindowManager, window: Window, autoFocus: bool = true
 ): Future[WindowId] {.async.} =
-  ## Add a window to the manager and return its ID asynchronously
+  ## Add a window to the manager and return its ID asynchronously.
+  ## The first window added is always auto-focused, and modal windows are
+  ## always focused regardless of `autoFocus`. Pass `autoFocus = false`
+  ## to add a non-modal subsequent window without taking focus.
   if awm.isNil or window.isNil:
     raise newException(AsyncWindowError, "AsyncWindowManager or Window is nil")
 
@@ -96,12 +92,11 @@ proc addWindowAsync*(
   awm.nextWindowId.inc()
 
   window.id = WindowId(newId)
+  window.manager = awm
   awm.windows.add(window)
 
-  # Auto-focus if it's the first window or marked for focus
-  if awm.windows.len == 1 or window.focused:
+  if awm.windows.len == 1 or autoFocus or window.modal:
     awm.focusedWindow = some(window.id)
-    window.focused = true
 
   await sleepMs(0)
   return window.id
@@ -113,29 +108,28 @@ proc removeWindowAsync*(
   ## All window resources are automatically freed by Nim's GC
   await sleepMs(0)
 
-  var windowToRemove: Option[Window] = none(Window)
-  for window in awm.windows:
+  var removed: Window = nil
+  for i, window in awm.windows:
     if window.id == windowId:
-      windowToRemove = some(window)
+      removed = window
+      awm.windows.delete(i)
       break
 
-  if windowToRemove.isSome():
-    # Remove from windows list
-    awm.windows = awm.windows.filterIt(it.id != windowId)
-
-    # Update focused window if necessary
-    if awm.focusedWindow.isSome() and awm.focusedWindow.get() == windowId:
-      # Focus the next available window
-      if awm.windows.len > 0:
-        let nextWindow = awm.windows[^1] # Focus the top window
-        awm.focusedWindow = some(nextWindow.id)
-        nextWindow.focused = true
-      else:
-        awm.focusedWindow = none(WindowId)
-
-    return true
-  else:
+  if removed.isNil:
     return false
+
+  removed.manager = nil
+
+  # Update focused window if necessary
+  if awm.focusedWindow.isSome() and awm.focusedWindow.get() == windowId:
+    # Focus the next available window
+    if awm.windows.len > 0:
+      let nextWindow = awm.windows[^1] # Focus the top window
+      awm.focusedWindow = some(nextWindow.id)
+    else:
+      awm.focusedWindow = none(WindowId)
+
+  return true
 
 proc focusWindowAsync*(
     awm: AsyncWindowManager, windowId: WindowId
@@ -146,15 +140,9 @@ proc focusWindowAsync*(
 
   await sleepMs(0)
 
-  # Unfocus all windows
-  for window in awm.windows:
-    if not window.isNil:
-      window.focused = false
-
   # Focus the target window
   for i, window in awm.windows:
     if not window.isNil and window.id == windowId and window.visible:
-      window.focused = true
       awm.focusedWindow = some(windowId)
 
       # Bring to front by moving to end of sequence
@@ -488,8 +476,13 @@ proc getFocusedWindowIdSync*(awm: AsyncWindowManager): Option[WindowId] =
     return none(WindowId)
   result = awm.focusedWindow
 
-proc addWindowSync*(awm: AsyncWindowManager, window: Window): WindowId =
-  ## Add a window to the manager synchronously and return its ID
+proc addWindowSync*(
+    awm: AsyncWindowManager, window: Window, autoFocus: bool = true
+): WindowId =
+  ## Add a window to the manager synchronously and return its ID.
+  ## The first window added is always auto-focused, and modal windows are
+  ## always focused regardless of `autoFocus`. Pass `autoFocus = false`
+  ## to add a non-modal subsequent window without taking focus.
   if awm.isNil or window.isNil:
     raise newException(AsyncWindowError, "AsyncWindowManager or Window is nil")
 
@@ -497,40 +490,38 @@ proc addWindowSync*(awm: AsyncWindowManager, window: Window): WindowId =
   awm.nextWindowId.inc()
 
   window.id = WindowId(newId)
+  window.manager = awm
   awm.windows.add(window)
 
-  # Auto-focus if it's the first window or marked for focus
-  if awm.windows.len == 1 or window.focused:
+  if awm.windows.len == 1 or autoFocus or window.modal:
     awm.focusedWindow = some(window.id)
-    window.focused = true
 
   return window.id
 
 proc removeWindowSync*(awm: AsyncWindowManager, windowId: WindowId): bool =
   ## Remove a window from the manager synchronously
-  var windowToRemove: Option[Window] = none(Window)
-  for window in awm.windows:
+  var removed: Window = nil
+  for i, window in awm.windows:
     if window.id == windowId:
-      windowToRemove = some(window)
+      removed = window
+      awm.windows.delete(i)
       break
 
-  if windowToRemove.isSome():
-    # Remove from windows list
-    awm.windows = awm.windows.filterIt(it.id != windowId)
-
-    # Update focused window if necessary
-    if awm.focusedWindow.isSome() and awm.focusedWindow.get() == windowId:
-      # Focus the next available window
-      if awm.windows.len > 0:
-        let nextWindow = awm.windows[^1]
-        awm.focusedWindow = some(nextWindow.id)
-        nextWindow.focused = true
-      else:
-        awm.focusedWindow = none(WindowId)
-
-    return true
-  else:
+  if removed.isNil:
     return false
+
+  removed.manager = nil
+
+  # Update focused window if necessary
+  if awm.focusedWindow.isSome() and awm.focusedWindow.get() == windowId:
+    # Focus the next available window
+    if awm.windows.len > 0:
+      let nextWindow = awm.windows[^1]
+      awm.focusedWindow = some(nextWindow.id)
+    else:
+      awm.focusedWindow = none(WindowId)
+
+  return true
 
 proc focusWindowSync*(awm: AsyncWindowManager, windowId: WindowId): bool =
   ## Focus a specific window synchronously

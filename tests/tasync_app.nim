@@ -384,13 +384,13 @@ when hasAsyncSupport:
       let window1 = newWindow(rect(10, 10, 30, 15), "Window 1")
       let window2 = newWindow(rect(20, 20, 25, 12), "Window 2")
 
-      let id1 = app.addWindow(window1)
-      discard app.addWindow(window2)
+      discard app.addWindow(window1)
+      let id2 = app.addWindow(window2)
 
-      # First window should be focused
+      # Second add takes focus with default autoFocus = true.
       let focusedOpt = app.getFocusedWindow()
       check focusedOpt.isSome()
-      check focusedOpt.get().id == id1
+      check focusedOpt.get().id == id2
 
   suite "AsyncApp Integration Tests":
     test "multiple windows management":
@@ -429,14 +429,8 @@ when hasAsyncSupport:
       let id1 = app.addWindow(window1)
       let id2 = app.addWindow(window2)
 
-      # First window should be focused initially
+      # Second window is focused initially (autoFocus defaults to true).
       var focusedOpt = app.getFocusedWindow()
-      check focusedOpt.isSome()
-      check focusedOpt.get().id == id1
-
-      # Focus second window
-      discard app.focusWindow(id2)
-      focusedOpt = app.getFocusedWindow()
       check focusedOpt.isSome()
       check focusedOpt.get().id == id2
 
@@ -445,6 +439,12 @@ when hasAsyncSupport:
       focusedOpt = app.getFocusedWindow()
       check focusedOpt.isSome()
       check focusedOpt.get().id == id1
+
+      # Focus second window again
+      discard app.focusWindow(id2)
+      focusedOpt = app.getFocusedWindow()
+      check focusedOpt.isSome()
+      check focusedOpt.get().id == id2
 
   suite "AsyncApp Window APIs":
     test "getWindows returns all windows":
@@ -500,9 +500,9 @@ when hasAsyncSupport:
       check app.getFocusedWindowId().isSome()
       check app.getFocusedWindowId().get() == id1
 
-      discard app.addWindow(window2)
-      # First window should still be focused
-      check app.getFocusedWindowId().get() == id1
+      let id2 = app.addWindow(window2)
+      # Second window now focused (autoFocus defaults to true).
+      check app.getFocusedWindowId().get() == id2
 
     test "getFocusedWindowId with no window mode returns none":
       let app = newAsyncApp()
@@ -536,6 +536,44 @@ when hasAsyncSupport:
     test "getWindowInfo with no window mode returns none":
       let app = newAsyncApp()
       check app.getWindowInfo(WindowId(1)).isNone()
+
+    test "AsyncApp.addWindow autoFocus parameter":
+      let config = AppConfig(windowMode: true)
+      let app = newAsyncApp(config)
+
+      # First window is always focused regardless of autoFocus.
+      let first = newWindow(rect(0, 0, 10, 10), "First")
+      let firstId = app.addWindow(first, autoFocus = false)
+      check first.focused == true
+      check app.getFocusedWindowId() == some(firstId)
+
+      # autoFocus = false keeps the existing focus.
+      let second = newWindow(rect(10, 10, 10, 10), "Second")
+      discard app.addWindow(second, autoFocus = false)
+      check first.focused == true
+      check second.focused == false
+
+      # autoFocus = true (default) takes focus.
+      let third = newWindow(rect(20, 20, 10, 10), "Third")
+      let thirdId = app.addWindow(third)
+      check third.focused == true
+      check first.focused == false
+      check app.getFocusedWindowId() == some(thirdId)
+
+    test "AsyncApp.addWindow forces focus for modal windows":
+      let config = AppConfig(windowMode: true)
+      let app = newAsyncApp(config)
+
+      let first = newWindow(rect(0, 0, 10, 10), "First")
+      discard app.addWindow(first)
+      check first.focused == true
+
+      # Modal window must take focus even with autoFocus = false.
+      let dialog = newWindow(rect(5, 5, 10, 10), "Dialog", modal = true)
+      let dialogId = app.addWindow(dialog, autoFocus = false)
+      check dialog.focused == true
+      check first.focused == false
+      check app.getFocusedWindowId() == some(dialogId)
 
   suite "AsyncApp quit":
     test "quit sets running to false":

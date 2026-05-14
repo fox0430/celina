@@ -49,6 +49,11 @@ type
   WindowResizeHandler* = proc(window: Window, newSize: Size): bool
   EventHandler* = proc(event: var WindowEvent): bool
 
+  BaseWindowManager* = ref object of RootObj
+    ## Common base for window managers. Holds the single source of truth
+    ## for which window is focused.
+    focusedWindow*: Option[WindowId]
+
   Window* = ref object ## Represents a window within the terminal
     id*: WindowId
     area*: Rect ## Window position and size
@@ -59,7 +64,13 @@ type
     zIndex*: int ## Z-order for overlapping windows
     border*: Option[WindowBorder] ## Border configuration
     visible*: bool ## Whether window is visible
-    focused*: bool ## Whether window has focus
+    managerRef {.cursor.}: BaseWindowManager
+      ## Owning manager; focus is derived from it. Not exported — read via the
+      ## `manager*` getter, mutated only by manager implementations (which can
+      ## reach this field via an `{.all.}` import).
+      ## `{.cursor.}` makes this a non-counted back-reference so that
+      ## the parent/child cycle (manager <-> windows) is broken under
+      ## --mm:arc/orc and the window does not keep the manager alive.
     resizable*: bool ## Whether window can be resized
     movable*: bool ## Whether window can be moved
     modal*: bool ## Whether window is modal
@@ -82,10 +93,10 @@ type
     movable*: bool
     modal*: bool
 
-  WindowManager* = ref object ## Manages multiple windows and their interactions
+  WindowManager* = ref object of BaseWindowManager
+    ## Manages multiple windows and their interactions
     windows*: seq[Window]
     nextWindowId: int
-    focusedWindow*: Option[WindowId]
     modalWindow*: Option[WindowId]
 
 # Window ID utilities
@@ -93,6 +104,22 @@ type
 proc `==`*(a, b: WindowId): bool {.borrow.}
 proc `$`*(id: WindowId): string =
   $int(id)
+
+proc manager*(window: Window): BaseWindowManager {.inline.} =
+  ## The window's owning manager, or nil if not attached.
+  window.managerRef
+
+proc `manager=`*(window: Window, m: BaseWindowManager) {.inline.} =
+  ## Set the window's owning manager. Intended for use by manager
+  ## implementations to attach/detach windows; application code should not
+  ## call this directly.
+  window.managerRef = m
+
+proc focused*(window: Window): bool {.inline.} =
+  ## Whether this window currently has focus.
+  ## Computed from the owning manager's focusedWindow so there is a
+  ## single source of truth.
+  window.managerRef != nil and window.managerRef.focusedWindow == some(window.id)
 
 proc `$`*(window: Window): string =
   ## String representation of a Window for debugging
@@ -156,7 +183,7 @@ proc newWindow*(
     zIndex: 0,
     border: border,
     visible: true,
-    focused: false,
+    managerRef: nil,
     resizable: resizable,
     movable: movable,
     modal: modal,
@@ -422,15 +449,9 @@ proc getWindow*(wm: WindowManager, windowId: WindowId): Option[Window] =
 proc focusWindow*(wm: WindowManager, windowId: WindowId): bool =
   ## Focus a specific window
   ## Returns true if the window was found and focused, false otherwise
-  # Unfocus all windows
-  for window in wm.windows:
-    window.focused = false
-
-  # Focus the specified window
   let windowOpt = wm.getWindow(windowId)
   if windowOpt.isSome():
     let window = windowOpt.get()
-    window.focused = true
     wm.focusedWindow = some(windowId)
 
     # Bring window to front (highest z-index) only when explicitly focusing
@@ -448,24 +469,24 @@ proc focusWindow*(wm: WindowManager, windowId: WindowId): bool =
     return true
   return false
 
-proc addWindow*(wm: WindowManager, window: Window): WindowId =
-  ## Add a window to the manager and return its ID
+proc addWindow*(wm: WindowManager, window: Window, autoFocus: bool = true): WindowId =
+  ## Add a window to the manager and return its ID.
+  ## The first window added is always auto-focused, and modal windows are
+  ## always focused regardless of `autoFocus` (a modal that is not focused
+  ## would silently grab events). For other windows, `autoFocus = true`
+  ## (default) takes focus; pass `false` to add without disturbing the
+  ## current focus.
   window.id = WindowId(wm.nextWindowId)
   inc wm.nextWindowId
 
   # Set Z-index based on current window count (before adding)
   window.zIndex = wm.windows.len
 
+  window.managerRef = wm
   wm.windows.add(window)
 
-  # Unfocus all other windows
-  for w in wm.windows:
-    if w.id != window.id:
-      w.focused = false
-
-  # Focus the new window and update manager state
-  window.focused = true
-  wm.focusedWindow = some(window.id)
+  if wm.windows.len == 1 or autoFocus or window.modal:
+    wm.focusedWindow = some(window.id)
 
   # Set as modal if the window is modal
   if window.modal:
@@ -477,12 +498,17 @@ proc removeWindow*(wm: WindowManager, windowId: WindowId): bool =
   ## Remove a window from the manager
   ## Returns true if the window was found and removed, false otherwise
   ## All window resources (buffer, title, etc.) are automatically freed by Nim's GC
-  let originalLen = wm.windows.len
-  wm.windows = wm.windows.filterIt(it.id != windowId)
+  var removed: Window = nil
+  for i, w in wm.windows:
+    if w.id == windowId:
+      removed = w
+      wm.windows.delete(i)
+      break
 
-  # Check if a window was actually removed
-  if wm.windows.len == originalLen:
+  if removed.isNil:
     return false
+
+  removed.managerRef = nil
 
   # Update focus if the focused window was removed
   if wm.focusedWindow.isSome():

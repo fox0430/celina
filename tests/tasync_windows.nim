@@ -112,17 +112,19 @@ suite "AsyncWindows Configuration and Types":
     check id1 != id2
 
   test "Window state management":
+    let awm = newAsyncWindowManager()
     let window = newWindow(rect(0, 0, 10, 10), "State Window")
 
-    # Test initial state
+    # Test initial state (before being added to a manager)
     check window.visible == true
     check window.focused == false
 
-    # Test state changes
+    # Test visibility change
     window.visible = false
     check window.visible == false
 
-    window.focused = true
+    # Focus is derived from the owning manager
+    discard awm.addWindowSync(window)
     check window.focused == true
 
 suite "AsyncWindows Event Types":
@@ -278,7 +280,8 @@ suite "AsyncWindows Async Operations":
     # Verify windows were added
     let beforeStats = awm.getStats()
     check beforeStats.windowCount == 2
-    check beforeStats.focusedId == id1.int # First window is auto-focused
+    # Second add takes focus with default autoFocus = true.
+    check beforeStats.focusedId == id2.int
 
     # Remove windows - GC will handle cleanup automatically
     discard waitFor awm.removeWindowAsync(id1)
@@ -311,6 +314,84 @@ suite "AsyncWindows Async Operations":
     check removeStats.windowCount == 0
     check removeStats.focusedId == -1
 
+  test "addWindow autoFocus parameter":
+    let awm = newAsyncWindowManager()
+
+    # First window is always auto-focused regardless of autoFocus.
+    let first = newWindow(rect(0, 0, 10, 10), "First")
+    let firstId = awm.addWindowSync(first, autoFocus = false)
+    check first.focused == true
+    check awm.getStats().focusedId == firstId.int
+
+    # Subsequent window with autoFocus=false does not steal focus.
+    let second = newWindow(rect(10, 10, 10, 10), "Second")
+    discard awm.addWindowSync(second, autoFocus = false)
+    check first.focused == true
+    check second.focused == false
+
+    # Subsequent window with default autoFocus (true) takes focus.
+    let third = newWindow(rect(20, 20, 10, 10), "Third")
+    let thirdId = awm.addWindowSync(third)
+    check third.focused == true
+    check first.focused == false
+    check awm.getStats().focusedId == thirdId.int
+
+    # Async variant defaults the same way.
+    let fourth = newWindow(rect(30, 30, 10, 10), "Fourth")
+    let fourthId = waitFor awm.addWindowAsync(fourth)
+    check fourth.focused == true
+    check awm.getStats().focusedId == fourthId.int
+
+  test "modal window always takes focus on add":
+    let awm = newAsyncWindowManager()
+
+    # Seed with a non-modal focused window.
+    let first = newWindow(rect(0, 0, 10, 10), "First")
+    discard awm.addWindowSync(first)
+    check first.focused == true
+
+    # Modal window must take focus even when autoFocus = false.
+    let dialog = newWindow(rect(5, 5, 10, 10), "Dialog", modal = true)
+    let dialogId = awm.addWindowSync(dialog, autoFocus = false)
+    check dialog.focused == true
+    check first.focused == false
+    check awm.getStats().focusedId == dialogId.int
+
+  test "removeWindowAsync refocuses next window (focused getter)":
+    let awm = newAsyncWindowManager()
+    let window1 = newWindow(rect(0, 0, 10, 10), "First")
+    let window2 = newWindow(rect(10, 10, 10, 10), "Second")
+
+    discard waitFor awm.addWindowAsync(window1)
+    let id2 = waitFor awm.addWindowAsync(window2)
+
+    # window2 is focused (autoFocus default).
+    check window2.focused == true
+    check window1.focused == false
+
+    # Removing the focused window must promote window1 via the getter.
+    check (waitFor awm.removeWindowAsync(id2)) == true
+    check window1.focused == true
+    check awm.getStats().focusedId == window1.id.int
+
+  test "focusWindowAsync with invalid id does not disturb existing focus":
+    let awm = newAsyncWindowManager()
+    let window1 = newWindow(rect(0, 0, 10, 10), "First")
+    let window2 = newWindow(rect(10, 10, 10, 10), "Second")
+
+    discard waitFor awm.addWindowAsync(window1)
+    let id2 = waitFor awm.addWindowAsync(window2)
+
+    check window2.focused == true
+
+    # Focus a window that was never added.
+    check (waitFor awm.focusWindowAsync(WindowId(9999))) == false
+
+    # Existing focus is intact.
+    check window2.focused == true
+    check window1.focused == false
+    check awm.getStats().focusedId == id2.int
+
   test "focusWindowAsync functionality":
     let awm = newAsyncWindowManager()
 
@@ -321,22 +402,22 @@ suite "AsyncWindows Async Operations":
     let id1 = waitFor awm.addWindowAsync(window1)
     let id2 = waitFor awm.addWindowAsync(window2)
 
-    # id1 should be focused initially (first window auto-focused)
+    # id2 is focused initially (autoFocus defaults to true).
     let initialStats = awm.getStats()
-    check initialStats.focusedId == id1.int
+    check initialStats.focusedId == id2.int
 
-    # Focus second window
-    let focused = waitFor awm.focusWindowAsync(id2)
+    # Switch focus to the first window.
+    let focused = waitFor awm.focusWindowAsync(id1)
     check focused == true
 
     # Verify focus changed
     let focusStats = awm.getStats()
-    check focusStats.focusedId == id2.int
+    check focusStats.focusedId == id1.int
 
     # Get focused window
     let focusedWindowOpt = waitFor awm.getFocusedWindowAsync()
     check focusedWindowOpt.isSome()
-    check focusedWindowOpt.get().title == "Window 2"
+    check focusedWindowOpt.get().title == "Window 1"
 
   test "getWindowAsync and window operations":
     let awm = newAsyncWindowManager()
