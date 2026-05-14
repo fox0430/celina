@@ -210,15 +210,6 @@ proc setup(app: App) =
   terminal.hideCursor()
   terminal.clearScreen()
 
-proc cleanup(app: App) =
-  ## Internal cleanup procedure to restore terminal state.
-  ##
-  ## Delegates the disable sequence to `terminal.cleanup()` so the LIFO
-  ## ordering (raw mode before alternate screen) is defined in one place.
-  ## Each underlying `disableX` is idempotent and state-gated, so calling
-  ## the full sequence is safe regardless of `app.config` flags.
-  app.terminal.cleanup()
-
 proc handleResize(app: App) =
   ## Handle terminal resize events
   app.terminal.updateSize()
@@ -381,31 +372,11 @@ proc tick(app: App): bool =
   except CatchableError:
     return false
 
-proc run*(app: App) =
-  ## Run the application main loop
-  try:
-    app.setup()
-    app.running = true
-
-    # Main application loop
-    while app.tick():
-      discard
-  finally:
-    app.running = false
-    try:
-      app.cleanup()
-    except CatchableError:
-      discard
-
-proc quit*(app: App) =
-  ## Signal the application to quit gracefully
-  app.shouldQuit = true
-
 proc restoreTerminal*(app: App) =
-  ## Best-effort terminal state restoration for use in crash handlers.
+  ## Best-effort terminal state restoration.
   ##
-  ## Intended for situations where the normal cleanup path is unavailable
-  ## (e.g., signal handlers, unhandled exception hooks). Delegates to
+  ## Used internally by `run()` on exit and safe to call from crash handlers
+  ## (signal handlers, unhandled exception hooks). Delegates to
   ## `terminal.cleanup()`, which guards each disable individually and
   ## therefore does not raise. The LIFO disable sequence (synchronized
   ## output, focus events, bracketed paste, mouse, raw mode, alternate
@@ -419,6 +390,23 @@ proc restoreTerminal*(app: App) =
   ## setControlCHook(onCrash)
   ## ```
   app.terminal.cleanup()
+
+proc run*(app: App) =
+  ## Run the application main loop
+  try:
+    app.setup()
+    app.running = true
+
+    # Main application loop
+    while app.tick():
+      discard
+  finally:
+    app.running = false
+    app.restoreTerminal()
+
+proc quit*(app: App) =
+  ## Signal the application to quit gracefully
+  app.shouldQuit = true
 
 # Mouse control
 proc enableMouse*(app: App) =
