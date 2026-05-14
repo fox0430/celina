@@ -636,11 +636,17 @@ proc enableWindowMode*(app: AsyncApp) =
   if app.windowManager.isNil:
     app.windowManager = newAsyncWindowManager()
 
-proc addWindow*(app: AsyncApp, window: Window): WindowId =
-  ## Add a window to the application
+proc addWindow*(app: AsyncApp, window: Window, autoFocus: bool = true): WindowId =
+  ## Add a window to the application.
+  ##
+  ## The first window added is always auto-focused, and modal windows are
+  ## always focused regardless of `autoFocus`. The default (`autoFocus = true`)
+  ## takes focus on add; pass `false` to add a non-modal window without
+  ## disturbing the current focus. See `AsyncWindowManager.addWindowSync` /
+  ## `addWindowAsync` for the full semantics.
   if not app.windowMode:
     app.enableWindowMode()
-  return app.windowManager.addWindowSync(window)
+  return app.windowManager.addWindowSync(window, autoFocus)
 
 proc removeWindow*(app: AsyncApp, windowId: WindowId): bool =
   ## Remove a window from the application

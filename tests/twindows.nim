@@ -137,6 +137,118 @@ suite "WindowManager Tests":
     check wm.getWindow(id1).isNone()
     check wm.getWindow(id2).isSome()
 
+  test "Window.manager is set after addWindow":
+    let wm = newWindowManager()
+    let window = newWindow(rect(10, 10, 30, 15), "Test")
+
+    check window.manager == nil
+    check window.focused == false
+
+    discard wm.addWindow(window)
+
+    check window.manager == BaseWindowManager(wm)
+    check window.focused == true
+
+  test "addWindow autoFocus parameter":
+    let wm = newWindowManager()
+
+    # First window is always auto-focused regardless of autoFocus.
+    let first = newWindow(rect(0, 0, 10, 10), "First")
+    let firstId = wm.addWindow(first, autoFocus = false)
+    check first.focused == true
+    check wm.focusedWindow == some(firstId)
+
+    # Subsequent window with autoFocus=false does not steal focus.
+    let second = newWindow(rect(10, 10, 10, 10), "Second")
+    discard wm.addWindow(second, autoFocus = false)
+    check first.focused == true
+    check second.focused == false
+    check wm.focusedWindow == some(firstId)
+
+    # Subsequent window with autoFocus=true (default) takes focus.
+    let third = newWindow(rect(20, 20, 10, 10), "Third")
+    let thirdId = wm.addWindow(third)
+    check third.focused == true
+    check first.focused == false
+    check second.focused == false
+    check wm.focusedWindow == some(thirdId)
+
+  test "modal window always takes focus on add":
+    let wm = newWindowManager()
+
+    # Seed with a non-modal focused window.
+    let first = newWindow(rect(0, 0, 10, 10), "First")
+    discard wm.addWindow(first)
+    check first.focused == true
+
+    # Modal window must take focus even when autoFocus = false, since a
+    # modal that is not focused would silently grab events anyway.
+    let dialog = newWindow(rect(5, 5, 10, 10), "Dialog", modal = true)
+    let dialogId = wm.addWindow(dialog, autoFocus = false)
+    check dialog.focused == true
+    check first.focused == false
+    check wm.focusedWindow == some(dialogId)
+    check wm.modalWindow == some(dialogId)
+
+  test "removeWindow refocuses next window (focused getter)":
+    # When the focused window is removed, the next window must become
+    # focused as observed through the computed `focused` getter — not just
+    # through wm.focusedWindow.
+    let wm = newWindowManager()
+    let window1 = newWindow(rect(0, 0, 10, 10), "First")
+    let window2 = newWindow(rect(10, 10, 10, 10), "Second")
+
+    discard wm.addWindow(window1)
+    let id2 = wm.addWindow(window2)
+
+    # window2 is focused (autoFocus default).
+    check window2.focused == true
+    check window1.focused == false
+
+    # Removing the focused window must promote window1 via the getter.
+    check wm.removeWindow(id2) == true
+    check window1.focused == true
+    check wm.focusedWindow == some(window1.id)
+
+  test "focusWindow with invalid id does not disturb existing focus":
+    # The old code unfocused every window before focusing the target —
+    # so an invalid id would silently un-focus everything. The new code
+    # derives focus from the manager, so an invalid id is a pure no-op.
+    let wm = newWindowManager()
+    let window1 = newWindow(rect(0, 0, 10, 10), "First")
+    let window2 = newWindow(rect(10, 10, 10, 10), "Second")
+
+    discard wm.addWindow(window1)
+    let id2 = wm.addWindow(window2)
+
+    check window2.focused == true
+
+    # Focus a window that was never added.
+    check wm.focusWindow(WindowId(9999)) == false
+
+    # Existing focus is intact.
+    check window2.focused == true
+    check window1.focused == false
+    check wm.focusedWindow == some(id2)
+
+  test "removeWindow detaches window from manager":
+    let wm = newWindowManager()
+    let window1 = newWindow(rect(10, 10, 30, 15), "Test1")
+    let window2 = newWindow(rect(20, 20, 30, 15), "Test2")
+
+    let id1 = wm.addWindow(window1)
+    discard wm.addWindow(window2)
+
+    # window1 is currently not focused (window2 is), but is still attached.
+    check window1.manager == BaseWindowManager(wm)
+
+    check wm.removeWindow(id1) == true
+
+    # After removal, manager link is cleared and focused getter returns false
+    # regardless of any stale state.
+    check window1.manager == nil
+    check window1.focused == false
+
   test "Focus window management":
     let wm = newWindowManager()
     let window1 = newWindow(rect(10, 10, 30, 15), "Test1")

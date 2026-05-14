@@ -132,12 +132,16 @@ suite "WindowInfo Tests":
       windowArea, "Convert Test", resizable = false, movable = false, modal = true
     )
 
-    # Set some additional properties
+    # Attach to a manager via the public API so the computed `focused`
+    # getter returns true. Override fields afterwards for the test, and
+    # re-align focusedWindow to the overridden id.
+    let wm = newWindowManager()
+    discard wm.addWindow(window)
     window.id = WindowId(42)
     window.state = wsMaximized
     window.zIndex = 5
     window.visible = false
-    window.focused = true
+    wm.focusedWindow = some(window.id)
 
     let info = window.toWindowInfo()
 
@@ -214,3 +218,41 @@ suite "App Window Integration Tests":
     check app.getFocusedWindowId().isNone()
     check app.getWindowInfo(WindowId(1)).isNone()
     check app.getFocusedWindow().isNone()
+
+  test "App.addWindow autoFocus parameter":
+    let config = AppConfig(windowMode: true)
+    let app = newApp(config)
+
+    # First window is always focused regardless of autoFocus.
+    let first = newWindow(rect(0, 0, 10, 10), "First")
+    let firstId = app.addWindow(first, autoFocus = false)
+    check first.focused == true
+    check app.getFocusedWindowId() == some(firstId)
+
+    # autoFocus = false keeps the existing focus.
+    let second = newWindow(rect(10, 10, 10, 10), "Second")
+    discard app.addWindow(second, autoFocus = false)
+    check first.focused == true
+    check second.focused == false
+
+    # autoFocus = true (default) takes focus.
+    let third = newWindow(rect(20, 20, 10, 10), "Third")
+    let thirdId = app.addWindow(third)
+    check third.focused == true
+    check first.focused == false
+    check app.getFocusedWindowId() == some(thirdId)
+
+  test "App.addWindow forces focus for modal windows":
+    let config = AppConfig(windowMode: true)
+    let app = newApp(config)
+
+    let first = newWindow(rect(0, 0, 10, 10), "First")
+    discard app.addWindow(first)
+    check first.focused == true
+
+    # Modal window must take focus even with autoFocus = false.
+    let dialog = newWindow(rect(5, 5, 10, 10), "Dialog", modal = true)
+    let dialogId = app.addWindow(dialog, autoFocus = false)
+    check dialog.focused == true
+    check first.focused == false
+    check app.getFocusedWindowId() == some(dialogId)
