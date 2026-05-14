@@ -518,7 +518,12 @@ proc createFileManagerWindows(fm: FileManagerApp): Future[void] {.async.} =
 proc newFileManagerApp(): Future[FileManagerApp] {.async.} =
   ## Create a new file manager application
   let config = AppConfig(
-    title: "Async File Manager", windowMode: true, mouseCapture: false, targetFps: 30
+    title: "Async File Manager",
+    alternateScreen: true,
+    rawMode: true,
+    windowMode: true,
+    mouseCapture: false,
+    targetFps: 30,
   )
 
   result = FileManagerApp(
