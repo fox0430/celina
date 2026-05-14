@@ -361,15 +361,55 @@ proc setupWithMouseAndPasteAsync*(terminal: AsyncTerminal) {.async.} =
   terminal.enableMouse()
   terminal.enableBracketedPaste()
 
+proc runDisableSequence(terminal: AsyncTerminal) =
+  ## LIFO disable sequence shared by `cleanupAsync` and the sync `cleanup`.
+  ##
+  ## Each step is guarded individually because the underlying disables on
+  ## `AsyncTerminal` go through `writeAndFlush` (raw `stdout.write`) and
+  ## can raise `IOError`. `disableRawMode` in particular uses
+  ## `tcsetattr(STDIN_FILENO, ...)` and can still succeed when stdout is
+  ## broken — losing it would leave the terminal in raw mode after a crash.
+  template guard(body: untyped) =
+    try:
+      body
+    except CatchableError:
+      discard
+
+  guard:
+    terminal.disableSyncOutput()
+  guard:
+    terminal.disableFocusEvents()
+  guard:
+    terminal.disableBracketedPaste()
+  guard:
+    terminal.disableMouse()
+  guard:
+    terminal.disableRawMode()
+  guard:
+    terminal.disableAlternateScreen()
+
+proc cleanup*(terminal: AsyncTerminal) =
+  ## Synchronous cleanup variant for crash handlers and signal hooks.
+  ##
+  ## Mirrors `cleanupAsync` but uses a blocking cursor restore so it can
+  ## be invoked when the async event loop is unavailable. Shares the LIFO
+  ## disable sequence with `cleanupAsync` via `runDisableSequence`.
+  try:
+    stdout.write(ShowCursorSeq)
+    stdout.flushFile()
+  except CatchableError:
+    discard
+  runDisableSequence(terminal)
+
 proc cleanupAsync*(terminal: AsyncTerminal) {.async.} =
-  ## Cleanup and restore terminal asynchronously
+  ## Cleanup and restore terminal asynchronously.
+  ##
+  ## Disable order is the reverse of `setupAsync` (LIFO): raw mode is
+  ## restored before leaving the alternate screen so the final `tcsetattr`
+  ## runs while the program-mode screen is still active. Mirrors the sync
+  ## `terminal.cleanup()` policy — app-level wrappers should delegate here.
   await showCursorAsync()
-  terminal.disableSyncOutput()
-  terminal.disableFocusEvents()
-  terminal.disableBracketedPaste()
-  terminal.disableMouse()
-  terminal.disableRawMode()
-  terminal.disableAlternateScreen()
+  runDisableSequence(terminal)
 
   # AsyncFD cleanup is handled automatically by Chronos
   # No manual unregistration needed

@@ -260,24 +260,12 @@ proc setupAsync(app: AsyncApp) {.async.} =
   await clearScreenAsync()
 
 proc cleanupAsync(app: AsyncApp) {.async.} =
-  ## Internal async cleanup procedure to restore terminal state
-  await showCursorAsync()
-
-  if app.config.focusEvents:
-    app.terminal.disableFocusEvents()
-
-  if app.config.bracketedPaste:
-    app.terminal.disableBracketedPaste()
-
-  if app.config.mouseCapture:
-    app.terminal.disableMouse()
-
-  if app.config.alternateScreen:
-    app.terminal.disableAlternateScreen()
-
-  if app.config.rawMode:
-    app.terminal.disableRawMode()
-
+  ## Internal async cleanup procedure to restore terminal state.
+  ##
+  ## Delegates the disable sequence to `terminal.cleanupAsync()` so the LIFO
+  ## ordering (raw mode before alternate screen) is defined in one place.
+  ## Each underlying `disableX` is idempotent and state-gated, so calling
+  ## the full sequence is safe regardless of `app.config` flags.
   await app.terminal.cleanupAsync()
 
 proc handleResizeAsync(app: AsyncApp) {.async.} =
@@ -506,10 +494,11 @@ proc quit*(app: AsyncApp) =
 proc restoreTerminal*(app: AsyncApp) =
   ## Synchronously restore terminal state for use in crash handlers.
   ##
-  ## This is a best-effort, non-async cleanup intended for use in situations
-  ## where the async event loop is unavailable (e.g., signal handlers, unhandled
-  ## exception hooks). It restores the terminal to a usable state by disabling
-  ## alternate screen, raw mode, mouse capture, and bracketed paste.
+  ## Best-effort, non-async cleanup intended for situations where the async
+  ## event loop is unavailable (e.g., signal handlers, unhandled exception
+  ## hooks). Delegates to `terminal.cleanup()` (the sync variant on
+  ## `AsyncTerminal`) so the disable sequence — and its LIFO ordering —
+  ## stays defined in one place alongside `cleanupAsync`.
   ##
   ## Example:
   ## ```nim
@@ -518,40 +507,7 @@ proc restoreTerminal*(app: AsyncApp) =
   ##   quit(1)
   ## setControlCHook(onCrash)
   ## ```
-  try:
-    showCursor()
-  except CatchableError:
-    discard
-
-  try:
-    if app.config.focusEvents:
-      app.terminal.disableFocusEvents()
-  except CatchableError:
-    discard
-
-  try:
-    if app.config.bracketedPaste:
-      app.terminal.disableBracketedPaste()
-  except CatchableError:
-    discard
-
-  try:
-    if app.config.mouseCapture:
-      app.terminal.disableMouse()
-  except CatchableError:
-    discard
-
-  try:
-    if app.config.alternateScreen:
-      app.terminal.disableAlternateScreen()
-  except CatchableError:
-    discard
-
-  try:
-    if app.config.rawMode:
-      app.terminal.disableRawMode()
-  except CatchableError:
-    discard
+  app.terminal.cleanup()
 
 # Mouse control
 proc enableMouse*(app: AsyncApp) =
