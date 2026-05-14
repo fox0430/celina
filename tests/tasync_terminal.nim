@@ -489,3 +489,110 @@ suite "AsyncTerminal Setup Variants":
       check true
     else:
       check false
+
+suite "AsyncTerminal Cleanup":
+  # Note: rawMode is exercised separately because enableRawMode calls
+  # tcsetattr() on the real terminal. The flags toggled below only
+  # require stdout writes and are safe in tests.
+
+  test "cleanup resets all toggleable flags":
+    let terminal = createTestTerminal()
+
+    terminal.enableAlternateScreen()
+    terminal.enableMouse()
+    terminal.enableBracketedPaste()
+    terminal.enableFocusEvents()
+    terminal.enableSyncOutput()
+
+    check terminal.alternateScreen
+    check terminal.mouseEnabled
+    check terminal.bracketedPasteEnabled
+    check terminal.focusEventsEnabled
+    check terminal.syncOutputEnabled
+
+    terminal.cleanup()
+
+    check not terminal.alternateScreen
+    check not terminal.mouseEnabled
+    check not terminal.bracketedPasteEnabled
+    check not terminal.focusEventsEnabled
+    check not terminal.syncOutputEnabled
+
+  test "cleanup is idempotent":
+    let terminal = createTestTerminal()
+    terminal.enableMouse()
+    terminal.enableBracketedPaste()
+
+    terminal.cleanup()
+    check not terminal.mouseEnabled
+    check not terminal.bracketedPasteEnabled
+
+    terminal.cleanup()
+    check not terminal.mouseEnabled
+    check not terminal.bracketedPasteEnabled
+
+  test "cleanup with partial state disables only enabled flags":
+    let terminal = createTestTerminal()
+    terminal.enableMouse()
+    terminal.enableBracketedPaste()
+
+    check terminal.mouseEnabled
+    check terminal.bracketedPasteEnabled
+    check not terminal.alternateScreen
+    check not terminal.focusEventsEnabled
+    check not terminal.syncOutputEnabled
+
+    terminal.cleanup()
+
+    check not terminal.mouseEnabled
+    check not terminal.bracketedPasteEnabled
+    check not terminal.alternateScreen
+    check not terminal.focusEventsEnabled
+    check not terminal.syncOutputEnabled
+
+  test "cleanup on freshly created terminal is safe":
+    let terminal = createTestTerminal()
+    terminal.cleanup()
+    check not terminal.alternateScreen
+    check not terminal.mouseEnabled
+    check not terminal.bracketedPasteEnabled
+    check not terminal.focusEventsEnabled
+    check not terminal.syncOutputEnabled
+
+  test "cleanup disables flag enabled last (LIFO end of sequence)":
+    # alternateScreen is the final disable step in cleanup's LIFO order,
+    # so this guards against accidentally truncating the sequence.
+    let terminal = createTestTerminal()
+    terminal.enableAlternateScreen()
+    check terminal.alternateScreen
+
+    terminal.cleanup()
+    check not terminal.alternateScreen
+
+suite "AsyncTerminal cleanupAsync":
+  test "cleanupAsync resets all toggleable flags":
+    let terminal = createTestTerminal()
+
+    terminal.enableAlternateScreen()
+    terminal.enableMouse()
+    terminal.enableBracketedPaste()
+    terminal.enableFocusEvents()
+    terminal.enableSyncOutput()
+
+    waitFor terminal.cleanupAsync()
+
+    check not terminal.alternateScreen
+    check not terminal.mouseEnabled
+    check not terminal.bracketedPasteEnabled
+    check not terminal.focusEventsEnabled
+    check not terminal.syncOutputEnabled
+
+  test "cleanupAsync is idempotent":
+    let terminal = createTestTerminal()
+    terminal.enableMouse()
+
+    waitFor terminal.cleanupAsync()
+    check not terminal.mouseEnabled
+
+    waitFor terminal.cleanupAsync()
+    check not terminal.mouseEnabled

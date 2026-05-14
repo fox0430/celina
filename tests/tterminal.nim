@@ -663,3 +663,85 @@ suite "Terminal Module Tests":
       # Accessing out-of-bounds should be safe
       let outOfBounds = buffer[100, 100]
       check outOfBounds.symbol == " " # Should return empty cell
+
+  suite "Cleanup Behavior":
+    # Note: rawMode is exercised separately because enableRawMode calls
+    # tcsetattr() on the real terminal, which would interfere with the
+    # test runner. The flags below only require stdout writes (no-op when
+    # stdout is a normal sink) and so are safe to toggle in tests.
+
+    test "cleanup resets all toggleable flags":
+      let terminal = newTerminal()
+
+      terminal.enableAlternateScreen()
+      terminal.enableMouse()
+      terminal.enableBracketedPaste()
+      terminal.enableFocusEvents()
+      terminal.enableSyncOutput()
+
+      check terminal.alternateScreen
+      check terminal.mouseEnabled
+      check terminal.bracketedPasteEnabled
+      check terminal.focusEventsEnabled
+      check terminal.syncOutputEnabled
+
+      terminal.cleanup()
+
+      check not terminal.alternateScreen
+      check not terminal.mouseEnabled
+      check not terminal.bracketedPasteEnabled
+      check not terminal.focusEventsEnabled
+      check not terminal.syncOutputEnabled
+
+    test "cleanup is idempotent":
+      let terminal = newTerminal()
+      terminal.enableMouse()
+      terminal.enableBracketedPaste()
+
+      terminal.cleanup()
+      check not terminal.mouseEnabled
+      check not terminal.bracketedPasteEnabled
+
+      # Second call must be safe: every disable is state-gated, so the
+      # already-disabled flags stay false without re-issuing escapes.
+      terminal.cleanup()
+      check not terminal.mouseEnabled
+      check not terminal.bracketedPasteEnabled
+
+    test "cleanup with partial state disables only enabled flags":
+      let terminal = newTerminal()
+      terminal.enableMouse()
+      terminal.enableBracketedPaste()
+
+      check terminal.mouseEnabled
+      check terminal.bracketedPasteEnabled
+      check not terminal.alternateScreen
+      check not terminal.focusEventsEnabled
+      check not terminal.syncOutputEnabled
+
+      terminal.cleanup()
+
+      check not terminal.mouseEnabled
+      check not terminal.bracketedPasteEnabled
+      check not terminal.alternateScreen
+      check not terminal.focusEventsEnabled
+      check not terminal.syncOutputEnabled
+
+    test "cleanup on freshly created terminal is safe":
+      let terminal = newTerminal()
+      terminal.cleanup()
+      check not terminal.alternateScreen
+      check not terminal.mouseEnabled
+      check not terminal.bracketedPasteEnabled
+      check not terminal.focusEventsEnabled
+      check not terminal.syncOutputEnabled
+
+    test "cleanup disables flag enabled last (LIFO end of sequence)":
+      # alternateScreen is the final disable step in cleanup's LIFO order,
+      # so this guards against accidentally truncating the sequence.
+      let terminal = newTerminal()
+      terminal.enableAlternateScreen()
+      check terminal.alternateScreen
+
+      terminal.cleanup()
+      check not terminal.alternateScreen

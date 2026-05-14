@@ -460,19 +460,35 @@ proc setupWithMouseAndPaste*(terminal: Terminal) =
     raise newTerminalError("Failed to setup terminal with mouse and paste: " & e.msg)
 
 proc cleanup*(terminal: Terminal) =
-  ## Cleanup terminal, restoring original settings
-  ## Best effort - tries to restore everything even if some operations fail
-  try:
-    showCursor()
-  except CatchableError:
-    discard
+  ## Cleanup terminal, restoring original settings.
+  ## Best effort - each step is guarded individually so a single failure
+  ## does not block later cleanup steps.
+  ##
+  ## Disable order is the reverse of `setup` (LIFO): raw mode is restored
+  ## before leaving the alternate screen so that the final `tcsetattr` runs
+  ## while the program-mode screen is still active. Callers that need a
+  ## different order should not reorder these lines piecemeal — the policy
+  ## lives here so app-level wrappers can delegate to it.
+  template guard(body: untyped) =
+    try:
+      body
+    except CatchableError:
+      discard
 
-  terminal.disableSyncOutput()
-  terminal.disableFocusEvents()
-  terminal.disableBracketedPaste()
-  terminal.disableMouse()
-  terminal.disableRawMode()
-  terminal.disableAlternateScreen()
+  guard:
+    showCursor()
+  guard:
+    terminal.disableSyncOutput()
+  guard:
+    terminal.disableFocusEvents()
+  guard:
+    terminal.disableBracketedPaste()
+  guard:
+    terminal.disableMouse()
+  guard:
+    terminal.disableRawMode()
+  guard:
+    terminal.disableAlternateScreen()
 
 proc isSuspended*(terminal: Terminal): bool =
   ## Check if terminal is currently suspended

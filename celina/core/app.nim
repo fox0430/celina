@@ -211,24 +211,12 @@ proc setup(app: App) =
   terminal.clearScreen()
 
 proc cleanup(app: App) =
-  ## Internal cleanup procedure to restore terminal state
-  terminal.showCursor()
-
-  if app.config.focusEvents:
-    app.terminal.disableFocusEvents()
-
-  if app.config.bracketedPaste:
-    app.terminal.disableBracketedPaste()
-
-  if app.config.mouseCapture:
-    app.terminal.disableMouse()
-
-  if app.config.alternateScreen:
-    app.terminal.disableAlternateScreen()
-
-  if app.config.rawMode:
-    app.terminal.disableRawMode()
-
+  ## Internal cleanup procedure to restore terminal state.
+  ##
+  ## Delegates the disable sequence to `terminal.cleanup()` so the LIFO
+  ## ordering (raw mode before alternate screen) is defined in one place.
+  ## Each underlying `disableX` is idempotent and state-gated, so calling
+  ## the full sequence is safe regardless of `app.config` flags.
   app.terminal.cleanup()
 
 proc handleResize(app: App) =
@@ -417,9 +405,11 @@ proc restoreTerminal*(app: App) =
   ## Best-effort terminal state restoration for use in crash handlers.
   ##
   ## Intended for situations where the normal cleanup path is unavailable
-  ## (e.g., signal handlers, unhandled exception hooks). It restores the
-  ## terminal to a usable state by disabling alternate screen, raw mode,
-  ## mouse capture, bracketed paste, and focus events.
+  ## (e.g., signal handlers, unhandled exception hooks). Delegates to
+  ## `terminal.cleanup()`, which guards each disable individually and
+  ## therefore does not raise. The LIFO disable sequence (synchronized
+  ## output, focus events, bracketed paste, mouse, raw mode, alternate
+  ## screen) stays defined in one place.
   ##
   ## Example:
   ## ```nim
@@ -428,40 +418,7 @@ proc restoreTerminal*(app: App) =
   ##   quit(1)
   ## setControlCHook(onCrash)
   ## ```
-  try:
-    terminal.showCursor()
-  except CatchableError:
-    discard
-
-  try:
-    if app.config.focusEvents:
-      app.terminal.disableFocusEvents()
-  except CatchableError:
-    discard
-
-  try:
-    if app.config.bracketedPaste:
-      app.terminal.disableBracketedPaste()
-  except CatchableError:
-    discard
-
-  try:
-    if app.config.mouseCapture:
-      app.terminal.disableMouse()
-  except CatchableError:
-    discard
-
-  try:
-    if app.config.alternateScreen:
-      app.terminal.disableAlternateScreen()
-  except CatchableError:
-    discard
-
-  try:
-    if app.config.rawMode:
-      app.terminal.disableRawMode()
-  except CatchableError:
-    discard
+  app.terminal.cleanup()
 
 # Mouse control
 proc enableMouse*(app: App) =
