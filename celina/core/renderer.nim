@@ -10,7 +10,6 @@ type Renderer* = ref object ## Manages rendering operations and buffer managemen
   terminal: Terminal
   buffer: Buffer
   cursorManager: CursorManager
-  lastRenderTime: float
 
 proc newRenderer*(terminal: Terminal): Renderer =
   ## Create a new renderer with the given terminal
@@ -19,7 +18,6 @@ proc newRenderer*(terminal: Terminal): Renderer =
     terminal: terminal,
     buffer: newBuffer(termSize.width, termSize.height),
     cursorManager: newCursorManager(),
-    lastRenderTime: 0.0,
   )
 
 proc getBuffer*(renderer: Renderer): var Buffer =
