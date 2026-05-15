@@ -176,26 +176,26 @@ proc tryWrite(data: string) =
   ## rather than crashing, since they're often non-critical
   discard writeWithRetry(data)
 
+proc writeOrRaise(data: string) =
+  ## Write data with EAGAIN/EINTR retry, raising IOError on failure
+  ## Use for critical paths where callers expect errors to be reported
+  ## (e.g. setup sequences, screen clears, low-level render APIs)
+  if not writeWithRetry(data):
+    raise newException(IOError, "Terminal write failed (" & $data.len & " bytes)")
+
 # Alternate screen control
 proc enableAlternateScreen*(terminal: Terminal) =
   ## Switch to alternate screen buffer
   ## Raises IOError if unable to write to terminal
   if not terminal.alternateScreen:
-    tryIO:
-      stdout.write(AlternateScreenEnter)
-      stdout.flushFile()
+    writeOrRaise(AlternateScreenEnter)
     terminal.alternateScreen = true
 
 proc disableAlternateScreen*(terminal: Terminal) =
   ## Switch back to main screen buffer
   ## Best effort - doesn't raise on error to ensure cleanup
   if terminal.alternateScreen:
-    try:
-      stdout.write(AlternateScreenExit)
-      stdout.flushFile()
-    except CatchableError:
-      when defined(celinaDebug):
-        stderr.writeLine("Warning: Failed to disable alternate screen")
+    tryWrite(AlternateScreenExit)
     terminal.alternateScreen = false
 
 # Mouse control
@@ -327,23 +327,17 @@ proc setCursorStyle*(style: CursorStyle) =
 proc clearScreen*() =
   ## Clear the entire screen
   ## Raises IOError if unable to write to terminal
-  tryIO:
-    stdout.write(ClearScreenSeq)
-    stdout.flushFile()
+  writeOrRaise(ClearScreenSeq)
 
 proc clearLine*() =
   ## Clear the current line
   ## Raises IOError if unable to write to terminal
-  tryIO:
-    stdout.write(ClearLineSeq)
-    stdout.flushFile()
+  writeOrRaise(ClearLineSeq)
 
 proc clearToEndOfLine*() =
   ## Clear from cursor to end of line
   ## Raises IOError if unable to write to terminal
-  tryIO:
-    stdout.write(ClearToEndOfLineSeq)
-    stdout.flushFile()
+  writeOrRaise(ClearToEndOfLineSeq)
 
 proc clearToStartOfLine*() =
   ## Clear from start of line to cursor
@@ -382,8 +376,7 @@ proc render*(terminal: Terminal, buffer: Buffer) =
     let output = buildDifferentialOutput(terminal.lastBuffer, buffer)
 
     if output.len > 0:
-      stdout.write(output)
-      stdout.flushFile()
+      writeOrRaise(output)
 
     # Update last buffer
     terminal.lastBuffer = buffer
@@ -409,8 +402,7 @@ proc renderFull*(terminal: Terminal, buffer: Buffer) =
   ## For main application loops, use `draw()` which handles transient errors gracefully.
   try:
     let output = buildFullRenderOutput(buffer)
-    stdout.write(output)
-    stdout.flushFile()
+    writeOrRaise(output)
 
     terminal.lastBuffer = buffer
   except IOError as e:
