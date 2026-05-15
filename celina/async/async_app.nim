@@ -15,13 +15,15 @@ import
 export config
 
 type
-  AsyncAppHandlers = object ## User-supplied callbacks invoked during the async event loop
+  AsyncAppHandlers = object
+    ## User-supplied callbacks invoked during the async event loop
     event: proc(event: Event, app: AsyncApp): Future[bool] {.async.}
     render: proc(buffer: var Buffer, app: AsyncApp)
     tick: proc(app: AsyncApp): Future[bool] {.async.}
     timeout: proc(app: AsyncApp): Future[bool] {.async.}
 
-  AsyncAppTimings = object ## Frame and event timing/counters used by the async event loop
+  AsyncAppTimings = object
+    ## Frame and event timing/counters used by the async event loop
     frameCounter: int ## Total frame count
     lastFrameTime: MonoTime ## Timestamp of last frame
     lastEventTime: MonoTime ## Timestamp of last received event
