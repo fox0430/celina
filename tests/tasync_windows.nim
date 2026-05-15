@@ -581,3 +581,206 @@ suite "AsyncWindows Async Operations":
       discard # Expected
     except CatchableError:
       check false # Unexpected exception type
+
+suite "AsyncWindows Sync Helpers and handleEventSync":
+  test "getVisibleWindowsSync returns visible windows sorted by zIndex":
+    let awm = newAsyncWindowManager()
+    let w1 = newWindow(rect(0, 0, 10, 10), "First")
+    let w2 = newWindow(rect(10, 0, 10, 10), "Second")
+    let w3 = newWindow(rect(20, 0, 10, 10), "Hidden")
+
+    discard awm.addWindowSync(w1)
+    discard awm.addWindowSync(w2)
+    discard awm.addWindowSync(w3)
+    w3.visible = false
+    w1.zIndex = 5
+    w2.zIndex = 2
+
+    let visible = awm.getVisibleWindowsSync()
+    check visible.len == 2
+    check visible[0].id == w2.id # lowest zIndex first
+    check visible[1].id == w1.id
+
+  test "findWindowAtSync returns topmost window at position":
+    let awm = newAsyncWindowManager()
+    let bottom = newWindow(rect(0, 0, 20, 20), "Bottom")
+    let top = newWindow(rect(5, 5, 10, 10), "Top")
+
+    discard awm.addWindowSync(bottom)
+    discard awm.addWindowSync(top)
+    bottom.zIndex = 1
+    top.zIndex = 2
+
+    let found = awm.findWindowAtSync(pos(7, 7))
+    check found.isSome()
+    check found.get().id == top.id
+
+    let outside = awm.findWindowAtSync(pos(50, 50))
+    check outside.isNone()
+
+  test "handleEventSync routes key events to focused window":
+    let awm = newAsyncWindowManager()
+    let w = newWindow(rect(0, 0, 10, 10), "W")
+    var handled = false
+    w.setKeyHandler(
+      proc(win: Window, k: KeyEvent): bool =
+        handled = true
+        return true
+    )
+    discard awm.addWindowSync(w)
+
+    let ev = Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Enter))
+    check awm.handleEventSync(ev) == true
+    check handled
+
+  test "handleEventSync routes modal event to modal window only":
+    let awm = newAsyncWindowManager()
+    let normal = newWindow(rect(0, 0, 10, 10), "Normal")
+    let modal = newWindow(rect(20, 20, 10, 10), "Modal", modal = true)
+
+    var normalCalled = false
+    var modalCalled = false
+    normal.setKeyHandler(
+      proc(win: Window, k: KeyEvent): bool =
+        normalCalled = true
+        return true
+    )
+    modal.setKeyHandler(
+      proc(win: Window, k: KeyEvent): bool =
+        modalCalled = true
+        return true
+    )
+
+    discard awm.addWindowSync(normal)
+    discard awm.addWindowSync(modal)
+
+    # Focus the non-modal window explicitly. Modal routing must still win.
+    discard awm.focusWindowSync(normal.id)
+
+    let ev = Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Enter))
+    check awm.handleEventSync(ev) == true
+    check modalCalled
+    check not normalCalled
+
+  test "removeWindowSync clears modalWindow when modal removed":
+    let awm = newAsyncWindowManager()
+    let modal = newWindow(rect(0, 0, 10, 10), "Modal", modal = true)
+    let modalId = awm.addWindowSync(modal)
+
+    check awm.modalWindow.isSome()
+    check awm.modalWindow.get() == modalId
+
+    discard awm.removeWindowSync(modalId)
+    check awm.modalWindow.isNone()
+
+  test "handleEventSync mouse Press auto-focuses target window":
+    let awm = newAsyncWindowManager()
+    let w1 = newWindow(rect(0, 0, 10, 10), "First")
+    let w2 = newWindow(rect(20, 20, 10, 10), "Second")
+
+    var w1Called = false
+    var w2Called = false
+    w1.setMouseHandler(
+      proc(win: Window, m: MouseEvent): bool =
+        w1Called = true
+        return true
+    )
+    w2.setMouseHandler(
+      proc(win: Window, m: MouseEvent): bool =
+        w2Called = true
+        return true
+    )
+
+    let id1 = awm.addWindowSync(w1)
+    let id2 = awm.addWindowSync(w2)
+
+    # w2 is focused (most recently added). Click on w1.
+    check awm.focusedWindow.get() == id2
+
+    let ev = Event(
+      kind: EventKind.Mouse, mouse: MouseEvent(x: 5, y: 5, kind: Press, button: Left)
+    )
+    check awm.handleEventSync(ev) == true
+
+    # Focus moves to w1, and its handler is the one invoked.
+    check awm.focusedWindow.get() == id1
+    check w1Called
+    check not w2Called
+
+  test "removeWindowAsync clears modalWindow when modal removed":
+    let awm = newAsyncWindowManager()
+    let modal = newWindow(rect(0, 0, 10, 10), "Modal", modal = true)
+    let modalId = waitFor awm.addWindowAsync(modal)
+
+    check awm.modalWindow.isSome()
+    check awm.modalWindow.get() == modalId
+
+    discard waitFor awm.removeWindowAsync(modalId)
+    check awm.modalWindow.isNone()
+
+  test "focusWindowSync promotes modal flag when focusing a modal window":
+    let awm = newAsyncWindowManager()
+    let normal = newWindow(rect(0, 0, 10, 10), "Normal")
+    let modal = newWindow(rect(20, 20, 10, 10), "Modal", modal = true)
+
+    discard awm.addWindowSync(normal)
+    let modalId = awm.addWindowSync(modal)
+
+    # Sanity: adding a modal window already records it.
+    check awm.modalWindow.isSome()
+    check awm.modalWindow.get() == modalId
+
+    # Switch focus away, then back to the modal. The modalWindow state must be
+    # re-asserted by focusWindowSync, not just left over from addWindowSync.
+    awm.modalWindow = none(WindowId)
+    discard awm.focusWindowSync(normal.id)
+    check awm.modalWindow.isNone()
+
+    check awm.focusWindowSync(modalId)
+    check awm.modalWindow.isSome()
+    check awm.modalWindow.get() == modalId
+
+  test "focusWindowAsync promotes modal flag when focusing a modal window":
+    let awm = newAsyncWindowManager()
+    let normal = newWindow(rect(0, 0, 10, 10), "Normal")
+    let modal = newWindow(rect(20, 20, 10, 10), "Modal", modal = true)
+
+    discard waitFor awm.addWindowAsync(normal)
+    let modalId = waitFor awm.addWindowAsync(modal)
+
+    check awm.modalWindow.isSome()
+    check awm.modalWindow.get() == modalId
+
+    # Re-assertion path: clear modal, focus the non-modal, then focus the
+    # modal again via the async API. modalWindow must be restored.
+    awm.modalWindow = none(WindowId)
+    discard waitFor awm.focusWindowAsync(normal.id)
+    check awm.modalWindow.isNone()
+
+    check (waitFor awm.focusWindowAsync(modalId)) == true
+    check awm.modalWindow.isSome()
+    check awm.modalWindow.get() == modalId
+
+  test "handleEventSync blocks mouse clicks on non-modal windows when modal is active":
+    let awm = newAsyncWindowManager()
+    let normal = newWindow(rect(0, 0, 10, 10), "Normal")
+    let modal = newWindow(rect(20, 20, 10, 10), "Modal", modal = true)
+
+    var normalCalled = false
+    normal.setMouseHandler(
+      proc(win: Window, m: MouseEvent): bool =
+        normalCalled = true
+        return true
+    )
+
+    discard awm.addWindowSync(normal)
+    discard awm.addWindowSync(modal)
+
+    # Click within the non-modal window's area. Even though the click position
+    # is inside `normal`, modal routing must intercept the event so the
+    # non-modal handler is never invoked.
+    let ev = Event(
+      kind: EventKind.Mouse, mouse: MouseEvent(x: 5, y: 5, kind: Press, button: Left)
+    )
+    discard awm.handleEventSync(ev)
+    check not normalCalled

@@ -19,18 +19,30 @@ type
     tick: proc(app: App): bool
     timeout: proc(app: App): bool
 
-  AppTimings = object ## Frame and event timing/counters used by the event loop
-    frameCounter: int ## Total frame count
-    lastFrameTime: MonoTime ## Timestamp of last frame
-    lastEventTime: MonoTime ## Timestamp of last received event
-    applicationTimeout: int ## Application timeout in ms (0 = disabled)
+  AppTimings* = object
+    ## Frame and event timing/counters used by the event loop.
+    ##
+    ## Exported with public fields so `async_app.nim` can reuse this type via
+    ## `AsyncAppTimings = AppTimings`. The owning `App.timings` field is
+    ## private, so this exposure is internal to the library; user code should
+    ## query timing via `getFrameCount` / `getLastFrameTime` instead.
+    frameCounter*: int ## Total frame count
+    lastFrameTime*: MonoTime ## Timestamp of last frame
+    lastEventTime*: MonoTime ## Timestamp of last received event
+    applicationTimeout*: int ## Application timeout in ms (0 = disabled)
 
-  AppState = object ## Mutable runtime state of the application
-    shouldQuit: bool
-    running: bool ## Whether app is currently running
-    forceNextRender: bool ## Force full render on next frame (used after resize)
-    windowMode: bool ## Whether to use window management
-    resizeState: ResizeState ## Shared resize detection state (from tick_common)
+  AppState* = object
+    ## Mutable runtime state of the application.
+    ##
+    ## Exported with public fields so `async_app.nim` can reuse this type via
+    ## `AsyncAppState = AppState`. The owning `App.state` field is private, so
+    ## this exposure is internal to the library; user code should drive state
+    ## via `quit` / `isRunning` and related procs rather than touching fields.
+    shouldQuit*: bool
+    running*: bool ## Whether app is currently running
+    forceNextRender*: bool ## Force full render on next frame (used after resize)
+    windowMode*: bool ## Whether to use window management
+    resizeState*: ResizeState ## Shared resize detection state (from tick_common)
 
   App* = ref object ## Main application context for CLI applications
     terminal: Terminal

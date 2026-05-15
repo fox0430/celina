@@ -9,7 +9,7 @@ import async_backend, async_terminal, async_events, async_windows, async_rendere
 import
   ../core/[
     geometry, buffer, events, fps, config, tick_common, cursor, terminal,
-    terminal_common, errors, windows,
+    terminal_common, errors, windows, app,
   ]
 
 export config
@@ -22,19 +22,11 @@ type
     tick: proc(app: AsyncApp): Future[bool] {.async.}
     timeout: proc(app: AsyncApp): Future[bool] {.async.}
 
-  AsyncAppTimings = object
-    ## Frame and event timing/counters used by the async event loop
-    frameCounter: int ## Total frame count
-    lastFrameTime: MonoTime ## Timestamp of last frame
-    lastEventTime: MonoTime ## Timestamp of last received event
-    applicationTimeout: int ## Application timeout in ms (0 = disabled)
+  AsyncAppTimings* = AppTimings
+    ## Alias of AppTimings; async event loop reuses the same timing fields.
 
-  AsyncAppState = object ## Mutable runtime state of the async application
-    shouldQuit: bool
-    running: bool ## Whether app is currently running
-    forceNextRender: bool ## Force full render on next frame (used after resize)
-    windowMode: bool ## Whether to use window management
-    resizeState: ResizeState ## Shared resize detection state (from tick_common)
+  AsyncAppState* = AppState
+    ## Alias of AppState; async runtime state is structurally identical.
 
   ## Main async application context for CLI applications
   AsyncApp* = ref object
