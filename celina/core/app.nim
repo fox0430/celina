@@ -12,34 +12,44 @@ import
 
 export config
 
-type App* = ref object ## Main application context for CLI applications
-  terminal: Terminal
-  renderer: Renderer
-  fpsMonitor: FpsMonitor
-  windowManager: WindowManager
-  shouldQuit: bool
-  eventHandler: proc(event: Event, app: App): bool
-  renderHandler: proc(buffer: var Buffer, app: App)
-  tickHandler: proc(app: App): bool
-  windowMode: bool
-  config: AppConfig
-  resizeState: ResizeState ## Shared resize detection state (from tick_common)
-  forceNextRender: bool ## Force full render on next frame (used after resize)
-  running: bool ## Whether app is currently running
-  frameCounter: int ## Total frame count
-  lastFrameTime: MonoTime ## Timestamp of last frame
-  applicationTimeout: int ## Application timeout in ms (0 = disabled)
-  timeoutHandler: proc(app: App): bool
-  lastEventTime: MonoTime ## Timestamp of last received event
+type
+  AppHandlers = object ## User-supplied callbacks invoked during the event loop
+    event: proc(event: Event, app: App): bool
+    render: proc(buffer: var Buffer, app: App)
+    tick: proc(app: App): bool
+    timeout: proc(app: App): bool
+
+  AppTimings = object ## Frame and event timing/counters used by the event loop
+    frameCounter: int ## Total frame count
+    lastFrameTime: MonoTime ## Timestamp of last frame
+    lastEventTime: MonoTime ## Timestamp of last received event
+    applicationTimeout: int ## Application timeout in ms (0 = disabled)
+
+  AppState = object ## Mutable runtime state of the application
+    shouldQuit: bool
+    running: bool ## Whether app is currently running
+    forceNextRender: bool ## Force full render on next frame (used after resize)
+    windowMode: bool ## Whether to use window management
+    resizeState: ResizeState ## Shared resize detection state (from tick_common)
+
+  App* = ref object ## Main application context for CLI applications
+    terminal: Terminal
+    renderer: Renderer
+    fpsMonitor: FpsMonitor
+    windowManager: WindowManager
+    config: AppConfig
+    handlers: AppHandlers
+    timings: AppTimings
+    state: AppState
 
 proc `$`*(app: App): string =
   ## String representation of App for debugging
   let windowCount =
-    if app.windowMode and not app.windowManager.isNil:
+    if app.state.windowMode and not app.windowManager.isNil:
       app.windowManager.windows.len
     else:
       0
-  &"App(running: {app.running}, fps: {app.fpsMonitor.getCurrentFps():.1f}, frames: {app.frameCounter}, windows: {windowCount}, config: {app.config})"
+  &"App(running: {app.state.running}, fps: {app.fpsMonitor.getCurrentFps():.1f}, frames: {app.timings.frameCounter}, windows: {windowCount}, config: {app.config})"
 
 proc newApp*(config: AppConfig = DefaultAppConfig): App =
   ## Create a new CLI application with the specified configuration
@@ -49,18 +59,21 @@ proc newApp*(config: AppConfig = DefaultAppConfig): App =
     terminal: terminal,
     renderer: newRenderer(terminal),
     fpsMonitor: newFpsMonitor(if config.targetFps > 0: config.targetFps else: 60),
-    shouldQuit: false,
-    eventHandler: nil,
-    renderHandler: nil,
-    timeoutHandler: nil,
-    windowMode: config.windowMode,
     config: config,
-    resizeState: initResizeState(termSize.width, termSize.height),
-    forceNextRender: false,
-    running: false,
-    frameCounter: 0,
-    lastFrameTime: getMonoTime(),
-    lastEventTime: getMonoTime(),
+    handlers: AppHandlers(event: nil, render: nil, tick: nil, timeout: nil),
+    timings: AppTimings(
+      frameCounter: 0,
+      lastFrameTime: getMonoTime(),
+      lastEventTime: getMonoTime(),
+      applicationTimeout: 0,
+    ),
+    state: AppState(
+      shouldQuit: false,
+      running: false,
+      forceNextRender: false,
+      windowMode: config.windowMode,
+      resizeState: initResizeState(termSize.width, termSize.height),
+    ),
   )
 
   # Initialize window manager if enabled
@@ -73,7 +86,7 @@ proc onEvent*(app: App, handler: proc(event: Event): bool) =
   ##
   ## For access to the App object (e.g., for suspend/resume), use the
   ## overload that accepts `proc(event: Event, app: App): bool` instead.
-  app.eventHandler =
+  app.handlers.event =
     if handler.isNil:
       nil
     else:
@@ -99,7 +112,7 @@ proc onEvent*(app: App, handler: proc(event: Event, app: App): bool) =
   ##     return true
   ##   return true
   ## ```
-  app.eventHandler = handler
+  app.handlers.event = handler
 
 proc onRender*(app: App, handler: proc(buffer: var Buffer)) =
   ## Set the render handler for the application
@@ -107,7 +120,7 @@ proc onRender*(app: App, handler: proc(buffer: var Buffer)) =
   ## For access to the App object (e.g., to query FPS, window state,
   ## or terminal size during rendering), use the overload that accepts
   ## `proc(buffer: var Buffer, app: App)` instead.
-  app.renderHandler =
+  app.handlers.render =
     if handler.isNil:
       nil
     else:
@@ -128,13 +141,13 @@ proc onRender*(app: App, handler: proc(buffer: var Buffer, app: App)) =
   ##   let fps = app.getCurrentFps()
   ##   buffer.setString(0, 0, &"FPS: {fps:.1f}", defaultStyle())
   ## ```
-  app.renderHandler = handler
+  app.handlers.render = handler
 
 proc onTick*(app: App, handler: proc(): bool) =
   ## Set the tick handler called each frame between event processing and rendering.
   ##
   ## Return true to continue running, false to quit.
-  app.tickHandler =
+  app.handlers.tick =
     if handler.isNil:
       nil
     else:
@@ -146,7 +159,7 @@ proc onTick*(app: App, handler: proc(app: App): bool) =
   ## Set the tick handler with App context called each frame between event processing and rendering.
   ##
   ## Return true to continue running, false to quit.
-  app.tickHandler = handler
+  app.handlers.tick = handler
 
 # Application timeout
 proc onTimeout*(app: App, handler: proc(): bool) =
@@ -158,7 +171,7 @@ proc onTimeout*(app: App, handler: proc(): bool) =
   ##
   ## For access to the App object, use the overload that accepts
   ## `proc(app: App): bool` instead.
-  app.timeoutHandler =
+  app.handlers.timeout =
     if handler.isNil:
       nil
     else:
@@ -172,7 +185,7 @@ proc onTimeout*(app: App, handler: proc(app: App): bool) =
   ## The handler is called when no input events are received within
   ## the application timeout period. Return true to continue running,
   ## false to quit the application.
-  app.timeoutHandler = handler
+  app.handlers.timeout = handler
 
 proc setApplicationTimeout*(app: App, timeoutMs: int) =
   ## Set the application timeout in milliseconds.
@@ -180,13 +193,13 @@ proc setApplicationTimeout*(app: App, timeoutMs: int) =
   ## When set to a positive value, the timeout handler will be called
   ## if no input events are received within this duration.
   ## Set to 0 to disable the application timeout.
-  app.applicationTimeout = timeoutMs
+  app.timings.applicationTimeout = timeoutMs
 
 proc getApplicationTimeout*(app: App): int =
   ## Get the current application timeout in milliseconds.
   ##
   ## Returns 0 if the timeout is disabled.
-  app.applicationTimeout
+  app.timings.applicationTimeout
 
 # Lifecycle management
 proc setup(app: App) =
@@ -217,7 +230,7 @@ proc handleResize(app: App) =
   # Clear screen to avoid artifacts from old content
   terminal.clearScreen()
   # Force full render on next frame to ensure clean redraw
-  app.forceNextRender = true
+  app.state.forceNextRender = true
 
 proc dispatchEvent*(app: App, event: Event): bool =
   ## Invoke the configured event handler for the given event.
@@ -225,8 +238,8 @@ proc dispatchEvent*(app: App, event: Event): bool =
   ## Returns `true` when no handler is configured. Primarily used internally
   ## by `tick`, but exported so tests and callers can trigger the handler
   ## directly.
-  if app.eventHandler != nil:
-    app.eventHandler(event, app)
+  if app.handlers.event != nil:
+    app.handlers.event(event, app)
   else:
     true
 
@@ -236,8 +249,8 @@ proc dispatchRender*(app: App) =
   ## Does nothing when no handler is configured. Primarily used internally
   ## by `render`, but exported so tests and callers can trigger the handler
   ## directly.
-  if app.renderHandler != nil:
-    app.renderHandler(app.renderer.getBuffer(), app)
+  if app.handlers.render != nil:
+    app.handlers.render(app.renderer.getBuffer(), app)
 
 proc dispatchTick*(app: App): bool =
   ## Invoke the configured tick handler.
@@ -245,8 +258,8 @@ proc dispatchTick*(app: App): bool =
   ## Returns `true` when no handler is configured. Primarily used internally
   ## by `tick`, but exported so tests and callers can trigger the handler
   ## directly.
-  if app.tickHandler != nil:
-    app.tickHandler(app)
+  if app.handlers.tick != nil:
+    app.handlers.tick(app)
   else:
     true
 
@@ -256,13 +269,13 @@ proc dispatchTimeout*(app: App): bool =
   ## Returns `true` when no handler is configured. Primarily used internally
   ## by `tick`, but exported so tests and callers can trigger the handler
   ## directly.
-  if app.timeoutHandler != nil:
-    app.timeoutHandler(app)
+  if app.handlers.timeout != nil:
+    app.handlers.timeout(app)
   else:
     true
 
 proc hasTimeoutHandler(app: App): bool {.inline.} =
-  app.timeoutHandler != nil
+  app.handlers.timeout != nil
 
 proc render(app: App) =
   ## Render the current frame
@@ -273,13 +286,13 @@ proc render(app: App) =
   app.dispatchRender()
 
   # If window mode is enabled, render windows on top
-  if app.windowMode and not app.windowManager.isNil:
+  if app.state.windowMode and not app.windowManager.isNil:
     app.windowManager.render(app.renderer.getBuffer())
 
   # Render to terminal (force if requested after resize)
-  if app.forceNextRender:
+  if app.state.forceNextRender:
     app.renderer.render(force = true)
-    app.forceNextRender = false
+    app.state.forceNextRender = false
   else:
     app.renderer.render()
 
@@ -300,7 +313,7 @@ proc tick(app: App): bool =
   try:
     # Check for resize event by polling terminal size
     let currentSize = getTerminalSizeOrDefault()
-    if app.resizeState.checkResize(currentSize.width, currentSize.height):
+    if app.state.resizeState.checkResize(currentSize.width, currentSize.height):
       let resizeEvent = Event(kind: Resize)
       app.handleResize()
 
@@ -312,26 +325,27 @@ proc tick(app: App): bool =
     let remainingTime = app.fpsMonitor.getRemainingFrameTime()
 
     # Calculate poll timeout, integrating application timeout if set
-    let hasTimeout = app.applicationTimeout > 0 and app.hasTimeoutHandler()
+    let hasTimeout = app.timings.applicationTimeout > 0 and app.hasTimeoutHandler()
     let elapsed =
       if hasTimeout:
-        (getMonoTime() - app.lastEventTime).inMilliseconds.int
+        (getMonoTime() - app.timings.lastEventTime).inMilliseconds.int
       else:
         0
-    let appTimeout = if hasTimeout: app.applicationTimeout else: 0
+    let appTimeout = if hasTimeout: app.timings.applicationTimeout else: 0
     let timeout = calculatePollTimeout(remainingTime, appTimeout, elapsed)
 
     # Poll for events with timeout - blocks until event arrives OR timeout expires
     let eventsAvailable = events.pollEvents(timeout)
 
     if eventsAvailable:
-      app.lastEventTime = getMonoTime()
+      app.timings.lastEventTime = getMonoTime()
     elif hasTimeout:
       # Check if enough idle time has passed to fire timeout handler
-      let elapsedAfterPoll = (getMonoTime() - app.lastEventTime).inMilliseconds.int
-      if isTimeoutReached(app.applicationTimeout, elapsedAfterPoll):
+      let elapsedAfterPoll =
+        (getMonoTime() - app.timings.lastEventTime).inMilliseconds.int
+      if isTimeoutReached(app.timings.applicationTimeout, elapsedAfterPoll):
         # Reset timer to prevent busy-loop and enable periodic callbacks
-        app.lastEventTime = getMonoTime()
+        app.timings.lastEventTime = getMonoTime()
         if not app.dispatchTimeout():
           return false
 
@@ -349,7 +363,7 @@ proc tick(app: App): bool =
             return false
 
           # Window manager event handling
-          if app.windowMode and not app.windowManager.isNil:
+          if app.state.windowMode and not app.windowManager.isNil:
             discard app.windowManager.handleEvent(event)
         else:
           break
@@ -363,10 +377,10 @@ proc tick(app: App): bool =
       app.fpsMonitor.startFrame()
       app.render()
       app.fpsMonitor.endFrame()
-      app.frameCounter.inc()
-      app.lastFrameTime = getMonoTime()
+      app.timings.frameCounter.inc()
+      app.timings.lastFrameTime = getMonoTime()
 
-    return not app.shouldQuit
+    return not app.state.shouldQuit
   except TerminalError:
     raise
   except CatchableError:
@@ -395,18 +409,18 @@ proc run*(app: App) =
   ## Run the application main loop
   try:
     app.setup()
-    app.running = true
+    app.state.running = true
 
     # Main application loop
     while app.tick():
       discard
   finally:
-    app.running = false
+    app.state.running = false
     app.restoreTerminal()
 
 proc quit*(app: App) =
   ## Signal the application to quit gracefully
-  app.shouldQuit = true
+  app.state.shouldQuit = true
 
 # Mouse control
 proc enableMouse*(app: App) =
@@ -437,7 +451,7 @@ proc resume*(app: App) =
   ##
   ## Restores terminal state and forces a full redraw on the next frame.
   app.terminal.resume()
-  app.forceNextRender = true
+  app.state.forceNextRender = true
 
 proc isSuspended*(app: App): bool =
   ## Check if the application is currently suspended
@@ -528,7 +542,7 @@ proc resetCursor*(app: App) =
 # Window management
 proc enableWindowMode*(app: App) =
   ## Enable window management mode
-  app.windowMode = true
+  app.state.windowMode = true
   if app.windowManager.isNil:
     app.windowManager = newWindowManager()
 
@@ -540,55 +554,55 @@ proc addWindow*(app: App, window: Window, autoFocus: bool = true): WindowId =
   ## takes focus on add; pass `false` to add a non-modal window without
   ## disturbing the current focus. See `WindowManager.addWindow` for the full
   ## semantics.
-  if not app.windowMode:
+  if not app.state.windowMode:
     app.enableWindowMode()
   return app.windowManager.addWindow(window, autoFocus)
 
 proc removeWindow*(app: App, windowId: WindowId): bool =
   ## Remove a window from the application
   ## Returns true if the window was found and removed, false otherwise
-  if app.windowMode and not app.windowManager.isNil:
+  if app.state.windowMode and not app.windowManager.isNil:
     return app.windowManager.removeWindow(windowId)
 
 proc getWindow*(app: App, windowId: WindowId): Option[Window] =
   ## Get a window by ID
-  if app.windowMode and not app.windowManager.isNil:
+  if app.state.windowMode and not app.windowManager.isNil:
     return app.windowManager.getWindow(windowId)
   return none(Window)
 
 proc focusWindow*(app: App, windowId: WindowId): bool =
   ## Focus a specific window
   ## Returns true if the window was found and focused, false otherwise
-  if app.windowMode and not app.windowManager.isNil:
+  if app.state.windowMode and not app.windowManager.isNil:
     return app.windowManager.focusWindow(windowId)
 
 proc getFocusedWindow*(app: App): Option[Window] =
   ## Get the currently focused window
-  if app.windowMode and not app.windowManager.isNil:
+  if app.state.windowMode and not app.windowManager.isNil:
     return app.windowManager.getFocusedWindow()
   return none(Window)
 
 proc getWindows*(app: App): seq[Window] =
   ## Get all windows in the application
-  if app.windowMode and not app.windowManager.isNil:
+  if app.state.windowMode and not app.windowManager.isNil:
     return app.windowManager.windows
   return @[]
 
 proc getWindowCount*(app: App): int =
   ## Get the total number of windows
-  if app.windowMode and not app.windowManager.isNil:
+  if app.state.windowMode and not app.windowManager.isNil:
     return app.windowManager.windows.len
   return 0
 
 proc getFocusedWindowId*(app: App): Option[WindowId] =
   ## Get the ID of the currently focused window
-  if app.windowMode and not app.windowManager.isNil:
+  if app.state.windowMode and not app.windowManager.isNil:
     return app.windowManager.focusedWindow
   return none(WindowId)
 
 proc getWindowInfo*(app: App, windowId: WindowId): Option[WindowInfo] =
   ## Get window information by ID
-  if app.windowMode and not app.windowManager.isNil:
+  if app.state.windowMode and not app.windowManager.isNil:
     let windowOpt = app.windowManager.getWindow(windowId)
     if windowOpt.isSome():
       return some(windowOpt.get.toWindowInfo())
@@ -596,14 +610,14 @@ proc getWindowInfo*(app: App, windowId: WindowId): Option[WindowInfo] =
 
 proc handleWindowEvent*(app: App, event: Event): bool =
   ## Handle an event through the window manager
-  if app.windowMode and not app.windowManager.isNil:
+  if app.state.windowMode and not app.windowManager.isNil:
     return app.windowManager.handleEvent(event)
 
 # State and info queries
 
 proc isRunning*(app: App): bool =
   ## Check if app is currently running
-  app.running
+  app.state.running
 
 proc getTerminalSize*(app: App): Size =
   ## Get current terminal size
@@ -615,11 +629,11 @@ proc getConfig*(app: App): AppConfig =
 
 proc getFrameCount*(app: App): int =
   ## Get total frame count
-  app.frameCounter
+  app.timings.frameCounter
 
 proc getLastFrameTime*(app: App): MonoTime =
   ## Get timestamp of last frame
-  app.lastFrameTime
+  app.timings.lastFrameTime
 
 # Buffer access for debugging and testing
 
