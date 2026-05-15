@@ -77,10 +77,9 @@ proc parseMouseEventSGR(): Future[Event] {.async.} =
   var buffer: string
   var ch: char
   var readCount = 0
-  const maxReadCount = 20 # Prevent infinite loops
 
   # Read until we get M or m, with safety limits (async I/O)
-  while readCount < maxReadCount:
+  while readCount < MaxSGRMouseReadBytes:
     ch = await readCharAsync()
     readCount.inc()
     if ch == '\0':
@@ -90,7 +89,7 @@ proc parseMouseEventSGR(): Future[Event] {.async.} =
     buffer.add(ch)
 
   # If we didn't find a terminator, return unknown event
-  if readCount >= maxReadCount or (ch != 'M' and ch != 'm'):
+  if readCount >= MaxSGRMouseReadBytes or (ch != 'M' and ch != 'm'):
     return Event(kind: Unknown)
 
   # Parse the SGR format: button;x;y

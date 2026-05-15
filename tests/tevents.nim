@@ -1024,10 +1024,8 @@ suite "Events Module Tests":
     test "Event parsing bounds checking":
       # Test that the new safety limits work correctly
       # These are compile-time constants from the parsing functions
-      const maxReadCount = 20 # From parseMouseEventSGR
-
-      check maxReadCount > 0
-      check maxReadCount <= 50 # Reasonable upper bound
+      check MaxSGRMouseReadBytes > 0
+      check MaxSGRMouseReadBytes <= 50 # Reasonable upper bound
 
     test "Mouse event validation":
       # Test that mouse events maintain consistent state
