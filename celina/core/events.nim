@@ -130,17 +130,16 @@ proc parseMouseEventSGR(): Event =
   var buffer: string
   var ch: char
   var readCount = 0
-  const maxReadCount = 20 # Prevent infinite loops
 
   # Read until we get M or m, with safety limits
-  while readCount < maxReadCount and stdin.readBuffer(addr ch, 1) == 1:
+  while readCount < MaxSGRMouseReadBytes and stdin.readBuffer(addr ch, 1) == 1:
     readCount.inc()
     if ch == 'M' or ch == 'm':
       break
     buffer.add(ch)
 
   # If we didn't find a terminator, return unknown event
-  if readCount >= maxReadCount or (ch != 'M' and ch != 'm'):
+  if readCount >= MaxSGRMouseReadBytes or (ch != 'M' and ch != 'm'):
     return Event(kind: Unknown)
 
   # Parse the SGR format: button;x;y
@@ -515,10 +514,9 @@ proc parseMouseEventSGRNonBlocking(): Event =
   var buffer: string
   var ch: char
   var readCount = 0
-  const maxReadCount = 20 # Prevent infinite loops
 
   # Read until we get M or m, with safety limits
-  while readCount < maxReadCount:
+  while readCount < MaxSGRMouseReadBytes:
     # Use select with timeout to wait for data
     var readSet: TFdSet
     FD_ZERO(readSet)
@@ -542,7 +540,7 @@ proc parseMouseEventSGRNonBlocking(): Event =
     buffer.add(ch)
 
   # If we didn't find a terminator, return unknown event
-  if readCount >= maxReadCount or (ch != 'M' and ch != 'm'):
+  if readCount >= MaxSGRMouseReadBytes or (ch != 'M' and ch != 'm'):
     return Event(kind: Unknown)
 
   # Parse the SGR format: button;x;y

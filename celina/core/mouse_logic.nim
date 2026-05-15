@@ -31,6 +31,14 @@ type
     x*, y*: int
     modifiers*: set[KeyModifier]
 
+const MaxSGRMouseReadBytes* = 20
+  ## Upper bound for bytes read while parsing an SGR mouse sequence's
+  ## `button;x;y` parameters plus the terminating `M`/`m` (the bytes
+  ## after `ESC[<`). 20 bytes covers up to 6 digits for each of button,
+  ## x, y, the two `;` separators, and the terminator, which fits any
+  ## realistic terminal while bounding the read loop against malformed
+  ## input.
+
 proc parseMouseModifiers*(buttonByte: int): set[KeyModifier] =
   ## Parse mouse modifiers from button byte
   ## Works for both X10 and SGR formats
