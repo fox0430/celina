@@ -9,8 +9,9 @@
 ## Two event handling functions are provided:
 ##
 ## - `handleEventSync`: Synchronous handler that **invokes** window event handlers.
-##   Use this when you need actual event processing. Safe to call from async contexts
-##   with `{.cast(gcsafe).}`.
+##   Mirrors `core/windows.nim:handleEvent` semantics, including modal-window
+##   routing. Use this when you need actual event processing. Safe to call from
+##   async contexts with `{.cast(gcsafe).}`.
 ##
 ## - `handleEventAsync`: Async handler that only **checks** if handlers exist.
 ##   Due to GC safety constraints, it cannot invoke handlers directly.
@@ -18,7 +19,7 @@
 ##
 ## For most use cases, prefer `handleEventSync` for actual event processing.
 
-import std/options
+import std/[algorithm, options]
 
 import async_backend, async_buffer
 import ../core/[geometry, buffer, events, windows]
@@ -33,6 +34,9 @@ type
   AsyncWindowManager* = ref object of BaseWindowManager
     windows: seq[Window]
     nextWindowId: int
+    modalWindow*: Option[WindowId]
+      ## ID of the currently active modal window, if any.
+      ## When set, `handleEventSync` routes all events to this window only.
 
   AsyncWindowError* = object of CatchableError
 
@@ -45,12 +49,20 @@ proc getWindowHelper(awm: AsyncWindowManager, windowId: WindowId): Option[Window
       return some(window)
   return none(Window)
 
-proc focusWindowHelper(awm: AsyncWindowManager, windowIndex: int, window: Window) =
+proc focusWindowHelper(awm: AsyncWindowManager, window: Window) =
   ## Internal helper to focus a window and bring it to front.
   ## Does not check visibility - caller must ensure window is visible.
+  ##
+  ## Bumps `zIndex` above all current windows so the focused window stays on
+  ## top under the zIndex-based sort used by `getVisibleWindowsSync/Async` and
+  ## the renderers. Mirrors `core/windows.nim:focusWindow`.
   awm.focusedWindow = some(window.id)
-  awm.windows.delete(windowIndex)
-  awm.windows.add(window)
+
+  var maxZ = window.zIndex
+  for w in awm.windows:
+    if not w.isNil and w.zIndex > maxZ:
+      maxZ = w.zIndex
+  window.zIndex = maxZ + 1
 
 # AsyncWindowManager Creation and Management
 
@@ -60,6 +72,7 @@ proc newAsyncWindowManager*(): AsyncWindowManager =
   result.windows = @[]
   result.nextWindowId = 1
   result.focusedWindow = none(WindowId)
+  result.modalWindow = none(WindowId)
 
 # Async Window Operations
 
@@ -98,6 +111,9 @@ proc addWindowAsync*(
   if awm.windows.len == 1 or autoFocus or window.modal:
     awm.focusedWindow = some(window.id)
 
+  if window.modal:
+    awm.modalWindow = some(window.id)
+
   await sleepMs(0)
   return window.id
 
@@ -129,6 +145,10 @@ proc removeWindowAsync*(
     else:
       awm.focusedWindow = none(WindowId)
 
+  # Clear modal if the modal window was removed
+  if awm.modalWindow.isSome() and awm.modalWindow.get() == windowId:
+    awm.modalWindow = none(WindowId)
+
   return true
 
 proc focusWindowAsync*(
@@ -141,14 +161,11 @@ proc focusWindowAsync*(
   await sleepMs(0)
 
   # Focus the target window
-  for i, window in awm.windows:
+  for window in awm.windows:
     if not window.isNil and window.id == windowId and window.visible:
-      awm.focusedWindow = some(windowId)
-
-      # Bring to front by moving to end of sequence
-      awm.windows.delete(i)
-      awm.windows.add(window)
-
+      awm.focusWindowHelper(window)
+      if window.modal:
+        awm.modalWindow = some(windowId)
       return true
 
   return false
@@ -168,16 +185,14 @@ proc getFocusedWindowAsync*(awm: AsyncWindowManager): Future[Option[Window]] {.a
 
   return none(Window)
 
+proc getVisibleWindowsSync*(awm: AsyncWindowManager): seq[Window] {.gcsafe, raises: [].}
+
 proc getVisibleWindowsAsync*(awm: AsyncWindowManager): Future[seq[Window]] {.async.} =
-  ## Get all visible windows sorted by Z-index asynchronously
-  if awm.isNil:
-    return @[]
-
+  ## Get all visible windows sorted by Z-index asynchronously.
+  ## Delegates to `getVisibleWindowsSync` after yielding so sync/async callers
+  ## share one implementation.
   await sleepMs(0)
-
-  for window in awm.windows:
-    if not window.isNil and window.visible and window.state != wsHidden:
-      result.add(window)
+  return awm.getVisibleWindowsSync()
 
 proc findWindowAtAsync*(
     awm: AsyncWindowManager, pos: Position
@@ -190,6 +205,60 @@ proc findWindowAtAsync*(
     let window = visibleWindows[i]
     if window.area.contains(pos):
       return some(window)
+
+  return none(Window)
+
+# Synchronous helpers (mirror the API in core/windows.nim)
+
+proc getVisibleWindowsSync*(awm: AsyncWindowManager): seq[Window] =
+  ## Get all visible windows sorted by Z-index synchronously.
+  ## Mirrors `core/windows.nim:getVisibleWindows` and `getVisibleWindowsAsync`
+  ## so sync/async queries and the renderers agree on stacking order.
+  if awm.isNil or awm.windows.len == 0:
+    return @[]
+  result = newSeqOfCap[Window](min(awm.windows.len, 16))
+  for window in awm.windows:
+    if not window.isNil and window.visible:
+      result.add(window)
+  result.sort(
+    proc(a, b: Window): int {.gcsafe, raises: [].} =
+      cmp(a.zIndex, b.zIndex)
+  )
+
+proc findWindowAtSync*(awm: AsyncWindowManager, pos: Position): Option[Window] =
+  ## Find the topmost window at the given position synchronously
+  let visibleWindows = awm.getVisibleWindowsSync()
+  for i in countdown(visibleWindows.high, 0):
+    let window = visibleWindows[i]
+    if window.area.contains(pos):
+      return some(window)
+  return none(Window)
+
+proc focusWindowSync*(awm: AsyncWindowManager, windowId: WindowId): bool =
+  ## Focus a specific window synchronously
+  if awm.isNil:
+    return false
+
+  # Find and focus the target window
+  for window in awm.windows:
+    if not window.isNil and window.id == windowId and window.visible:
+      awm.focusWindowHelper(window)
+      if window.modal:
+        awm.modalWindow = some(windowId)
+      return true
+
+  return false
+
+proc getFocusedWindowSync*(awm: AsyncWindowManager): Option[Window] =
+  ## Get the currently focused window synchronously
+  if awm.isNil:
+    return none(Window)
+
+  if awm.focusedWindow.isSome():
+    let windowId = awm.focusedWindow.get()
+    for window in awm.windows:
+      if not window.isNil and window.id == windowId:
+        return some(window)
 
   return none(Window)
 
@@ -238,7 +307,8 @@ proc handleEventAsync*(awm: AsyncWindowManager, event: Event): Future[bool] {.as
 
 proc handleEventSync*(awm: AsyncWindowManager, event: Event): bool =
   ## Synchronous event handling for AsyncWindowManager.
-  ## Routes events to appropriate windows and invokes their handlers.
+  ## Routes events to appropriate windows and invokes their handlers,
+  ## mirroring `core/windows.nim:handleEvent`.
   ##
   ## Unlike handleEventAsync, this function actually invokes the event handlers.
   ## Safe to call from async contexts with `{.cast(gcsafe).}`.
@@ -248,35 +318,48 @@ proc handleEventSync*(awm: AsyncWindowManager, event: Event): bool =
     return false
 
   try:
-    case event.kind
-    of Key:
-      # Route keyboard events to focused window
-      if awm.focusedWindow.isSome():
-        let windowId = awm.focusedWindow.get()
-        for window in awm.windows:
-          if window.id == windowId:
-            return window.handleWindowEvent(event)
-      return false
-    of Mouse:
-      # Find topmost window at mouse position
+    # If there's a modal window, only it can handle events
+    if awm.modalWindow.isSome():
+      let modalOpt = getWindowHelper(awm, awm.modalWindow.get())
+      if modalOpt.isSome():
+        return modalOpt.get().handleWindowEvent(event)
+
+    # For mouse events, find the topmost window at mouse position
+    if event.kind == EventKind.Mouse:
       let mousePos = pos(event.mouse.x, event.mouse.y)
-      for i in countdown(awm.windows.len - 1, 0):
-        let window = awm.windows[i]
-        if window.visible and window.area.contains(mousePos):
-          # Auto-focus window on mouse click
-          if event.mouse.kind == Press:
-            awm.focusWindowHelper(i, window)
-          return window.handleWindowEvent(event)
+      let windowAtPos = awm.findWindowAtSync(mousePos)
+      if windowAtPos.isSome():
+        let window = windowAtPos.get()
+        # Auto-focus window on mouse click. zIndex bump alone is enough — the
+        # zIndex-based sort in getVisibleWindows{Sync,Async} keeps the focused
+        # window on top without reordering `awm.windows`.
+        if event.mouse.kind == Press:
+          awm.focusWindowHelper(window)
+          if window.modal:
+            awm.modalWindow = some(window.id)
+        return window.handleWindowEvent(event)
       return false
-    of Resize:
-      # Resize events are typically handled separately via dispatchResize
-      # Just return false here for consistency with sync WindowManager
-      return false
-    else:
-      return false
-  except:
-    # Event handler raised an exception - treat as unhandled
-    # Note: Using bare except to handle indirect calls that may raise any Exception
+
+    # For other events, route to focused window
+    let focused = awm.getFocusedWindowSync()
+    if focused.isSome():
+      return focused.get().handleWindowEvent(event)
+
+    return false
+  except Exception:
+    # User-supplied window handler raised - treat as unhandled.
+    #
+    # We catch `Exception` (rather than `CatchableError`) intentionally:
+    # window callbacks have no `{.raises.}` annotation, so Nim's effect
+    # system infers they may raise bare `Exception`. Chronos's `{.async.}`
+    # in particular requires this proc to close over those effects so the
+    # caller (`async_app.tickAsync`) does not inherit an unlisted raise.
+    #
+    # `Defect`s (IndexDefect, nil dereference, etc.) inherit from
+    # `Exception` and are thus also caught here when `--panics:off` (the
+    # current default); with `--panics:on` they terminate the program and
+    # never reach this handler. Either way, downstream code does not rely
+    # on observing defects through this path.
     return false
 
 # Async Window Border Drawing
@@ -336,50 +419,50 @@ proc renderAsync*(
   ## Render all windows to the destination buffer asynchronously
   let visibleWindows = await awm.getVisibleWindowsAsync()
 
-  # Render windows from bottom to top
-  for i, window in visibleWindows:
-    if window.state != wsMinimized and window.state != wsHidden:
-      # Create a buffer for the complete window (including borders)
-      var windowBuffer = newBuffer(window.area)
+  # Render windows from bottom to top (ascending zIndex from getVisibleWindowsAsync)
+  for window in visibleWindows:
+    if window.state == wsMinimized:
+      continue
+    # Create a buffer for the complete window (including borders)
+    var windowBuffer = newBuffer(window.area)
 
-      # Draw window border first if enabled
-      if window.border.isSome():
-        drawAsyncWindowBorder(window, windowBuffer)
+    # Draw window border first if enabled
+    if window.border.isSome():
+      drawAsyncWindowBorder(window, windowBuffer)
 
-      # Then, copy the window's content buffer to the content area (on top of border)
-      if window.buffer.area.width > 0 and window.buffer.area.height > 0:
-        let contentPos = pos(
-          window.contentArea.x - window.area.x, window.contentArea.y - window.area.y
-        )
-        windowBuffer.merge(window.buffer, contentPos)
+    # Then, copy the window's content buffer to the content area (on top of border)
+    if window.buffer.area.width > 0 and window.buffer.area.height > 0:
+      let contentPos =
+        pos(window.contentArea.x - window.area.x, window.contentArea.y - window.area.y)
+      windowBuffer.merge(window.buffer, contentPos)
 
-      # Convert to AsyncBuffer and merge
-      let asyncWindowBuffer = newAsyncBuffer(window.area)
-      asyncWindowBuffer.updateFromBufferAsync(windowBuffer)
+    # Convert to AsyncBuffer and merge
+    let asyncWindowBuffer = newAsyncBuffer(window.area)
+    asyncWindowBuffer.updateFromBufferAsync(windowBuffer)
 
-      await destBuffer.mergeAsync(asyncWindowBuffer, pos(window.area.x, window.area.y))
+    await destBuffer.mergeAsync(asyncWindowBuffer, pos(window.area.x, window.area.y))
 
   # Yield to allow other async operations
   await sleepMs(0)
 
 proc renderSync*(awm: AsyncWindowManager, destBuffer: var Buffer) =
-  ## Synchronous render for compatibility with existing sync code
-  ## Uses window.buffer content which should be updated by the application
-  var visibleWindows: seq[Window] = @[]
-  for window in awm.windows:
-    if window.visible and window.state != wsHidden:
-      visibleWindows.add(window)
+  ## Synchronous render for compatibility with existing sync code.
+  ## Uses window.buffer content which should be updated by the application.
+  ## Windows are drawn in ascending Z-index order so the top window (highest
+  ## zIndex) is painted last, matching `findWindowAtSync`'s pick order.
+  let visibleWindows = awm.getVisibleWindowsSync()
 
   for window in visibleWindows:
-    if window.state != wsMinimized and window.state != wsHidden:
-      # Use window's buffer content directly
-      var windowBuffer = window.buffer
+    if window.state == wsMinimized:
+      continue
+    # Use window's buffer content directly
+    var windowBuffer = window.buffer
 
-      # Draw border if configured
-      if window.border.isSome():
-        drawAsyncWindowBorder(window, windowBuffer)
+    # Draw border if configured
+    if window.border.isSome():
+      drawAsyncWindowBorder(window, windowBuffer)
 
-      destBuffer.merge(windowBuffer, pos(window.area.x, window.area.y))
+    destBuffer.merge(windowBuffer, pos(window.area.x, window.area.y))
 
 # Window Layout and Management
 
@@ -496,6 +579,9 @@ proc addWindowSync*(
   if awm.windows.len == 1 or autoFocus or window.modal:
     awm.focusedWindow = some(window.id)
 
+  if window.modal:
+    awm.modalWindow = some(window.id)
+
   return window.id
 
 proc removeWindowSync*(awm: AsyncWindowManager, windowId: WindowId): bool =
@@ -521,30 +607,8 @@ proc removeWindowSync*(awm: AsyncWindowManager, windowId: WindowId): bool =
     else:
       awm.focusedWindow = none(WindowId)
 
+  # Clear modal if the modal window was removed
+  if awm.modalWindow.isSome() and awm.modalWindow.get() == windowId:
+    awm.modalWindow = none(WindowId)
+
   return true
-
-proc focusWindowSync*(awm: AsyncWindowManager, windowId: WindowId): bool =
-  ## Focus a specific window synchronously
-  if awm.isNil:
-    return false
-
-  # Find and focus the target window
-  for i, window in awm.windows:
-    if not window.isNil and window.id == windowId and window.visible:
-      awm.focusWindowHelper(i, window)
-      return true
-
-  return false
-
-proc getFocusedWindowSync*(awm: AsyncWindowManager): Option[Window] =
-  ## Get the currently focused window synchronously
-  if awm.isNil:
-    return none(Window)
-
-  if awm.focusedWindow.isSome():
-    let windowId = awm.focusedWindow.get()
-    for window in awm.windows:
-      if not window.isNil and window.id == windowId:
-        return some(window)
-
-  return none(Window)

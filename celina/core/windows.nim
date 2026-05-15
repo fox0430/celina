@@ -11,10 +11,12 @@ type
   WindowId* = distinct int ## Unique identifier for windows
 
   WindowState* = enum
+    ## Window form (orthogonal to `visible`).
+    ## Visibility is expressed by `Window.visible`; this enum only describes the
+    ## window's form. Use `hide`/`show` to toggle visibility.
     wsNormal ## Normal window state
     wsMinimized ## Window is minimized
     wsMaximized ## Window is maximized
-    wsHidden ## Window is hidden
 
   WindowBorder* = object ## Window border configuration
     top*, right*, bottom*, left*: bool
