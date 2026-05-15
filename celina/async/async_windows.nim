@@ -18,7 +18,7 @@
 ##
 ## For most use cases, prefer `handleEventSync` for actual event processing.
 
-import std/[sequtils, options]
+import std/options
 
 import async_backend, async_buffer
 import ../core/[geometry, buffer, events, windows]

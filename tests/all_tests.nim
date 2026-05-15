@@ -1,3 +1,4 @@
+{.push warning[UnusedImport]: off.}
 import
   tgeometry, tcolors, tunicode, tbuffer, tevents, tterminal, tlayout, twindows, tmouse,
   tapp, tapp_windows, tcelina, terror_handling, tterminal_common, tbutton, ttable,
@@ -11,3 +12,4 @@ when hasAsyncSupport:
   import
     tasync_app, tasync_buffer, tasync_events, tasync_io, tasync_terminal,
     tasync_windows, tasync_renderer
+{.pop.}
