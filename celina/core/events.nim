@@ -158,10 +158,32 @@ proc parseMouseEventSGR(): Event =
 
   return Event(kind: Unknown)
 
+# Pushback buffer for one byte that was read but rejected as a UTF-8
+# continuation. It must be presented as the *first* byte of the next event so
+# we don't lose its information (Unicode §3.9 resync byte). Set by readKey /
+# readKeyInput after a `readUtf8Char*` returns `leftover.isSome`, and consumed
+# by readByteBlocking / readByteNonBlocking on the next call.
+#
+# pendingByte is only set immediately before an event is returned, so by the
+# time any byte reader is called again, the byte is naturally for a fresh
+# event — there is no chance of mixing it with ESC sequence or paste content
+# bytes that follow within the same event.
+var pendingByte* {.threadvar.}: Option[byte]
+
+proc clearPendingByte*() =
+  ## Drop any byte waiting to be re-injected as the next event's first byte.
+  ## Call this from raw-mode toggles to prevent stale bytes from leaking
+  ## across mode transitions.
+  pendingByte = none(byte)
+
 # Blocking I/O helper functions
 proc readByteBlocking(): tuple[success: bool, ch: char] =
   ## Read a single byte in blocking mode
   ## Returns (success, char) where success is true if read succeeded
+  if pendingByte.isSome:
+    let b = pendingByte.get
+    pendingByte = none(byte)
+    return (true, char(b))
   var ch: char
   let bytesRead = tryRecover(
     proc(): int =
@@ -280,15 +302,12 @@ template parseEscapeSequenceUnified*(
         Event(kind: Key, key: KeyEvent(code: KeyCode.Escape, char: "\x1b"))
 
 # UTF-8 helper functions (using shared logic from utf8_utils module)
-proc readUtf8Char(firstByte: byte): string =
+proc readUtf8Char(firstByte: byte): Utf8AssemblyResult =
   ## Read a complete UTF-8 character given its first byte (blocking mode).
   ## Thin stdin-backed adapter over `assembleUtf8Char`; see that proc for
-  ## the full return-value contract (one codepoint / U+FFFD / "").
-  ##
-  ## Note: an invalid continuation byte is *consumed* (not re-injected). This
-  ## keeps the I/O layer simple at the cost of dropping one byte of potential
-  ## resync information — acceptable for terminal input where malformed
-  ## sequences are pathological rather than common.
+  ## the full return-value contract (text + optional leftover byte). The
+  ## continuation-byte reader does NOT consult `pendingByte` — that buffer
+  ## is reserved for fresh event start bytes.
   assembleUtf8Char(
     firstByte,
     proc(): tuple[ok: bool, b: byte] =
@@ -304,10 +323,11 @@ proc readUtf8Char(firstByte: byte): string =
         (false, 0.byte),
   )
 
-proc readUtf8CharNonBlocking(firstByte: byte): string =
+proc readUtf8CharNonBlocking(firstByte: byte): Utf8AssemblyResult =
   ## Read a complete UTF-8 character in non-blocking mode. Thin stdin-backed
   ## adapter over `assembleUtf8Char`. EAGAIN/EWOULDBLOCK, other read errors,
-  ## and short reads all collapse to "truncated sequence" and yield U+FFFD.
+  ## and short reads all collapse to "truncated sequence" and yield U+FFFD
+  ## with no leftover.
   assembleUtf8Char(
     firstByte,
     proc(): tuple[ok: bool, b: byte] =
@@ -360,9 +380,14 @@ proc readKey*(): Event =
       )
 
     # Handle regular UTF-8 characters
-    let utf8Char = readUtf8Char(ch.byte)
-    if utf8Char.len > 0:
-      return Event(kind: Key, key: KeyEvent(code: Char, char: utf8Char))
+    let assembly = readUtf8Char(ch.byte)
+    if assembly.leftover.isSome:
+      # Resync byte: an invalid continuation that should be processed as the
+      # first byte of the next event (Unicode §3.9 best practice). Stash it
+      # for the next readByteBlocking call to consume.
+      pendingByte = some(assembly.leftover.get)
+    if assembly.text.len > 0:
+      return Event(kind: Key, key: KeyEvent(code: Char, char: assembly.text))
     else:
       # Invalid UTF-8 start byte — emit U+FFFD so Char events always carry
       # a valid UTF-8 codepoint (see KeyEvent invariant).
@@ -417,6 +442,10 @@ proc readByteNonBlocking(fd: cint): tuple[success: bool, ch: char, isTimeout: bo
   ## - success: true if read succeeded
   ## - ch: the character read (only valid if success is true)
   ## - isTimeout: true if EAGAIN/EWOULDBLOCK (no data available)
+  if pendingByte.isSome:
+    let b = pendingByte.get
+    pendingByte = none(byte)
+    return (true, char(b), false)
   var ch: char
   let bytesRead = read(fd, addr ch, 1)
 
@@ -610,9 +639,12 @@ proc readKeyInput*(): Option[Event] =
     return some(Event(kind: Key, key: basicKey))
 
   # Handle regular UTF-8 characters
-  let utf8Char = readUtf8CharNonBlocking(ch.byte)
-  if utf8Char.len > 0:
-    return some(Event(kind: Key, key: KeyEvent(code: Char, char: utf8Char)))
+  let assembly = readUtf8CharNonBlocking(ch.byte)
+  if assembly.leftover.isSome:
+    # Resync byte: re-inject as the first byte of the next event (§3.9).
+    pendingByte = some(assembly.leftover.get)
+  if assembly.text.len > 0:
+    return some(Event(kind: Key, key: KeyEvent(code: Char, char: assembly.text)))
   else:
     # Invalid UTF-8 start byte — emit U+FFFD (KeyEvent.char invariant).
     return some(Event(kind: Key, key: KeyEvent(code: Char, char: Utf8ReplacementChar)))

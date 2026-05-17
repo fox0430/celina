@@ -3,7 +3,7 @@
 ## This module provides non-blocking I/O for terminal input/output
 ## that works with both Chronos and std/asyncdispatch.
 
-import std/[posix, selectors]
+import std/[options, posix, selectors]
 
 import async_backend
 
@@ -15,6 +15,10 @@ type
     selector: Selector[int]
     stdinFd: int
     buffer: string
+    pendingByte: Option[byte]
+      ## One-byte pushback slot for a UTF-8 resync byte (Unicode §3.9). Set
+      ## by `readKeyAsync` after an `assembleUtf8Char` failure; consumed by
+      ## `readCharNonBlocking` before checking `buffer` or stdin.
     usePolling: bool # Use polling instead of selector for raw mode
     selectorRegistered: bool # Track if selector registration succeeded
 
@@ -26,6 +30,7 @@ proc newAsyncInputReader*(): AsyncInputReader =
   result.selector = newSelector[int]()
   result.stdinFd = STDIN_FILENO
   result.buffer = ""
+  result.pendingByte = none(byte)
   result.usePolling = false
   result.selectorRegistered = false
 
@@ -91,6 +96,14 @@ proc readNonBlocking*(reader: AsyncInputReader): string =
 
 proc readCharNonBlocking*(reader: AsyncInputReader): char =
   ## Read a single character non-blocking
+  # Highest priority: a byte pushed back from a previous UTF-8 assembly
+  # failure (Unicode §3.9 resync). Consume it before the regular buffer or
+  # any stdin read so it becomes the first byte of the next event.
+  if reader.pendingByte.isSome:
+    let b = reader.pendingByte.get
+    reader.pendingByte = none(byte)
+    return char(b)
+
   if reader.buffer.len > 0:
     result = reader.buffer[0]
     reader.buffer = reader.buffer[1 ..^ 1]
@@ -252,6 +265,21 @@ proc clearInputBuffer*() =
   ## Clear the input buffer
   if not globalInputReader.isNil:
     globalInputReader.buffer = ""
+    globalInputReader.pendingByte = none(byte)
+
+proc setPendingByteAsync*(b: byte) =
+  ## Stash a byte to be re-injected as the first byte of the next event
+  ## (Unicode §3.9 resync). Called from `readKeyAsync` after a UTF-8
+  ## assembly produces a leftover byte. A no-op if the global reader
+  ## hasn't been initialised.
+  if not globalInputReader.isNil:
+    globalInputReader.pendingByte = some(b)
+
+proc clearPendingByteAsync*() =
+  ## Drop any byte waiting to be re-injected. Call from raw-mode toggles
+  ## to prevent stale bytes from leaking across mode transitions.
+  if not globalInputReader.isNil:
+    globalInputReader.pendingByte = none(byte)
 
 proc getInputBufferStats*(): tuple[size: int, available: bool] =
   ## Get input buffer statistics

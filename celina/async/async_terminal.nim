@@ -19,6 +19,7 @@ import std/[termios, posix]
 
 import async_backend, async_buffer
 import ../core/[geometry, colors, buffer, terminal_common]
+from async_io import clearPendingByteAsync
 
 type
   AsyncTerminal* = ref object ## Async terminal interface for screen management
@@ -90,6 +91,9 @@ proc enableRawMode*(terminal: AsyncTerminal) =
 
   terminal.rawMode = true
   terminal.rawModeEnabled = true
+  # Drop any UTF-8 resync byte buffered before mode transition so it
+  # cannot leak across modes as a phantom keypress.
+  clearPendingByteAsync()
 
 proc disableRawMode*(terminal: AsyncTerminal) =
   ## Disable raw mode, restoring original terminal settings
@@ -102,6 +106,7 @@ proc disableRawMode*(terminal: AsyncTerminal) =
       stderr.writeLine("Warning: Failed to restore terminal settings")
   terminal.rawMode = false
   terminal.rawModeEnabled = false
+  clearPendingByteAsync()
 
 # Alternate screen control
 proc enableAlternateScreen*(terminal: AsyncTerminal) {.inline.} =
