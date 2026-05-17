@@ -337,14 +337,12 @@ proc tick(app: App): bool =
     let remainingTime = app.fpsMonitor.getRemainingFrameTime()
 
     # Calculate poll timeout, integrating application timeout if set
-    let hasTimeout = app.timings.applicationTimeout > 0 and app.hasTimeoutHandler()
-    let elapsed =
-      if hasTimeout:
-        (getMonoTime() - app.timings.lastEventTime).inMilliseconds.int
-      else:
-        0
-    let appTimeout = if hasTimeout: app.timings.applicationTimeout else: 0
-    let timeout = calculatePollTimeout(remainingTime, appTimeout, elapsed)
+    let (timeout, hasTimeout) = computePollTimeoutWithState(
+      remainingTime,
+      app.timings.applicationTimeout,
+      app.timings.lastEventTime,
+      app.hasTimeoutHandler(),
+    )
 
     # Poll for events with timeout - blocks until event arrives OR timeout expires
     let eventsAvailable = events.pollEvents(timeout)
