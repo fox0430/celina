@@ -1,6 +1,6 @@
 ## Tests for tick_common module
 
-import std/unittest
+import std/[unittest, monotimes, times]
 
 import ../celina/core/tick_common
 
@@ -93,3 +93,28 @@ suite "isTimeoutReached":
 
   test "returns false when timeout is negative":
     check isTimeoutReached(-1, 100) == false
+
+suite "computePollTimeoutWithState":
+  test "no handler returns hasTimeout=false and remainingFrameTime":
+    let now = getMonoTime()
+    let (t, h) = computePollTimeoutWithState(16, 500, now, false)
+    check t == 16
+    check h == false
+
+  test "handler present but applicationTimeout=0 returns hasTimeout=false":
+    let now = getMonoTime()
+    let (t, h) = computePollTimeoutWithState(16, 0, now, true)
+    check t == 16
+    check h == false
+
+  test "handler present with positive timeout returns hasTimeout=true":
+    let now = getMonoTime()
+    let (_, h) = computePollTimeoutWithState(16, 500, now, true)
+    check h == true
+
+  test "elapsed time shrinks poll timeout toward 0":
+    # lastEventTime far in the past → elapsed exceeds applicationTimeout → timeout 0
+    let past = getMonoTime() + initDuration(seconds = -10)
+    let (t, h) = computePollTimeoutWithState(16, 500, past, true)
+    check h == true
+    check t == 0

@@ -32,6 +32,8 @@
 ## FPS rate. Combined with the dynamic timeout, this provides both
 ## responsive event handling and efficient CPU usage.
 
+import std/[monotimes, times]
+
 const maxEventsPerTick* = 5
   ## Maximum events processed per tick to ensure smooth rendering.
   ## Processing too many events in one tick can cause visible frame drops.
@@ -94,3 +96,24 @@ proc isTimeoutReached*(
   ## Returns true when applicationTimeout is active and enough idle time
   ## has passed since the last event.
   applicationTimeout > 0 and elapsedSinceLastEvent >= applicationTimeout
+
+proc computePollTimeoutWithState*(
+    remainingFrameTime: int,
+    applicationTimeout: int,
+    lastEventTime: MonoTime,
+    hasTimeoutHandler: bool,
+): tuple[timeout: int, hasTimeout: bool] {.inline.} =
+  ## Compute the poll timeout and report whether timeout tracking is active.
+  ##
+  ## Returns the same value as `calculatePollTimeout`, plus the `hasTimeout`
+  ## flag callers need to decide whether to fire the idle-timeout handler
+  ## after the poll returns. Centralizes the elapsed/appTimeout derivation
+  ## so the sync and async tick loops cannot drift.
+  let hasTimeout = applicationTimeout > 0 and hasTimeoutHandler
+  let elapsed =
+    if hasTimeout:
+      (getMonoTime() - lastEventTime).inMilliseconds.int
+    else:
+      0
+  let appTimeout = if hasTimeout: applicationTimeout else: 0
+  (calculatePollTimeout(remainingFrameTime, appTimeout, elapsed), hasTimeout)
