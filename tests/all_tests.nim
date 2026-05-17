@@ -2,7 +2,7 @@
 import
   tgeometry, tcolors, tunicode, tbuffer, tevents, tterminal, tlayout, twindows, tmouse,
   tapp, tapp_windows, tcelina, terror_handling, tterminal_common, tbutton, ttable,
-  ttabs, tprogress, tcursor, tfps, trenderer, ttext, tbase, tlist, tinput,
+  ttabs, tprogress, tcursor, tfps, trenderer, ttext, tlist, tinput,
   tescape_sequence_logic, tkey_logic, tmouse_logic, tutf8_utils, tconfig, tpaste,
   ttick_common
 
