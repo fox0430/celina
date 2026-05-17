@@ -446,13 +446,13 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
       app.timings.lastFrameTime = getMonoTime()
 
     return not app.state.shouldQuit
-  except CancelledError:
+  except CancelledError as e:
     # Must precede the CatchableError catch-all so chronos cancellation
     # propagates instead of being silently swallowed. runAsync re-raises
     # after cleanup so callers observe the cancel. Under asyncdispatch
     # this branch is unreachable (the placeholder type is never raised),
-    # so an unconditional `raise` is safe on both backends.
-    raise
+    # so re-raising is safe on both backends.
+    raise e
   except TerminalError as e:
     raise e
   except CatchableError:
