@@ -209,7 +209,8 @@ proc renderTabBar(widget: Tabs, area: Rect, buf: var Buffer): int =
       if width >= 3:
         " " & truncated & " ".repeat(max(0, width - truncated.displayWidth - 2)) & " "
       elif width == 2:
-        " " & (if truncated.len > 0: truncated.truncateToWidth(1) else: " ")
+        " " & (if truncated.len > 0: truncated.truncateToWidth(1)
+        else: " ")
       else:
         if truncated.len > 0:
           truncated.truncateToWidth(1)

@@ -66,7 +66,6 @@ proc runeWidth*(r: Rune): int =
 
 proc runesWidth*(runes: seq[Rune]): int =
   ## Calculate total display width of a sequence of runes
-  result = 0
   for rune in runes:
     result += runeWidth(rune)
 
@@ -76,7 +75,6 @@ proc displayWidth*(s: string): int =
   ## Wide characters (CJK, emoji, etc.) count as 2 columns; narrow characters
   ## count as 1. Use this in place of `runeLen` whenever the result feeds into
   ## visual layout (truncation, padding, width reservation, preferred size).
-  result = 0
   for r in s.runes:
     result += runeWidth(r)
 
@@ -86,7 +84,6 @@ proc truncateToWidth*(s: string, maxWidth: int): string =
   ## rather than split when only one column remains.
   if maxWidth <= 0:
     return ""
-  result = ""
   var w = 0
   for r in s.runes:
     let rw = runeWidth(r)
@@ -104,7 +101,7 @@ proc width*(cell: Cell): int =
     return 0
   return runeWidth(runes[0])
 
-proc `==`*(a, b: Cell): bool {.inline.} =
+proc `==`*(a, b: Cell): bool =
   ## Compare two cells for equality
   a.symbol == b.symbol and a.style == b.style and a.hyperlink == b.hyperlink
 
@@ -117,7 +114,7 @@ proc `$`*(cell: Cell): string =
     parts.add(&"hyperlink: \"{cell.hyperlink}\"")
   &"Cell({parts.join(\", \")})"
 
-proc newBuffer*(area: Rect): Buffer {.inline.} =
+proc newBuffer*(area: Rect): Buffer =
   ## Create a new Buffer with the specified area
   Buffer(
     area: area,
@@ -125,12 +122,12 @@ proc newBuffer*(area: Rect): Buffer {.inline.} =
     dirty: DirtyRegion(isDirty: false, minX: 0, minY: 0, maxX: 0, maxY: 0),
   )
 
-proc newBuffer*(width, height: int): Buffer {.inline.} =
+proc newBuffer*(width, height: int): Buffer =
   ## Create a new Buffer with specified dimensions at origin
   newBuffer(rect(0, 0, width, height))
 
 # Dirty region management
-proc markDirty*(buffer: var Buffer, x, y: int) {.inline.} =
+proc markDirty*(buffer: var Buffer, x, y: int) =
   ## Mark a specific cell as dirty for optimized diff calculation
   ## This expands the dirty region to include the specified cell
   if x < 0 or x >= buffer.area.width or y < 0 or y >= buffer.area.height:
@@ -146,7 +143,7 @@ proc markDirty*(buffer: var Buffer, x, y: int) {.inline.} =
     buffer.dirty.maxX = max(buffer.dirty.maxX, x)
     buffer.dirty.maxY = max(buffer.dirty.maxY, y)
 
-proc markDirtyRect*(buffer: var Buffer, rect: Rect) {.inline.} =
+proc markDirtyRect*(buffer: var Buffer, rect: Rect) =
   ## Mark a rectangular area as dirty
   ## More efficient than marking individual cells when multiple cells change
   let clipped = buffer.area.intersection(rect)
