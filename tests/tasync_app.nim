@@ -886,6 +886,85 @@ when hasAsyncSupport:
       app.restoreTerminal()
       app.restoreTerminal()
 
+  when hasChronos:
+    import chronos
+
+    suite "AsyncApp Shutdown and Cancellation":
+      test "shutdownAsync is a no-op when runAsync has not started":
+        let app = newAsyncApp()
+        waitFor shutdownAsync(app)
+        check app.isRunning() == false
+
+      test "shutdownAsync cancels a running loop and awaits cleanup":
+        let config = AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+        let app = newAsyncApp(config)
+        let runFut = app.runAsync()
+
+        # Let the loop enter pollEventsAsync at least once.
+        waitFor sleepAsync(50.milliseconds)
+        check app.isRunning() == true
+
+        waitFor shutdownAsync(app)
+
+        # cleanup ran in finally before shutdownAsync returned.
+        check app.isRunning() == false
+
+        # The original runAsync future surfaces the cancellation.
+        expect CancelledError:
+          waitFor runFut
+
+      test "shutdownAsync called twice does not raise":
+        let config = AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+        let app = newAsyncApp(config)
+        let runFut = app.runAsync()
+        waitFor sleepAsync(50.milliseconds)
+
+        let f1 = shutdownAsync(app)
+        let f2 = shutdownAsync(app)
+        waitFor f1
+        waitFor f2
+
+        # Drain the runFuture to surface the cancellation.
+        expect CancelledError:
+          waitFor runFut
+        check app.isRunning() == false
+
+      test "shutdownAsync after normal quit is a no-op":
+        let config = AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+        let app = newAsyncApp(config)
+        app.onTickAsync proc(app: AsyncApp): Future[bool] {.async.} =
+          app.quit()
+          return true
+        let runFut = app.runAsync()
+        waitFor runFut
+        check app.isRunning() == false
+
+        # runFuture is nil after runAsync returns — shutdownAsync no-ops.
+        waitFor shutdownAsync(app)
+
+      test "installSignalHandler installs and removes without crashing":
+        let config = AppConfig(
+          alternateScreen: false,
+          rawMode: false,
+          targetFps: 60,
+          installSignalHandler: true,
+        )
+        let app = newAsyncApp(config)
+        let runFut = app.runAsync()
+        waitFor sleepAsync(50.milliseconds)
+
+        # We do not raise SIGTERM to avoid interfering with the test
+        # process; just verify install + remove happens around the run.
+        waitFor shutdownAsync(app)
+        expect CancelledError:
+          waitFor runFut
+        check app.isRunning() == false
+
+  when not hasChronos:
+    suite "AsyncApp shutdownAsync availability":
+      test "shutdownAsync is not declared under non-chronos backends":
+        check not declared(shutdownAsync)
+
   suite "quickRunAsync signature":
     test "quickRunAsync function signature":
       # Test that quickRunAsync exists and has correct signature

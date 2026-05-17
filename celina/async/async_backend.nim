@@ -30,6 +30,11 @@ when hasAsyncSupport:
     import std/asyncdispatch
     export asyncdispatch
 
+    type CancelledError* = object of CatchableError
+      ## Placeholder so cross-backend `except CancelledError` clauses
+      ## compile under asyncdispatch. asyncdispatch's primitives never
+      ## raise this type, so such clauses are effectively no-ops.
+
     template sleepMs*(ms: int): untyped =
       sleepAsync(ms)
 

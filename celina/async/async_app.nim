@@ -38,6 +38,16 @@ type
     handlers: AsyncAppHandlers
     timings: AsyncAppTimings
     state: AsyncAppState
+    when hasChronos:
+      runFuture: Future[void]
+        ## Set on runAsync entry, cleared on exit. shutdownAsync targets
+        ## this Future via cancelAndWait. nil before/after runAsync.
+      when defined(posix):
+        signalHandles: seq[SignalHandle]
+          ## SIGINT/SIGTERM handles registered when
+          ## config.installSignalHandler is true. Cleared during runAsync
+          ## cleanup so handles do not outlive the AsyncApp instance.
+          ## POSIX-only: chronos signal APIs are not available on Windows.
 
   AsyncAppError* = object of CatchableError
 
@@ -436,10 +446,63 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
       app.timings.lastFrameTime = getMonoTime()
 
     return not app.state.shouldQuit
+  except CancelledError:
+    # Must precede the CatchableError catch-all so chronos cancellation
+    # propagates instead of being silently swallowed. runAsync re-raises
+    # after cleanup so callers observe the cancel. Under asyncdispatch
+    # this branch is unreachable (the placeholder type is never raised),
+    # so an unconditional `raise` is safe on both backends.
+    raise
   except TerminalError as e:
     raise e
   except CatchableError:
     return false
+
+proc cleanupQuietly(app: AsyncApp) {.async.} =
+  ## Run cleanupAsync, swallowing exceptions. Used so cleanup failures do
+  ## not replace whatever exception (CancelledError, TerminalError, etc.)
+  ## the caller is propagating. With `-d:celinaDebug`, the failure is
+  ## logged to stderr for diagnostics.
+  try:
+    await app.cleanupAsync()
+  except CatchableError as e:
+    when defined(celinaDebug):
+      try:
+        stderr.writeLine("[celina] cleanupAsync failed: " & e.msg)
+      except IOError:
+        discard
+    discard
+
+when hasChronos and defined(posix):
+  proc installSignalHandlersIfRequested(app: AsyncApp) {.gcsafe, raises: [].}
+  proc removeSignalHandlers(app: AsyncApp) {.gcsafe, raises: [].}
+
+proc runAsyncInner(app: AsyncApp) {.async.} =
+  ## Inner body of runAsync. Separated so the outer wrapper can capture the
+  ## Future before any await suspends, exposing it via app.runFuture for
+  ## shutdownAsync / cancelAndWait.
+  ##
+  ## The body has no explicit catch — CancelledError, TerminalError, and
+  ## any other CatchableError all propagate through `finally` after
+  ## cleanup runs, so the caller observes them.
+  when hasChronos and defined(posix):
+    installSignalHandlersIfRequested(app)
+  try:
+    await app.setupAsync()
+    app.state.running = true
+
+    # Initialize async event system for resize detection
+    initAsyncEventSystem()
+
+    # Main async application loop
+    while await app.tickAsync():
+      discard
+  finally:
+    app.state.running = false
+    cleanupAsyncEventSystem()
+    await cleanupQuietly(app)
+    when hasChronos and defined(posix):
+      removeSignalHandlers(app)
 
 proc runAsync*(app: AsyncApp) {.async.} =
   ## Run the async application main loop
@@ -463,40 +526,146 @@ proc runAsync*(app: AsyncApp) {.async.} =
   ##
   ## await app.runAsync()
   ## ```
-  try:
-    await app.setupAsync()
-    app.state.running = true
-
-    # Initialize async event system for resize detection
-    initAsyncEventSystem()
-
-    # Main async application loop
-    while await app.tickAsync():
-      discard
-  except TerminalError as e:
+  when hasChronos:
+    # chronos creates the Future eagerly when runAsyncInner is called, so we
+    # can capture it before awaiting. shutdownAsync targets this Future.
+    let inner = runAsyncInner(app)
+    app.runFuture = inner
     try:
-      await app.cleanupAsync()
-    except:
-      discard
-    raise e
-  except CatchableError as e:
-    try:
-      await app.cleanupAsync()
-    except:
-      discard
-    raise e
-  finally:
-    app.state.running = false
-    # Cleanup async event system
-    cleanupAsyncEventSystem()
-    try:
-      await app.cleanupAsync()
-    except CatchableError:
-      discard
+      await inner
+    finally:
+      app.runFuture = nil
+  else:
+    await runAsyncInner(app)
 
 proc quit*(app: AsyncApp) =
   ## Signal the async application to quit gracefully
   app.state.shouldQuit = true
+
+when hasChronos:
+  proc shutdownAsync*(app: AsyncApp) {.async.} =
+    ## Asynchronously cancel a running runAsync and await its cleanup.
+    ##
+    ## Unlike `app.quit()` (cooperative; sets shouldQuit and waits for the
+    ## current tick to finish), `shutdownAsync` requests immediate
+    ## cancellation via chronos and returns only after cleanupAsync has
+    ## completed, so the terminal is restored by the time it returns.
+    ##
+    ## Safe to call when runAsync is not active (no-op) and safe to call
+    ## twice concurrently.
+    ##
+    ## **Do NOT `await` this from inside a user event/tick/render/timeout
+    ## handler.** Those handlers run as part of `runAsync`'s Future, so
+    ## `cancelAndWait(app.runFuture)` would wait for the very handler
+    ## that is awaiting it, causing a deadlock. Use `app.quit()` from
+    ## inside handlers; reserve `shutdownAsync` for external callers
+    ## such as signal handlers or supervisor coroutines.
+    ##
+    ## Only available with `-d:asyncBackend=chronos`.
+    if app.runFuture.isNil or app.runFuture.finished():
+      return
+    await cancelAndWait(app.runFuture)
+
+when hasChronos and defined(posix):
+  import std/posix
+
+  var installedSignalAppCount: int
+    ## Counts AsyncApp instances that currently own SIGINT/SIGTERM
+    ## handlers in this process. Bumped by installSignalHandlersIfRequested
+    ## on success, decremented by removeSignalHandlers. A second concurrent
+    ## installer is rejected so signal delivery to a specific app stays
+    ## well-defined (chronos would otherwise register multiple callbacks
+    ## with no contract over ordering or udata routing).
+
+  proc onShutdownSignal(udata: pointer) {.gcsafe, raises: [].} =
+    ## chronos signal callback. Runs on the dispatcher thread; asyncSpawn
+    ## from here is safe. Matches chronos CallbackFunc signature.
+    if udata.isNil:
+      return
+    let app = cast[AsyncApp](udata)
+    if app.runFuture.isNil:
+      # Handler registration happens inside runAsyncInner's synchronous
+      # prologue (before the first await), so app.runFuture is briefly
+      # nil between addSignal and the `app.runFuture = inner` assignment
+      # in runAsync. The chronos dispatcher does not invoke callbacks
+      # during that prologue — it only fires them while polling — so
+      # this branch is essentially unreachable in practice. The
+      # cooperative-quit fallback is kept defensively: if a signal does
+      # somehow arrive here, the next tick observes shouldQuit and the
+      # loop exits at its boundary instead of silently dropping the
+      # request.
+      app.state.shouldQuit = true
+      return
+    if app.runFuture.finished():
+      return
+    try:
+      asyncSpawn shutdownAsync(app)
+    except CatchableError:
+      # asyncSpawn can reject when the dispatcher is shutting down. Fall
+      # back to a cooperative quit so the loop still exits at the next
+      # tick boundary.
+      app.state.shouldQuit = true
+
+  proc installSignalHandlersIfRequested(app: AsyncApp) {.gcsafe, raises: [].} =
+    ## Register SIGINT and SIGTERM handlers if the config opts in.
+    ##
+    ## POSIX-only: chronos exposes `addSignal` via std/posix on Linux,
+    ## macOS, and other POSIX systems. On Windows this proc and the
+    ## surrounding signal-handling block are not compiled at all (no
+    ## stub is emitted), so `config.installSignalHandler` has no
+    ## effect there.
+    ##
+    ## Only one AsyncApp per process may install handlers at a time.
+    ## A second concurrent installer is rejected (and logged under
+    ## `-d:celinaDebug`); the loop still runs but ignores SIGINT/SIGTERM.
+    if not app.config.installSignalHandler:
+      return
+    {.cast(gcsafe).}:
+      if installedSignalAppCount > 0:
+        when defined(celinaDebug):
+          try:
+            stderr.writeLine(
+              "[celina] installSignalHandler skipped: another AsyncApp " &
+                "instance already owns SIGINT/SIGTERM handlers in this process"
+            )
+          except IOError:
+            discard
+        return
+    let udata = cast[pointer](app)
+    try:
+      {.cast(gcsafe).}:
+        # addSignal raises OSError on epoll/kqueue under POSIX. We catch
+        # CatchableError to stay backend-agnostic across chronos versions.
+        app.signalHandles.add(addSignal(SIGINT, onShutdownSignal, udata))
+        app.signalHandles.add(addSignal(SIGTERM, onShutdownSignal, udata))
+    except CatchableError as e:
+      when defined(celinaDebug):
+        try:
+          stderr.writeLine("[celina] addSignal failed: " & e.msg)
+        except IOError:
+          discard
+      discard
+    {.cast(gcsafe).}:
+      if app.signalHandles.len > 0:
+        # Only claim ownership when at least one handler was registered;
+        # partial success (e.g., SIGINT ok, SIGTERM failed) still counts
+        # so removeSignalHandlers releases the slot.
+        inc installedSignalAppCount
+
+  proc removeSignalHandlers(app: AsyncApp) {.gcsafe, raises: [].} =
+    ## Unregister handles installed by installSignalHandlersIfRequested.
+    ## Safe to call when none were installed.
+    let hadHandlers = app.signalHandles.len > 0
+    for h in app.signalHandles:
+      try:
+        {.cast(gcsafe).}:
+          removeSignal(h)
+      except CatchableError:
+        discard
+    app.signalHandles.setLen(0)
+    {.cast(gcsafe).}:
+      if hadHandlers and installedSignalAppCount > 0:
+        dec installedSignalAppCount
 
 proc restoreTerminal*(app: AsyncApp) =
   ## Synchronously restore terminal state for use in crash handlers.
