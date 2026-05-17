@@ -9,11 +9,15 @@ import base
 import ../core/[geometry, buffer, colors, events]
 
 type
+  ## Text editing APIs (cursor, selection, insert, delete, scroll offset)
+  ## operate in rune units, not display width — `runeLen` calls below are
+  ## intentional. Display width is only consulted by `calculateVisibleRange`
+  ## and the renderer, where layout requires column math.
   InputState* = object
     text*: string # The input text
     cursor*: int # Cursor position (in runes)
     selection*: tuple[start, stop: int] # Selection range (in runes)
-    offset*: int # Horizontal scroll offset for long text
+    offset*: int # Horizontal scroll offset for long text (in runes)
     focused*: bool # Whether the input has focus
 
   BorderStyle* = enum
@@ -475,11 +479,20 @@ proc calculateVisibleRange(
   return (offset, visibleStart, visibleEnd, clampedCursorX)
 
 proc getDisplayText(widget: Input): string =
-  ## Get the text to display (with password masking if enabled)
+  ## Get the text to display (with password masking if enabled).
+  ##
+  ## Mask each rune with a character of the same display width so the masked
+  ## string has the same rune count *and* column width as the original. This
+  ## keeps it aligned with `calculateVisibleRange`, which indexes by rune over
+  ## the original text but accumulates columns by `runeWidth`.
   if widget.password and widget.state.text.len > 0:
-    "*".repeat(widget.state.text.runeLen)
+    for r in widget.state.text.runes:
+      if runeWidth(r) >= 2:
+        result.add("＊") # FULLWIDTH ASTERISK (2 cols)
+      else:
+        result.add('*') # narrow asterisk (1 col)
   else:
-    widget.state.text
+    result = widget.state.text
 
 # Input widget methods
 method render*(widget: Input, area: Rect, buf: var Buffer) =
