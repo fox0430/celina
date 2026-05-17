@@ -5,8 +5,7 @@
 
 import ../core/[geometry, buffer]
 
-type Widget* = ref object of RootObj
-	## Base widget type - all widgets inherit from this
+type Widget* = ref object of RootObj ## Base widget type - all widgets inherit from this
 
 method render*(widget: Widget, area: Rect, buf: var Buffer) {.base.} =
   ## Render the widget into the given buffer area
