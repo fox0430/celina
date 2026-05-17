@@ -110,8 +110,13 @@ proc parseMouseEventSGR(): Future[Event] {.async.} =
 
 # UTF-8 helper functions (using shared logic from utf8_utils module)
 proc readUtf8CharAsync(firstByte: byte): Future[string] {.async.} =
-  ## Read a complete UTF-8 character asynchronously
-  ## Uses shared UTF-8 validation logic from utf8_utils
+  ## Read a complete UTF-8 character asynchronously.
+  ## Uses shared UTF-8 validation logic from utf8_utils.
+  ##
+  ## Returns a single valid UTF-8 codepoint, or U+FFFD (REPLACEMENT CHARACTER)
+  ## if the sequence is truncated or contains an invalid continuation byte.
+  ## Returns "" only when the first byte itself is not a valid UTF-8 start byte
+  ## (caller substitutes U+FFFD).
   let byteLen = utf8ByteLength(firstByte)
   if byteLen == 0:
     return ""
@@ -125,19 +130,14 @@ proc readUtf8CharAsync(firstByte: byte): Future[string] {.async.} =
     let nextByte = await readCharAsync()
 
     if nextByte == '\0':
-      # Failed to read, return what we have
-      if continuationBytes.len > 0:
-        return buildUtf8String(firstByte, continuationBytes)
-      else:
-        return $char(firstByte)
+      # Failed to read — emit one U+FFFD for the ill-formed maximal subpart.
+      return Utf8ReplacementChar
 
     # Validate using shared logic
     if not isUtf8ContinuationByte(nextByte.byte):
-      # Invalid, return what we have
-      if continuationBytes.len > 0:
-        return buildUtf8String(firstByte, continuationBytes)
-      else:
-        return $char(firstByte)
+      # Invalid continuation byte — emit one U+FFFD. The offending byte is
+      # consumed (see note in sync readUtf8Char).
+      return Utf8ReplacementChar
 
     continuationBytes.add(nextByte.byte)
 
@@ -224,8 +224,8 @@ proc readKeyAsync*(): Future[Event] {.async.} =
     if utf8Char.len > 0:
       return Event(kind: Key, key: KeyEvent(code: Char, char: utf8Char))
     else:
-      # Invalid UTF-8, treat as single byte
-      return Event(kind: Key, key: KeyEvent(code: Char, char: $ch))
+      # Invalid UTF-8 start byte — emit U+FFFD (KeyEvent.char invariant).
+      return Event(kind: Key, key: KeyEvent(code: Char, char: Utf8ReplacementChar))
   except Exception as e:
     raise newException(AsyncEventError, "Async key reading failed: " & e.msg)
   except CatchableError:
