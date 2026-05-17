@@ -14,6 +14,13 @@ type AppConfig* = object ## Application configuration options
   rawMode*: bool ## Enable raw terminal mode (no line buffering)
   windowMode*: bool ## Enable window management
   targetFps*: int ## Target FPS for rendering (default: 60)
+  installSignalHandler*: bool
+    ## When true and the chronos backend is active on a POSIX platform,
+    ## runAsync installs SIGINT/SIGTERM handlers that trigger
+    ## shutdownAsync. Ignored under the sync App, asyncdispatch, and
+    ## `asyncBackend=none` builds, and on non-POSIX platforms (e.g.
+    ## Windows) where the signal-handling code is not compiled because
+    ## chronos signal APIs are unavailable.
 
 proc `$`*(config: AppConfig): string =
   ## String representation of AppConfig for debugging
@@ -31,6 +38,8 @@ proc `$`*(config: AppConfig): string =
     parts.add("rawMode")
   if config.windowMode:
     parts.add("windowMode")
+  if config.installSignalHandler:
+    parts.add("installSignalHandler")
   parts.add("targetFps: " & $config.targetFps)
   "AppConfig(" & parts.join(", ") & ")"
 
@@ -43,6 +52,7 @@ const DefaultAppConfig* = AppConfig(
   rawMode: true,
   windowMode: false,
   targetFps: 60,
+  installSignalHandler: false,
 )
 
 proc defaultAppConfig*(): AppConfig {.inline.} =
@@ -88,6 +98,11 @@ proc withTargetFps*(config: AppConfig, fps: int): AppConfig {.inline.} =
   ## Return a new config with target FPS setting
   result = config
   result.targetFps = fps
+
+proc withInstallSignalHandler*(config: AppConfig, enabled: bool): AppConfig {.inline.} =
+  ## Return a new config with install-signal-handler setting (chronos only)
+  result = config
+  result.installSignalHandler = enabled
 
 # Version Information
 

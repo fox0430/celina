@@ -229,10 +229,12 @@ proc readKeyAsync*(): Future[Event] {.async.} =
     else:
       # Invalid UTF-8 start byte — emit U+FFFD (KeyEvent.char invariant).
       return Event(kind: Key, key: KeyEvent(code: Char, char: Utf8ReplacementChar))
-  except Exception as e:
+  except CancelledError as e:
+    # Must precede `except CatchableError` so chronos cancellation propagates
+    # to the caller instead of being wrapped into AsyncEventError.
+    raise e
+  except CatchableError as e:
     raise newException(AsyncEventError, "Async key reading failed: " & e.msg)
-  except CatchableError:
-    return Event(kind: Unknown)
 
 # Non-blocking async event reading
 proc pollKeyAsync*(): Future[Option[Event]] {.async.} =
@@ -249,10 +251,12 @@ proc pollKeyAsync*(): Future[Option[Event]] {.async.} =
       return some(event)
     else:
       return none(Event)
-  except Exception as e:
+  except CancelledError as e:
+    # Must precede `except CatchableError` so chronos cancellation propagates
+    # to the caller instead of being wrapped into AsyncEventError.
+    raise e
+  except CatchableError as e:
     raise newException(AsyncEventError, "Async key polling failed: " & e.msg)
-  except CatchableError:
-    return none(Event)
 
 # Event polling with timeout
 proc pollEventsAsync*(timeoutMs: int): Future[bool] {.async.} =
@@ -260,10 +264,12 @@ proc pollEventsAsync*(timeoutMs: int): Future[bool] {.async.} =
   ## Returns true if events are available, false if timeout occurred
   try:
     return await hasInputAsync(timeoutMs)
-  except Exception as e:
+  except CancelledError as e:
+    # Must precede `except CatchableError` so chronos cancellation propagates
+    # to the caller instead of being wrapped into AsyncEventError.
+    raise e
+  except CatchableError as e:
     raise newException(AsyncEventError, "Async event polling failed: " & e.msg)
-  except CatchableError:
-    return false
 
 # Advanced async event waiting
 proc waitForKeyAsync*(): Future[Event] {.async.} =
@@ -273,10 +279,12 @@ proc waitForKeyAsync*(): Future[Event] {.async.} =
       let event = await readKeyAsync()
       if event.kind != Unknown:
         return event
-    except Exception as e:
+    except CancelledError as e:
+      # Must precede `except CatchableError` so chronos cancellation propagates
+      # to the caller instead of being wrapped into AsyncEventError.
+      raise e
+    except CatchableError as e:
       raise newException(AsyncEventError, "Async key waiting failed: " & e.msg)
-    except CatchableError:
-      discard
 
     # Small async sleep to prevent busy waiting
     await sleepMs(10)
