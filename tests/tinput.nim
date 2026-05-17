@@ -378,6 +378,18 @@ suite "Input Widget Tests":
       var input = newInput(password = true)
       check input.getDisplayText() == ""
 
+    test "Password display preserves width for wide runes":
+      # Mask must match each rune's display width so the masked text occupies
+      # the same number of columns as the original. Wide runes (CJK) become
+      # fullwidth asterisks; narrow runes become regular asterisks. Rune count
+      # is preserved so calculateVisibleRange stays aligned with the renderer.
+      var input = newInput(password = true)
+      input.setText("あa日")
+      let display = input.getDisplayText()
+      check display.runeLen == 3
+      check display.displayWidth == 5
+      check display == "＊*＊"
+
   suite "Visible Range Calculation Tests":
     test "Basic visible range":
       var input = newInput()
