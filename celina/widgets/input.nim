@@ -44,12 +44,6 @@ type
     onBlur*: proc() # Called when input loses focus
     onKeyPress*: proc(key: KeyEvent): bool # Custom key handler
 
-# Display width utility
-proc displayWidth(s: string): int =
-  ## Calculate the display width of a string considering wide characters
-  for r in s.runes:
-    result += runeWidth(r)
-
 # Border drawing utilities
 proc getBorderChars(
     borderStyle: BorderStyle
@@ -549,9 +543,7 @@ method render*(widget: Input, area: Rect, buf: var Buffer) =
       buf.setString(contentArea.x + x, contentArea.y, " ", backgroundStyle)
 
     if widget.placeholder.len > 0:
-      let placeholderText = widget.placeholder.runeSubStr(
-        0, min(widget.placeholder.runeLen, contentArea.width)
-      )
+      let placeholderText = widget.placeholder.truncateToWidth(contentArea.width)
       buf.setString(
         contentArea.x, contentArea.y, placeholderText, widget.placeholderStyle
       )

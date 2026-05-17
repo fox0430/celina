@@ -3,7 +3,7 @@
 ## This module provides a tabbed interface widget that allows switching between
 ## multiple content panels.
 
-import std/[strutils, unicode, sequtils]
+import std/[strutils, sequtils]
 
 import base, text
 
@@ -131,7 +131,8 @@ proc calculateTabWidths(titles: seq[string], availableWidth: int): seq[int] =
   var totalNaturalWidth = 0
 
   for i, title in titles:
-    naturalWidths[i] = max(minTabWidth, title.runeLen + 2) # Add padding, ensure minimum
+    # Add padding, ensure minimum
+    naturalWidths[i] = max(minTabWidth, title.displayWidth + 2)
     totalNaturalWidth += naturalWidths[i]
 
   totalNaturalWidth += totalDividers # Account for dividers
@@ -165,13 +166,13 @@ proc calculateTabWidths(titles: seq[string], availableWidth: int): seq[int] =
 
 proc truncateTitle(title: string, width: int): string =
   ## Truncate a title to fit within the given width
-  if title.runeLen <= width:
+  if title.displayWidth <= width:
     return title
 
   if width <= 3:
-    return "...".runeSubStr(0, width)
+    return "...".truncateToWidth(width)
 
-  title.runeSubStr(0, width - 3) & "..."
+  title.truncateToWidth(width - 3) & "..."
 
 proc renderTabBar(widget: Tabs, area: Rect, buf: var Buffer): int =
   ## Render the tab bar and return the height used
@@ -204,17 +205,19 @@ proc renderTabBar(widget: Tabs, area: Rect, buf: var Buffer): int =
     let width = max(1, widths[i]) # Ensure positive width
     let availablePadding = max(0, width - 2) # Available space for title after padding
     let truncated = truncateTitle(tab.title, availablePadding)
-    let padded =
+    let rawPadded =
       if width >= 3:
-        " " & truncated & " ".repeat(max(0, width - truncated.runeLen - 2)) & " "
+        " " & truncated & " ".repeat(max(0, width - truncated.displayWidth - 2)) & " "
       elif width == 2:
-        " " & (if truncated.len > 0: truncated.runeSubStr(0, 1)
+        " " & (if truncated.len > 0: truncated.truncateToWidth(1)
         else: " ")
       else:
         if truncated.len > 0:
-          truncated.runeSubStr(0, 1)
+          truncated.truncateToWidth(1)
         else:
           " "
+    # Fill any remaining width when a wide character was dropped during truncation
+    let padded = rawPadded & " ".repeat(max(0, width - rawPadded.displayWidth))
 
     let style =
       if i == widget.activeIndex:
@@ -225,7 +228,7 @@ proc renderTabBar(widget: Tabs, area: Rect, buf: var Buffer): int =
     # Bounds check before writing
     let finalString =
       if padded.len > 0:
-        padded.runeSubStr(0, min(padded.runeLen, width))
+        padded.truncateToWidth(width)
       else:
         " "
     if x >= 0 and y >= 0 and x < buf.area.width and y < buf.area.height and

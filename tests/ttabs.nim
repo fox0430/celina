@@ -414,3 +414,16 @@ suite "Tabs Widget":
     check buf[19, 2].symbol == "│" # Right border
     check buf[1, 1].symbol == "─" # Top border
     check buf[1, 7].symbol == "─" # Bottom border
+
+  test "Wide-character tab title fits its display width":
+    # "日本語" = 6 cols. Natural width = 6 + 2 padding = 8.
+    let tabs = @[tab("日本語", newText("c"))]
+    let widget = newTabs(tabs, showBorder = false)
+    var buf = newBuffer(20, 1)
+    widget.render(rect(0, 0, 20, 1), buf)
+    # Layout: " " + "日本語" + " " => starts at x=1
+    check buf[0, 0].symbol == " "
+    check buf[1, 0].symbol == "日"
+    check buf[3, 0].symbol == "本"
+    check buf[5, 0].symbol == "語"
+    check buf[7, 0].symbol == " "

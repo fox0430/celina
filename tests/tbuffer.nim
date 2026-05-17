@@ -1022,3 +1022,40 @@ suite "Buffer Module Tests":
       check content.len == 2
       check content[0] == "Hello"
       check content[1] == "World"
+
+  suite "Display Width Utilities":
+    test "displayWidth handles ASCII":
+      check displayWidth("") == 0
+      check displayWidth("hello") == 5
+      check displayWidth(" abc ") == 5
+
+    test "displayWidth counts wide CJK characters as 2 columns":
+      check displayWidth("日本語") == 6
+      check displayWidth("あ") == 2
+      check displayWidth("hello世界") == 9
+
+    test "displayWidth treats emoji as wide":
+      # Ambiguous-width symbol (U+263A) is treated as narrow (1 col)
+      check displayWidth("☺") == 1
+      # CJK Unified Ideograph is wide (2 cols)
+      check displayWidth("漢") == 2
+      # Emoji from the Supplementary Multilingual Plane is wide (2 cols)
+      check displayWidth("😀") == 2
+
+    test "truncateToWidth on ASCII":
+      check truncateToWidth("hello", 0) == ""
+      check truncateToWidth("hello", 3) == "hel"
+      check truncateToWidth("hello", 10) == "hello"
+      check truncateToWidth("hello", -1) == ""
+
+    test "truncateToWidth keeps wide characters whole":
+      # Each CJK char is 2 cols; with maxWidth=3 we keep one and stop
+      check truncateToWidth("日本語", 3) == "日"
+      check truncateToWidth("日本語", 4) == "日本"
+      check truncateToWidth("日本語", 6) == "日本語"
+
+    test "truncateToWidth drops a wide character that doesn't fit":
+      # maxWidth=1 cannot fit a 2-col character; result is empty
+      check truncateToWidth("日", 1) == ""
+      # Narrow prefix fits; following wide character drops
+      check truncateToWidth("a日", 2) == "a"

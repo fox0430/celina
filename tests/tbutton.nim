@@ -2,7 +2,7 @@
 
 import std/unittest
 
-import ../celina/core/[geometry, colors, events]
+import ../celina/core/[geometry, buffer, colors, events]
 import ../celina/widgets/button
 
 suite "Button Widget Tests":
@@ -290,3 +290,30 @@ suite "Button Widget Tests":
       var btn = newButton("Test")
       btn.setEnabled(false)
       check btn.canFocus() == false
+
+  suite "Wide Character Layout":
+    test "getMinSize counts CJK as 2 columns each":
+      let btn = newButton("送信", padding = 0) # 2 CJK chars * 2 cols = 4
+      check btn.getMinSize().width == 4
+
+    test "padding adds narrow space on each side around wide text":
+      let btn = newButton("送信", padding = 1)
+      # " 送信 " = 1 + 4 + 1 = 6 columns
+      check btn.getMinSize().width == 6
+
+    test "Wide-character button renders without overflow":
+      let btn = newButton("日本", padding = 0)
+      var buf = newBuffer(4, 1)
+      btn.render(rect(0, 0, 4, 1), buf)
+      check buf[0, 0].symbol == "日"
+      check buf[1, 0].isShadow()
+      check buf[2, 0].symbol == "本"
+      check buf[3, 0].isShadow()
+
+    test "Wide-character button truncates to area width":
+      let btn = newButton("日本語", padding = 0)
+      var buf = newBuffer(4, 1)
+      btn.render(rect(0, 0, 4, 1), buf)
+      # Only "日本" fits in 4 columns
+      check buf[0, 0].symbol == "日"
+      check buf[2, 0].symbol == "本"
