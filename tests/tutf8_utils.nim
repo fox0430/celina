@@ -3,6 +3,7 @@
 ## This test suite verifies that the shared UTF-8 processing utilities
 ## work correctly for both sync and async implementations.
 
+import std/options
 import unittest
 import ../celina/core/utf8_utils
 
@@ -208,62 +209,98 @@ suite "assembleUtf8Char (U+FFFD substitution)":
       called.inc
       return (false, 0.byte)
 
-    check assembleUtf8Char(0x41.byte, src) == "A"
+    let r = assembleUtf8Char(0x41.byte, src)
+    check r.text == "A"
+    check r.leftover.isNone
     check called == 0
 
   test "Valid 2-byte sequence (é)":
-    let s = assembleUtf8Char(0xC3.byte, fixedSource([byte(0xA9)]))
-    check s == "é"
-    check s.len == 2
+    let r = assembleUtf8Char(0xC3.byte, fixedSource([byte(0xA9)]))
+    check r.text == "é"
+    check r.text.len == 2
+    check r.leftover.isNone
 
   test "Valid 3-byte sequence (あ)":
-    let s = assembleUtf8Char(0xE3.byte, fixedSource([byte(0x81), byte(0x82)]))
-    check s == "あ"
-    check s.len == 3
+    let r = assembleUtf8Char(0xE3.byte, fixedSource([byte(0x81), byte(0x82)]))
+    check r.text == "あ"
+    check r.text.len == 3
+    check r.leftover.isNone
 
   test "Valid 4-byte sequence (😀)":
-    let s =
+    let r =
       assembleUtf8Char(0xF0.byte, fixedSource([byte(0x9F), byte(0x98), byte(0x80)]))
-    check s == "😀"
-    check s.len == 4
+    check r.text == "😀"
+    check r.text.len == 4
+    check r.leftover.isNone
 
   test "Invalid start byte returns empty (caller substitutes U+FFFD)":
-    # 0xFF is not a valid UTF-8 start byte. The assembler signals this with
-    # "" so the caller can decide whether to substitute U+FFFD or skip.
-    check assembleUtf8Char(0xFF.byte, fixedSource([])) == ""
+    # The first byte itself was already consumed by the time we are called,
+    # so there is no leftover regardless of how the start byte is rejected.
+    let r1 = assembleUtf8Char(0xFF.byte, fixedSource([]))
+    check r1.text == ""
+    check r1.leftover.isNone
     # Bare continuation bytes (0x80-0xBF) are also rejected as start bytes.
-    check assembleUtf8Char(0x80.byte, fixedSource([])) == ""
-    check assembleUtf8Char(0xBF.byte, fixedSource([])) == ""
+    check assembleUtf8Char(0x80.byte, fixedSource([])).text == ""
+    check assembleUtf8Char(0xBF.byte, fixedSource([])).text == ""
 
-  test "Truncated 2-byte sequence yields a single U+FFFD":
+  test "Truncated 2-byte sequence yields U+FFFD and no leftover":
     # 0xC3 expects one continuation byte; source reports EOF immediately.
-    check assembleUtf8Char(0xC3.byte, fixedSource([])) == Utf8ReplacementChar
+    # No leftover: the source already signalled there are no more bytes.
+    let r = assembleUtf8Char(0xC3.byte, fixedSource([]))
+    check r.text == Utf8ReplacementChar
+    check r.leftover.isNone
 
-  test "Truncated 3-byte sequence (one byte missing) yields a single U+FFFD":
-    # 0xE3 expects two continuation bytes; source supplies only one.
-    check assembleUtf8Char(0xE3.byte, fixedSource([byte(0x81)])) == Utf8ReplacementChar
+  test "Truncated 3-byte sequence yields U+FFFD and no leftover":
+    let r = assembleUtf8Char(0xE3.byte, fixedSource([byte(0x81)]))
+    check r.text == Utf8ReplacementChar
+    check r.leftover.isNone
 
-  test "Truncated 4-byte sequence (two bytes missing) yields a single U+FFFD":
-    check assembleUtf8Char(0xF0.byte, fixedSource([byte(0x9F)])) == Utf8ReplacementChar
+  test "Truncated 4-byte sequence yields U+FFFD and no leftover":
+    let r = assembleUtf8Char(0xF0.byte, fixedSource([byte(0x9F)]))
+    check r.text == Utf8ReplacementChar
+    check r.leftover.isNone
 
-  test "Invalid continuation byte yields a single U+FFFD":
-    # 0x41 ('A') is not a valid continuation byte (10xxxxxx). The assembler
-    # emits one U+FFFD and consumes the offending byte (documented trade-off).
-    check assembleUtf8Char(0xC3.byte, fixedSource([byte(0x41)])) == Utf8ReplacementChar
+  test "Invalid continuation byte yields U+FFFD AND surfaces leftover":
+    # 0x41 ('A') is not a valid continuation byte (not 10xxxxxx). It must be
+    # returned via `leftover` so the caller can re-inject it as the next
+    # sequence's first byte (Unicode §3.9 best practice).
+    let r = assembleUtf8Char(0xC3.byte, fixedSource([byte(0x41)]))
+    check r.text == Utf8ReplacementChar
+    check r.leftover.isSome
+    check r.leftover.get == 0x41.byte
 
-  test "Invalid continuation byte at later position yields a single U+FFFD":
-    # First continuation is valid, second is not. Still exactly one U+FFFD.
-    check assembleUtf8Char(0xE3.byte, fixedSource([byte(0x81), byte(0x41)])) ==
-      Utf8ReplacementChar
+  test "Invalid continuation byte at later position surfaces leftover":
+    # First continuation valid, second invalid: leftover is the second byte.
+    let r = assembleUtf8Char(0xE3.byte, fixedSource([byte(0x81), byte(0x41)]))
+    check r.text == Utf8ReplacementChar
+    check r.leftover.isSome
+    check r.leftover.get == 0x41.byte
+
+  test "Invalid continuation = next valid start byte (resync case)":
+    # 0xC3 expects a continuation, but the next byte is 0xE3 — the start of
+    # a 3-byte sequence. Without leftover this byte would be lost; with
+    # leftover the caller can recover it as the start of the next event.
+    let r = assembleUtf8Char(0xC3.byte, fixedSource([byte(0xE3)]))
+    check r.text == Utf8ReplacementChar
+    check r.leftover.isSome
+    check r.leftover.get == 0xE3.byte
+
+  test "Invalid continuation = ESC preserves the keypress":
+    # The motivating pathology: 0xC3 followed by ESC. Before this change ESC
+    # was silently dropped; now it must be available for the next event.
+    let r = assembleUtf8Char(0xC3.byte, fixedSource([byte(0x1B)]))
+    check r.text == Utf8ReplacementChar
+    check r.leftover.isSome
+    check r.leftover.get == 0x1B.byte
 
   test "Output of error path equals the U+FFFD constant exactly":
     # Belt-and-suspenders: catch any future drift where an error branch
     # builds a different replacement (e.g., a partial buffer).
-    let s = assembleUtf8Char(0xC3.byte, fixedSource([byte(0xFF)]))
-    check s.len == 3
-    check s[0].byte == 0xEF
-    check s[1].byte == 0xBF
-    check s[2].byte == 0xBD
+    let r = assembleUtf8Char(0xC3.byte, fixedSource([byte(0xFF)]))
+    check r.text.len == 3
+    check r.text[0].byte == 0xEF
+    check r.text[1].byte == 0xBF
+    check r.text[2].byte == 0xBD
 
   test "Source not consumed past the failure point":
     # When an invalid continuation is hit, the assembler must stop calling

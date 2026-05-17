@@ -5,6 +5,8 @@
 ##
 ## No I/O operations are performed here - only data validation and parsing.
 
+import std/options
+
 const Utf8ReplacementChar* = "\xEF\xBF\xBD"
   ## UTF-8 encoding of U+FFFD REPLACEMENT CHARACTER (3 bytes: EF BF BD).
   ##
@@ -107,44 +109,63 @@ proc buildUtf8String*(firstByte: byte, continuationBytes: openArray[byte]): stri
   for i in 0 ..< continuationBytes.len:
     result[i + 1] = char(continuationBytes[i])
 
-type Utf8ByteSource* = proc(): tuple[ok: bool, b: byte] {.closure.}
-  ## Continuation-byte supplier for `assembleUtf8Char`. Returns `(true, b)` on
-  ## success and `(false, _)` on EOF / read error / EAGAIN / any condition that
-  ## should be treated as a truncated UTF-8 sequence.
+type
+  Utf8ByteSource* = proc(): tuple[ok: bool, b: byte] {.closure.}
+    ## Continuation-byte supplier for `assembleUtf8Char`. Returns `(true, b)` on
+    ## success and `(false, _)` on EOF / read error / EAGAIN / any condition
+    ## that should be treated as a truncated UTF-8 sequence.
 
-proc assembleUtf8Char*(firstByte: byte, next: Utf8ByteSource): string =
+  Utf8AssemblyResult* = object
+    ## Outcome of `assembleUtf8Char`. `leftover` carries a byte that was read
+    ## but rejected as an invalid continuation, so the caller can re-inject it
+    ## as the first byte of the next sequence — preserving the resync byte per
+    ## Unicode Standard §3.9 best practice. `leftover.isSome` only when an
+    ## invalid continuation byte was encountered; truncation does not produce
+    ## a leftover because the source already reported EOF/EAGAIN.
+    text*: string
+    leftover*: Option[byte]
+
+proc assembleUtf8Char*(firstByte: byte, next: Utf8ByteSource): Utf8AssemblyResult =
   ## Assemble one complete UTF-8 character from a first byte and a callback
   ## that supplies continuation bytes. Pure logic — no I/O — so this can be
   ## driven by stdin readers, fixed-byte test fixtures, or any other source.
   ##
-  ## Return values:
-  ## - A single valid UTF-8 codepoint (1-4 bytes) on the happy path
-  ## - `Utf8ReplacementChar` (U+FFFD) if `next()` reports failure mid-sequence
-  ##   (truncated) or returns a byte that is not a valid continuation byte
-  ## - "" only when `firstByte` itself is not a valid UTF-8 start byte; the
-  ##   caller is expected to substitute U+FFFD in that case
+  ## Returns a `Utf8AssemblyResult` with:
+  ## - `text` = a single valid UTF-8 codepoint (1-4 bytes) on the happy path
+  ## - `text` = `Utf8ReplacementChar` (U+FFFD) on truncation (`next()` reported
+  ##   failure mid-sequence) or invalid continuation byte
+  ## - `text` = "" only when `firstByte` itself is not a valid UTF-8 start
+  ##   byte; the caller is expected to substitute U+FFFD
+  ## - `leftover` = `some(b)` only when an invalid continuation byte was read;
+  ##   the caller should treat `b` as the start byte of the next sequence.
+  ##   `none` on the happy path, on truncation, and on invalid start byte.
   ##
   ## Per Unicode Standard §3.9 (U+FFFD Substitution of Maximal Subparts) we
-  ## emit exactly one U+FFFD per ill-formed maximal subpart. An invalid
-  ## continuation byte is *consumed* by this proc (not re-injected); see the
-  ## note in `core/events.readUtf8Char` for the rationale.
+  ## emit exactly one U+FFFD per ill-formed maximal subpart, and the byte
+  ## immediately following the subpart is treated as the start of the next
+  ## sequence (returned via `leftover`).
   let byteLen = utf8ByteLength(firstByte)
   if byteLen == 0:
-    return ""
+    return Utf8AssemblyResult(text: "", leftover: none(byte))
 
   if byteLen == 1:
-    return $char(firstByte)
+    return Utf8AssemblyResult(text: $char(firstByte), leftover: none(byte))
 
   var continuationBytes: seq[byte] = @[]
   for i in 1 ..< byteLen:
     let r = next()
     if not r.ok:
-      return Utf8ReplacementChar
+      # Truncated: source already reports EOF/EAGAIN, nothing to push back.
+      return Utf8AssemblyResult(text: Utf8ReplacementChar, leftover: none(byte))
     if not isUtf8ContinuationByte(r.b):
-      return Utf8ReplacementChar
+      # Invalid continuation: surface the offending byte so the caller can
+      # process it as the next sequence's first byte.
+      return Utf8AssemblyResult(text: Utf8ReplacementChar, leftover: some(r.b))
     continuationBytes.add(r.b)
 
-  return buildUtf8String(firstByte, continuationBytes)
+  return Utf8AssemblyResult(
+    text: buildUtf8String(firstByte, continuationBytes), leftover: none(byte)
+  )
 
 proc utf8CharLength*(s: string): int =
   ## Get the number of UTF-8 characters in a string (not bytes)

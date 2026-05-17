@@ -18,6 +18,7 @@
 import std/[termios, posix]
 
 import geometry, colors, buffer, errors, terminal_common
+from events import clearPendingByte
 
 export errors.TerminalError
 
@@ -93,6 +94,9 @@ proc enableRawMode*(terminal: Terminal) =
     )
     terminal.rawMode = true
     terminal.rawModeEnabled = true
+    # Drop any UTF-8 resync byte buffered before mode transition so it
+    # cannot leak across modes as a phantom keypress.
+    clearPendingByte()
   except CatchableError as e:
     raise newTerminalError("Failed to enable raw mode: " & e.msg)
 
@@ -108,6 +112,7 @@ proc disableRawMode*(terminal: Terminal) =
       stderr.writeLine("Warning: Failed to restore terminal settings")
   terminal.rawMode = false
   terminal.rawModeEnabled = false
+  clearPendingByte()
 
 # Safe write helper that handles EAGAIN
 proc writeWithRetry(data: string): bool =

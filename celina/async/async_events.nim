@@ -109,39 +109,38 @@ proc parseMouseEventSGR(): Future[Event] {.async.} =
   return Event(kind: Unknown)
 
 # UTF-8 helper functions (using shared logic from utf8_utils module)
-proc readUtf8CharAsync(firstByte: byte): Future[string] {.async.} =
-  ## Read a complete UTF-8 character asynchronously.
-  ## Uses shared UTF-8 validation logic from utf8_utils.
-  ##
-  ## Returns a single valid UTF-8 codepoint, or U+FFFD (REPLACEMENT CHARACTER)
-  ## if the sequence is truncated or contains an invalid continuation byte.
-  ## Returns "" only when the first byte itself is not a valid UTF-8 start byte
-  ## (caller substitutes U+FFFD).
+#
+# This async version mirrors `assembleUtf8Char`'s logic but cannot reuse the
+# pure helper directly because each continuation-byte read must `await`. The
+# semantics — including the Unicode §3.9 leftover byte for invalid
+# continuations — are kept identical; see `assembleUtf8Char` for the contract.
+proc readUtf8CharAsync(firstByte: byte): Future[Utf8AssemblyResult] {.async.} =
   let byteLen = utf8ByteLength(firstByte)
   if byteLen == 0:
-    return ""
+    return Utf8AssemblyResult(text: "", leftover: none(byte))
 
   if byteLen == 1:
-    return $char(firstByte)
+    return Utf8AssemblyResult(text: $char(firstByte), leftover: none(byte))
 
-  # Read continuation bytes asynchronously
   var continuationBytes: seq[byte] = @[]
   for i in 1 ..< byteLen:
     let nextByte = await readCharAsync()
 
     if nextByte == '\0':
-      # Failed to read — emit one U+FFFD for the ill-formed maximal subpart.
-      return Utf8ReplacementChar
+      # Truncated: nothing to push back.
+      return Utf8AssemblyResult(text: Utf8ReplacementChar, leftover: none(byte))
 
-    # Validate using shared logic
     if not isUtf8ContinuationByte(nextByte.byte):
-      # Invalid continuation byte — emit one U+FFFD. The offending byte is
-      # consumed (see note in sync readUtf8Char).
-      return Utf8ReplacementChar
+      # Invalid continuation: surface the byte so readKeyAsync can re-inject
+      # it as the first byte of the next event.
+      return
+        Utf8AssemblyResult(text: Utf8ReplacementChar, leftover: some(nextByte.byte))
 
     continuationBytes.add(nextByte.byte)
 
-  return buildUtf8String(firstByte, continuationBytes)
+  return Utf8AssemblyResult(
+    text: buildUtf8String(firstByte, continuationBytes), leftover: none(byte)
+  )
 
 # Async escape sequence parsing
 # Uses the shared `parseEscapeSequenceUnified` template from core/events.
@@ -220,9 +219,13 @@ proc readKeyAsync*(): Future[Event] {.async.} =
       )
 
     # Handle regular UTF-8 characters
-    let utf8Char = await readUtf8CharAsync(ch.byte)
-    if utf8Char.len > 0:
-      return Event(kind: Key, key: KeyEvent(code: Char, char: utf8Char))
+    let assembly = await readUtf8CharAsync(ch.byte)
+    if assembly.leftover.isSome:
+      # Resync byte: stash for the next readCharAsync to pick up as the
+      # first byte of the next event (Unicode §3.9 best practice).
+      setPendingByteAsync(assembly.leftover.get)
+    if assembly.text.len > 0:
+      return Event(kind: Key, key: KeyEvent(code: Char, char: assembly.text))
     else:
       # Invalid UTF-8 start byte — emit U+FFFD (KeyEvent.char invariant).
       return Event(kind: Key, key: KeyEvent(code: Char, char: Utf8ReplacementChar))
