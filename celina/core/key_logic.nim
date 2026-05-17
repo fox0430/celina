@@ -48,6 +48,12 @@ type
   KeyEvent* = object
     code*: KeyCode
     char*: string
+      ## For `Char` codes, this holds exactly one valid UTF-8 codepoint.
+      ## The event I/O layer substitutes U+FFFD (REPLACEMENT CHARACTER) for
+      ## truncated or invalid byte sequences, so widgets can safely apply
+      ## rune-based operations (runes, runeLen, runeSubStr) without crash
+      ## or desync. For non-`Char` codes this is informational only (often
+      ## "" or the raw control byte) and should not be rendered.
     modifiers*: set[KeyModifier]
 
   CtrlKeyResult* = object ## Result of Ctrl key mapping
@@ -103,7 +109,15 @@ proc mapCtrlNumberKey*(ch: char): CtrlKeyResult =
 proc mapBasicKey*(ch: char): KeyEvent =
   ## Map basic characters to key events
   ##
-  ## Handles: Enter, Tab, Space, Backspace, and regular characters
+  ## Handles: Enter, Tab, Space, Backspace, and regular characters.
+  ##
+  ## **Caller contract**: for non-special bytes the `else` arm returns
+  ## `KeyEvent(code: Char, char: $ch)`, which is a single raw byte. This is
+  ## valid UTF-8 only when `ch` is ASCII (`ch.ord < 0x80`). Callers handling
+  ## arbitrary input bytes must therefore consume the Char result for ASCII
+  ## only and route high-bit bytes through the UTF-8 reader path
+  ## (`readUtf8Char` / `readUtf8CharAsync`), which guarantees the
+  ## `KeyEvent.char` invariant by emitting U+FFFD for ill-formed sequences.
   ##
   ## Example:
   ## ```nim

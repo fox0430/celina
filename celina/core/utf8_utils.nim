@@ -5,6 +5,13 @@
 ##
 ## No I/O operations are performed here - only data validation and parsing.
 
+const Utf8ReplacementChar* = "\xEF\xBF\xBD"
+  ## UTF-8 encoding of U+FFFD REPLACEMENT CHARACTER (3 bytes: EF BF BD).
+  ##
+  ## I/O layers substitute this for truncated or ill-formed UTF-8 sequences
+  ## so that downstream consumers can rely on every emitted string being
+  ## valid UTF-8 (see KeyEvent.char invariant).
+
 type Utf8ValidationResult* = object ## Result of UTF-8 validation
   isValid*: bool
   expectedBytes*: int
@@ -99,6 +106,45 @@ proc buildUtf8String*(firstByte: byte, continuationBytes: openArray[byte]): stri
 
   for i in 0 ..< continuationBytes.len:
     result[i + 1] = char(continuationBytes[i])
+
+type Utf8ByteSource* = proc(): tuple[ok: bool, b: byte] {.closure.}
+  ## Continuation-byte supplier for `assembleUtf8Char`. Returns `(true, b)` on
+  ## success and `(false, _)` on EOF / read error / EAGAIN / any condition that
+  ## should be treated as a truncated UTF-8 sequence.
+
+proc assembleUtf8Char*(firstByte: byte, next: Utf8ByteSource): string =
+  ## Assemble one complete UTF-8 character from a first byte and a callback
+  ## that supplies continuation bytes. Pure logic — no I/O — so this can be
+  ## driven by stdin readers, fixed-byte test fixtures, or any other source.
+  ##
+  ## Return values:
+  ## - A single valid UTF-8 codepoint (1-4 bytes) on the happy path
+  ## - `Utf8ReplacementChar` (U+FFFD) if `next()` reports failure mid-sequence
+  ##   (truncated) or returns a byte that is not a valid continuation byte
+  ## - "" only when `firstByte` itself is not a valid UTF-8 start byte; the
+  ##   caller is expected to substitute U+FFFD in that case
+  ##
+  ## Per Unicode Standard §3.9 (U+FFFD Substitution of Maximal Subparts) we
+  ## emit exactly one U+FFFD per ill-formed maximal subpart. An invalid
+  ## continuation byte is *consumed* by this proc (not re-injected); see the
+  ## note in `core/events.readUtf8Char` for the rationale.
+  let byteLen = utf8ByteLength(firstByte)
+  if byteLen == 0:
+    return ""
+
+  if byteLen == 1:
+    return $char(firstByte)
+
+  var continuationBytes: seq[byte] = @[]
+  for i in 1 ..< byteLen:
+    let r = next()
+    if not r.ok:
+      return Utf8ReplacementChar
+    if not isUtf8ContinuationByte(r.b):
+      return Utf8ReplacementChar
+    continuationBytes.add(r.b)
+
+  return buildUtf8String(firstByte, continuationBytes)
 
 proc utf8CharLength*(s: string): int =
   ## Get the number of UTF-8 characters in a string (not bytes)

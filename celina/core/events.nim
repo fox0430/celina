@@ -281,90 +281,43 @@ template parseEscapeSequenceUnified*(
 
 # UTF-8 helper functions (using shared logic from utf8_utils module)
 proc readUtf8Char(firstByte: byte): string =
-  ## Read a complete UTF-8 character given its first byte (blocking mode)
-  ## Uses shared UTF-8 validation logic from utf8_utils
-  let byteLen = utf8ByteLength(firstByte)
-  if byteLen == 0:
-    return ""
-
-  if byteLen == 1:
-    return $char(firstByte)
-
-  # Read continuation bytes
-  var continuationBytes: seq[byte] = @[]
-  for i in 1 ..< byteLen:
-    var nextByte: char
-    let bytesRead = tryRecover(
-      proc(): int =
-        stdin.readBuffer(addr nextByte, 1),
-      fallback = 0,
-    )
-    if bytesRead != 1:
-      # Failed to read, return what we have
-      if continuationBytes.len > 0:
-        return buildUtf8String(firstByte, continuationBytes)
+  ## Read a complete UTF-8 character given its first byte (blocking mode).
+  ## Thin stdin-backed adapter over `assembleUtf8Char`; see that proc for
+  ## the full return-value contract (one codepoint / U+FFFD / "").
+  ##
+  ## Note: an invalid continuation byte is *consumed* (not re-injected). This
+  ## keeps the I/O layer simple at the cost of dropping one byte of potential
+  ## resync information — acceptable for terminal input where malformed
+  ## sequences are pathological rather than common.
+  assembleUtf8Char(
+    firstByte,
+    proc(): tuple[ok: bool, b: byte] =
+      var nextByte: char
+      let bytesRead = tryRecover(
+        proc(): int =
+          stdin.readBuffer(addr nextByte, 1),
+        fallback = 0,
+      )
+      if bytesRead == 1:
+        (true, nextByte.byte)
       else:
-        return $char(firstByte)
-
-    # Validate using shared logic
-    if not isUtf8ContinuationByte(nextByte.byte):
-      # Invalid, return what we have
-      if continuationBytes.len > 0:
-        return buildUtf8String(firstByte, continuationBytes)
-      else:
-        return $char(firstByte)
-
-    continuationBytes.add(nextByte.byte)
-
-  return buildUtf8String(firstByte, continuationBytes)
+        (false, 0.byte),
+  )
 
 proc readUtf8CharNonBlocking(firstByte: byte): string =
-  ## Read a complete UTF-8 character in non-blocking mode
-  ## Uses shared UTF-8 validation logic from utf8_utils
-  let byteLen = utf8ByteLength(firstByte)
-  if byteLen == 0:
-    return ""
-
-  if byteLen == 1:
-    return $char(firstByte)
-
-  # Read continuation bytes in non-blocking mode
-  var continuationBytes: seq[byte] = @[]
-  for i in 1 ..< byteLen:
-    var nextByte: char
-    let bytesRead = read(STDIN_FILENO, addr nextByte, 1)
-    if bytesRead == -1:
-      let err = errno
-      if err == EAGAIN or err == EWOULDBLOCK:
-        # No more data, return what we have
-        if continuationBytes.len > 0:
-          return buildUtf8String(firstByte, continuationBytes)
-        else:
-          return $char(firstByte)
+  ## Read a complete UTF-8 character in non-blocking mode. Thin stdin-backed
+  ## adapter over `assembleUtf8Char`. EAGAIN/EWOULDBLOCK, other read errors,
+  ## and short reads all collapse to "truncated sequence" and yield U+FFFD.
+  assembleUtf8Char(
+    firstByte,
+    proc(): tuple[ok: bool, b: byte] =
+      var nextByte: char
+      let bytesRead = read(STDIN_FILENO, addr nextByte, 1)
+      if bytesRead == 1:
+        (true, nextByte.byte)
       else:
-        # Other error, return what we have
-        if continuationBytes.len > 0:
-          return buildUtf8String(firstByte, continuationBytes)
-        else:
-          return $char(firstByte)
-    elif bytesRead != 1:
-      # Failed to read, return what we have
-      if continuationBytes.len > 0:
-        return buildUtf8String(firstByte, continuationBytes)
-      else:
-        return $char(firstByte)
-
-    # Validate using shared logic
-    if not isUtf8ContinuationByte(nextByte.byte):
-      # Invalid, return what we have
-      if continuationBytes.len > 0:
-        return buildUtf8String(firstByte, continuationBytes)
-      else:
-        return $char(firstByte)
-
-    continuationBytes.add(nextByte.byte)
-
-  return buildUtf8String(firstByte, continuationBytes)
+        (false, 0.byte),
+  )
 
 # Advanced key reading with escape sequence support
 proc readKey*(): Event =
@@ -411,8 +364,9 @@ proc readKey*(): Event =
     if utf8Char.len > 0:
       return Event(kind: Key, key: KeyEvent(code: Char, char: utf8Char))
     else:
-      # Invalid UTF-8, treat as single byte
-      return Event(kind: Key, key: KeyEvent(code: Char, char: $ch))
+      # Invalid UTF-8 start byte — emit U+FFFD so Char events always carry
+      # a valid UTF-8 codepoint (see KeyEvent invariant).
+      return Event(kind: Key, key: KeyEvent(code: Char, char: Utf8ReplacementChar))
   except IOError:
     return Event(kind: Unknown)
 
@@ -660,8 +614,8 @@ proc readKeyInput*(): Option[Event] =
   if utf8Char.len > 0:
     return some(Event(kind: Key, key: KeyEvent(code: Char, char: utf8Char)))
   else:
-    # Invalid UTF-8, treat as single byte
-    return some(Event(kind: Key, key: KeyEvent(code: Char, char: $ch)))
+    # Invalid UTF-8 start byte — emit U+FFFD (KeyEvent.char invariant).
+    return some(Event(kind: Key, key: KeyEvent(code: Char, char: Utf8ReplacementChar)))
 
 # Check if input is available
 proc hasInput*(): bool =

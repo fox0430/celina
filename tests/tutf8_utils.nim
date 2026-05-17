@@ -159,3 +159,124 @@ suite "UTF-8 String Truncation":
 
   test "Exact length match":
     check truncateUtf8("hello", 5) == "hello"
+
+suite "UTF-8 Replacement Character":
+  test "Utf8ReplacementChar is exactly U+FFFD (EF BF BD)":
+    # Guards against accidental rewrites that would emit a different byte
+    # sequence for ill-formed input. KeyEvent.char invariant relies on this.
+    check Utf8ReplacementChar.len == 3
+    check Utf8ReplacementChar[0].byte == 0xEF
+    check Utf8ReplacementChar[1].byte == 0xBF
+    check Utf8ReplacementChar[2].byte == 0xBD
+
+  test "Utf8ReplacementChar passes UTF-8 validation":
+    # The replacement we emit must itself be valid UTF-8 — otherwise we
+    # would just be swapping one invalid sequence for another.
+    let bytes = [
+      Utf8ReplacementChar[0].byte,
+      Utf8ReplacementChar[1].byte,
+      Utf8ReplacementChar[2].byte,
+    ]
+    let v = validateUtf8Sequence(bytes)
+    check v.isValid
+    check v.expectedBytes == 3
+
+  test "Utf8ReplacementChar counts as one UTF-8 character":
+    check utf8CharLength(Utf8ReplacementChar) == 1
+
+suite "assembleUtf8Char (U+FFFD substitution)":
+  # Tests the pure assembly logic used by the blocking and non-blocking stdin
+  # readers in core/events. Drives `assembleUtf8Char` with a scripted byte
+  # source so we can exercise every truncation / invalid-continuation branch
+  # without touching real stdin.
+
+  proc fixedSource(bytes: openArray[byte]): Utf8ByteSource =
+    ## Build a byte source that yields the given bytes in order and reports
+    ## ok=false once the script is exhausted (simulating EOF / EAGAIN).
+    let buf = @bytes
+    var idx = 0
+    return proc(): tuple[ok: bool, b: byte] =
+      if idx < buf.len:
+        let b = buf[idx]
+        idx.inc
+        return (true, b)
+      return (false, 0.byte)
+
+  test "ASCII first byte returns the byte verbatim (no source calls)":
+    var called = 0
+    proc src(): tuple[ok: bool, b: byte] =
+      called.inc
+      return (false, 0.byte)
+
+    check assembleUtf8Char(0x41.byte, src) == "A"
+    check called == 0
+
+  test "Valid 2-byte sequence (é)":
+    let s = assembleUtf8Char(0xC3.byte, fixedSource([byte(0xA9)]))
+    check s == "é"
+    check s.len == 2
+
+  test "Valid 3-byte sequence (あ)":
+    let s = assembleUtf8Char(0xE3.byte, fixedSource([byte(0x81), byte(0x82)]))
+    check s == "あ"
+    check s.len == 3
+
+  test "Valid 4-byte sequence (😀)":
+    let s =
+      assembleUtf8Char(0xF0.byte, fixedSource([byte(0x9F), byte(0x98), byte(0x80)]))
+    check s == "😀"
+    check s.len == 4
+
+  test "Invalid start byte returns empty (caller substitutes U+FFFD)":
+    # 0xFF is not a valid UTF-8 start byte. The assembler signals this with
+    # "" so the caller can decide whether to substitute U+FFFD or skip.
+    check assembleUtf8Char(0xFF.byte, fixedSource([])) == ""
+    # Bare continuation bytes (0x80-0xBF) are also rejected as start bytes.
+    check assembleUtf8Char(0x80.byte, fixedSource([])) == ""
+    check assembleUtf8Char(0xBF.byte, fixedSource([])) == ""
+
+  test "Truncated 2-byte sequence yields a single U+FFFD":
+    # 0xC3 expects one continuation byte; source reports EOF immediately.
+    check assembleUtf8Char(0xC3.byte, fixedSource([])) == Utf8ReplacementChar
+
+  test "Truncated 3-byte sequence (one byte missing) yields a single U+FFFD":
+    # 0xE3 expects two continuation bytes; source supplies only one.
+    check assembleUtf8Char(0xE3.byte, fixedSource([byte(0x81)])) == Utf8ReplacementChar
+
+  test "Truncated 4-byte sequence (two bytes missing) yields a single U+FFFD":
+    check assembleUtf8Char(0xF0.byte, fixedSource([byte(0x9F)])) == Utf8ReplacementChar
+
+  test "Invalid continuation byte yields a single U+FFFD":
+    # 0x41 ('A') is not a valid continuation byte (10xxxxxx). The assembler
+    # emits one U+FFFD and consumes the offending byte (documented trade-off).
+    check assembleUtf8Char(0xC3.byte, fixedSource([byte(0x41)])) == Utf8ReplacementChar
+
+  test "Invalid continuation byte at later position yields a single U+FFFD":
+    # First continuation is valid, second is not. Still exactly one U+FFFD.
+    check assembleUtf8Char(0xE3.byte, fixedSource([byte(0x81), byte(0x41)])) ==
+      Utf8ReplacementChar
+
+  test "Output of error path equals the U+FFFD constant exactly":
+    # Belt-and-suspenders: catch any future drift where an error branch
+    # builds a different replacement (e.g., a partial buffer).
+    let s = assembleUtf8Char(0xC3.byte, fixedSource([byte(0xFF)]))
+    check s.len == 3
+    check s[0].byte == 0xEF
+    check s[1].byte == 0xBF
+    check s[2].byte == 0xBD
+
+  test "Source not consumed past the failure point":
+    # When an invalid continuation is hit, the assembler must stop calling
+    # the source — otherwise it would silently swallow bytes that belong to
+    # the next character.
+    var consumed = 0
+    let buf = @[byte(0x41), byte(0x42), byte(0x43)] # all invalid as conts
+    proc src(): tuple[ok: bool, b: byte] =
+      let b = buf[consumed]
+      consumed.inc
+      return (true, b)
+
+    discard assembleUtf8Char(0xE3.byte, src)
+    # 0xE3 expects 2 continuation bytes. The first byte (0x41) is invalid,
+    # so the assembler returns immediately and must NOT read the second.
+    check consumed == 1
