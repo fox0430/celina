@@ -396,3 +396,12 @@ suite "Progress Bar Widget Tests":
       check bar.getValue() == 0.3
       check "3/10 tasks" in bar.getLabelWithPercentage()
       check "Tasks" in bar.getLabelWithPercentage()
+
+  suite "Wide Character Layout":
+    test "getMinSize counts CJK label as 2 columns each":
+      # "進捗" = 4 cols, " " = 1 col, "0%" = 2 cols => text len 7; minBarWidth = max(min, 7+2) = 9
+      let bar = newProgressBar(0.0, "進捗", showBar = true, showPercentage = true)
+      let minSize = bar.getMinSize()
+      check minSize.width >= 9
+      # Two-line layout because label is present
+      check minSize.height == 2

@@ -436,6 +436,16 @@ suite "Input Widget Tests":
       check buf[1, 0].symbol == "n"
       check buf[2, 0].symbol == "t"
 
+    test "Wide-character placeholder truncates by display width":
+      # "日本語入力" = 10 cols. Area width 5 fits only "日本" (4 cols).
+      var input = newInput(placeholder = "日本語入力")
+      var buf = newBuffer(5, 1)
+      input.render(rect(0, 0, 5, 1), buf)
+      check buf[0, 0].symbol == "日"
+      check buf[2, 0].symbol == "本"
+      # 5th column has no wide char that fits; remains the cleared space
+      check buf[4, 0].symbol == " "
+
     test "Password rendering":
       var input = newInput(password = true)
       input.setText("secret")

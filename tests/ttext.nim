@@ -276,3 +276,46 @@ suite "Text Widget Tests":
       let widget = newText("\n\n\n")
       let minSize = widget.getMinSize()
       check minSize.height == 4 # 4 lines (empty lines + newlines)
+
+  suite "Wide Character Layout":
+    test "getMinSize counts CJK as 2 columns each":
+      let widget = newText("日本語")
+      let minSize = widget.getMinSize()
+      check minSize.width == 6 # 3 CJK chars * 2 cols
+      check minSize.height == 1
+
+    test "NoWrap truncates by display width":
+      let widget = newText("hello世界")
+      var buf = newBuffer(7, 1)
+      let area = rect(0, 0, 7, 1)
+      widget.render(area, buf)
+      # Width 7 fits "hello" (5) + "世" (2). "界" must be dropped.
+      check buf[0, 0].symbol == "h"
+      check buf[4, 0].symbol == "o"
+      check buf[5, 0].symbol == "世"
+      # Right half of "世" is the shadow cell
+      check buf[6, 0].isShadow()
+
+    test "NoWrap drops a wide char that would split":
+      let widget = newText("a日b")
+      var buf = newBuffer(2, 1)
+      let area = rect(0, 0, 2, 1)
+      widget.render(area, buf)
+      # Width 2: "a" then nowhere to put "日" (needs 2), so just "a" + pad
+      check buf[0, 0].symbol == "a"
+      check buf[1, 0].symbol == " "
+
+    test "CharWrap breaks by display width":
+      let widget = newText("日本語", wrap = CharWrap)
+      var buf = newBuffer(2, 3)
+      let area = rect(0, 0, 2, 3)
+      widget.render(area, buf)
+      check buf[0, 0].symbol == "日"
+      check buf[0, 1].symbol == "本"
+      check buf[0, 2].symbol == "語"
+
+    test "WordWrap accounts for wide character display width":
+      let widget = newText("日本 hi", wrap = WordWrap)
+      let minSize = widget.getMinSize()
+      # Longest word is "日本" with display width 4
+      check minSize.width >= 4

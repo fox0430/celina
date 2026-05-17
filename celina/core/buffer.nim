@@ -70,6 +70,31 @@ proc runesWidth*(runes: seq[Rune]): int =
   for rune in runes:
     result += runeWidth(rune)
 
+proc displayWidth*(s: string): int =
+  ## Calculate the display width of a UTF-8 string in terminal columns.
+  ##
+  ## Wide characters (CJK, emoji, etc.) count as 2 columns; narrow characters
+  ## count as 1. Use this in place of `runeLen` whenever the result feeds into
+  ## visual layout (truncation, padding, width reservation, preferred size).
+  result = 0
+  for r in s.runes:
+    result += runeWidth(r)
+
+proc truncateToWidth*(s: string, maxWidth: int): string =
+  ## Return the longest prefix of `s` whose display width does not exceed
+  ## `maxWidth`. Characters are kept whole — a wide character is dropped
+  ## rather than split when only one column remains.
+  if maxWidth <= 0:
+    return ""
+  result = ""
+  var w = 0
+  for r in s.runes:
+    let rw = runeWidth(r)
+    if w + rw > maxWidth:
+      break
+    result.add($r)
+    w += rw
+
 proc width*(cell: Cell): int =
   ## Get the display width of the cell's symbol
   if cell.symbol.len == 0:

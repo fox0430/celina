@@ -56,14 +56,14 @@ proc splitIntoLines(text: string, maxWidth: int, wrap: Wrap): seq[string] =
   of NoWrap:
     # Simple split by newlines, truncate if too long
     for line in text.splitLines():
-      if line.runeLen <= maxWidth:
+      if line.displayWidth <= maxWidth:
         result.add(line)
       else:
-        result.add(line.runeSubStr(0, maxWidth))
+        result.add(line.truncateToWidth(maxWidth))
   of WordWrap:
     # Split by newlines first, then wrap each line
     for line in text.splitLines():
-      if line.runeLen <= maxWidth:
+      if line.displayWidth <= maxWidth:
         result.add(line)
       else:
         # Word wrap this line
@@ -76,7 +76,7 @@ proc splitIntoLines(text: string, maxWidth: int, wrap: Wrap): seq[string] =
               word
             else:
               currentLine & " " & word
-          if testLine.runeLen <= maxWidth:
+          if testLine.displayWidth <= maxWidth:
             currentLine = testLine
           else:
             if currentLine.len > 0:
@@ -84,22 +84,40 @@ proc splitIntoLines(text: string, maxWidth: int, wrap: Wrap): seq[string] =
               currentLine = word
             else:
               # Single word is too long, force break
-              result.add(word.runeSubStr(0, maxWidth))
+              result.add(word.truncateToWidth(maxWidth))
 
         if currentLine.len > 0:
           result.add(currentLine)
   of CharWrap:
-    # Character-level wrapping
+    # Character-level wrapping by display width
     for line in text.splitLines():
-      var pos = 0
-      while pos < line.runeLen:
-        let endPos = min(pos + maxWidth, line.runeLen)
-        result.add(line.runeSubStr(pos, endPos - pos))
-        pos = endPos
+      if line.displayWidth <= maxWidth:
+        result.add(line)
+        continue
+      var chunk = ""
+      var w = 0
+      for r in line.runes:
+        let rw = runeWidth(r)
+        if rw > maxWidth:
+          # A single wide character cannot fit; flush and drop it
+          if chunk.len > 0:
+            result.add(chunk)
+            chunk = ""
+            w = 0
+          continue
+        if w + rw > maxWidth:
+          result.add(chunk)
+          chunk = $r
+          w = rw
+        else:
+          chunk.add($r)
+          w += rw
+      if chunk.len > 0:
+        result.add(chunk)
 
 proc alignLine(line: string, width: int, alignment: Alignment): string =
   ## Align a line within the given width
-  let lineWidth = line.runeLen
+  let lineWidth = line.displayWidth
 
   if lineWidth >= width:
     return line
@@ -139,7 +157,7 @@ method getMinSize*(widget: Text): Size =
   case widget.wrap
   of NoWrap:
     let lines = widget.content.splitLines()
-    let maxWidth = lines.mapIt(it.runeLen).max()
+    let maxWidth = lines.mapIt(it.displayWidth).max()
     size(maxWidth, lines.len)
   of WordWrap, CharWrap:
     # Minimum width is the longest word (for word wrap) or 1 (for char wrap)
@@ -149,7 +167,7 @@ method getMinSize*(widget: Text): Size =
     if widget.wrap == WordWrap:
       for line in lines:
         for word in line.split(' '):
-          minWidth = max(minWidth, word.runeLen)
+          minWidth = max(minWidth, word.displayWidth)
 
     size(minWidth, lines.len)
 

@@ -3,7 +3,7 @@
 ## This module provides table widgets for displaying structured data in rows
 ## and columns, with support for headers, selection, scrolling, and styling.
 
-import std/[sequtils, options, strutils, unicode]
+import std/[sequtils, options, strutils]
 
 import base
 import ../core/[geometry, buffer, colors, events]
@@ -501,7 +501,7 @@ proc calculateColumnWidths*(widget: Table, availableWidth: int): seq[int] =
     else:
       flexColumns.add(i)
       # Start with minimum width based on header
-      result[i] = col.title.runeLen
+      result[i] = col.title.displayWidth
 
   # If total fixed width exceeds available content width, scale down proportionally
   if totalFixedWidth > contentWidth and totalFixedWidth > 0:
@@ -515,7 +515,7 @@ proc calculateColumnWidths*(widget: Table, availableWidth: int): seq[int] =
   for colIndex in flexColumns:
     for row in widget.rows:
       if colIndex < row.cells.len:
-        result[colIndex] = max(result[colIndex], row.cells[colIndex].runeLen)
+        result[colIndex] = max(result[colIndex], row.cells[colIndex].displayWidth)
 
   # Distribute remaining width among flex columns
   let remainingWidth =
@@ -538,12 +538,14 @@ proc calculateTotalLineWidth*(
 
 proc formatCell*(content: string, width: int, alignment: ColumnAlignment): string =
   ## Format a cell's content within the given width
-  if content.runeLen > width:
+  if content.displayWidth > width:
     if width <= 3:
-      return "...".runeSubStr(0, width)
-    return content.runeSubStr(0, width - 3) & "..."
+      return "...".truncateToWidth(width)
+    let truncated = content.truncateToWidth(width - 3) & "..."
+    # truncateToWidth may leave us short when a wide char gets dropped
+    return truncated & " ".repeat(max(0, width - truncated.displayWidth))
 
-  let padding = width - content.runeLen
+  let padding = width - content.displayWidth
   case alignment
   of AlignLeft:
     content & " ".repeat(padding)
@@ -629,7 +631,7 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
           else:
             widget.headerStyle
         buf.setString(currentX, currentY, cellContent, cellStyle)
-        currentX += cellContent.len
+        currentX += columnWidths[i]
 
         # Render column spacing and separator
         if i < widget.columns.len - 1:
@@ -768,7 +770,7 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
           else:
             rowStyle
         buf.setString(currentX, currentY, cellContent, cellStyle)
-        currentX += cellContent.len
+        currentX += columnWidths[colIndex]
 
         # Render column spacing and separator
         if colIndex < widget.columns.len - 1:

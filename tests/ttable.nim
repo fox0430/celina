@@ -241,6 +241,14 @@ suite "Table Widget Tests":
       formatCell("Very long content", 8, AlignLeft) == "Very ..."
       formatCell("Short", 3, AlignLeft) == "..."
 
+  test "Cell formatting with wide characters":
+    # 日本 is 4 display columns; pad to width 6
+    check formatCell("日本", 6, AlignLeft) == "日本  "
+    check formatCell("日本", 6, AlignRight) == "  日本"
+    # Truncation: "日本語" (6 cols) into width 5 -> keep "日" + "..." plus pad
+    # width-3 = 2 columns -> "日" (2 cols) + "..." = "日..." (5 cols)
+    check formatCell("日本語", 5, AlignLeft) == "日..."
+
   test "Border characters":
     # Test getBorderChars function
     let simple = getBorderChars(SimpleBorder)

@@ -522,3 +522,27 @@ suite "List Widget Tests":
     # List with only unselectable items can't focus
     let unselectableList = newList(@[newListItem("Can't select", none(Style), false)])
     check unselectableList.canFocus() == false
+
+  test "Wide-character list items render and pad by display width":
+    let listWidget = newList(@[newListItem("日本"), newListItem("ab")])
+    var buf = newBuffer(6, 2)
+    listWidget.render(rect(0, 0, 6, 2), buf)
+    # Row 0: "日本" (4 cols) + 2 trailing spaces
+    check buf[0, 0].symbol == "日"
+    check buf[2, 0].symbol == "本"
+    check buf[4, 0].symbol == " "
+    check buf[5, 0].symbol == " "
+    # Row 1: "ab" + 4 trailing spaces
+    check buf[0, 1].symbol == "a"
+    check buf[1, 1].symbol == "b"
+    check buf[5, 1].symbol == " "
+
+  test "Wide-character list item truncates with ellipsis":
+    let listWidget = newList(@[newListItem("日本語ABCDE")])
+    var buf = newBuffer(5, 1)
+    listWidget.render(rect(0, 0, 5, 1), buf)
+    # Width 5: keep first 2 cols of content then "..."
+    # truncateToWidth("日本語ABCDE", 2) = "日" (2 cols); + "..." => "日..." total 5
+    check buf[0, 0].symbol == "日"
+    check buf[2, 0].symbol == "."
+    check buf[4, 0].symbol == "."

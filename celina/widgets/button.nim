@@ -3,7 +3,7 @@
 ## This module provides interactive button widgets with click handling,
 ## styling, and focus support.
 
-import std/[strutils, unicode]
+import std/strutils
 
 import base
 import ../core/[geometry, buffer, colors, events]
@@ -224,7 +224,7 @@ method render*(widget: Button, area: Rect, buf: var Buffer) =
 
   let buttonText = widget.getButtonText()
   let currentStyle = widget.getCurrentStyle()
-  let textWidth = buttonText.runeLen
+  let textWidth = buttonText.displayWidth
 
   # Calculate actual button dimensions
   let actualButtonWidth = max(textWidth, widget.minWidth)
@@ -257,7 +257,7 @@ method render*(widget: Button, area: Rect, buf: var Buffer) =
   if textStartY < area.y + area.height and textStartX < area.x + area.width:
     let visibleText =
       if textStartX + textWidth > area.x + area.width:
-        buttonText.runeSubStr(0, area.x + area.width - textStartX)
+        buttonText.truncateToWidth(area.x + area.width - textStartX)
       else:
         buttonText
 
@@ -266,7 +266,7 @@ method render*(widget: Button, area: Rect, buf: var Buffer) =
 method getMinSize*(widget: Button): Size =
   ## Get minimum size for button widget
   let buttonText = widget.getButtonText()
-  let textWidth = max(buttonText.runeLen, widget.minWidth)
+  let textWidth = max(buttonText.displayWidth, widget.minWidth)
   size(textWidth, 1)
 
 method getPreferredSize*(widget: Button, available: Size): Size =

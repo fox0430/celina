@@ -3,7 +3,7 @@
 ## This module provides list widgets for displaying and interacting with
 ## collections of items, with support for selection, scrolling, and styling.
 
-import std/[sequtils, options, strutils, unicode]
+import std/[sequtils, options, strutils]
 
 import base
 import ../core/[geometry, buffer, colors, events]
@@ -471,10 +471,15 @@ method render*(widget: List, area: Rect, buf: var Buffer) =
     var itemText = widget.bulletPrefix & item.text
 
     # Truncate or pad to fit width
-    if itemText.runeLen > contentWidth:
-      itemText = itemText.runeSubStr(0, contentWidth - 3) & "..."
+    if itemText.displayWidth > contentWidth:
+      itemText =
+        if contentWidth >= 3:
+          itemText.truncateToWidth(contentWidth - 3) & "..."
+        else:
+          itemText.truncateToWidth(contentWidth)
+      itemText = itemText & " ".repeat(max(0, contentWidth - itemText.displayWidth))
     else:
-      itemText = itemText & " ".repeat(contentWidth - itemText.runeLen)
+      itemText = itemText & " ".repeat(contentWidth - itemText.displayWidth)
 
     buf.setString(area.x, area.y + i, itemText, itemStyle)
 
@@ -486,7 +491,7 @@ method getMinSize*(widget: List): Size =
   # Minimum: show at least one item
   let minWidth =
     if widget.bulletPrefix.len > 0:
-      widget.bulletPrefix.runeLen + 10
+      widget.bulletPrefix.displayWidth + 10
     else:
       10
   size(minWidth, 1)
@@ -495,8 +500,8 @@ method getPreferredSize*(widget: List, available: Size): Size =
   ## Get preferred size for list widget
   # Prefer to show all items if possible, otherwise use available space
   let preferredHeight = min(widget.items.len, available.height)
-  let maxItemWidth =
-    widget.items.mapIt(widget.bulletPrefix.runeLen + it.text.runeLen).max()
+  let bulletWidth = widget.bulletPrefix.displayWidth
+  let maxItemWidth = widget.items.mapIt(bulletWidth + it.text.displayWidth).max()
   let preferredWidth =
     min(maxItemWidth + (if widget.showScrollbar: 1 else: 0), available.width)
   size(preferredWidth, preferredHeight)

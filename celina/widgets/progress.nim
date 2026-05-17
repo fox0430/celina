@@ -13,7 +13,7 @@
 ## let percentage = progress.getPercentageText()
 ## ```
 
-import std/[strformat, unicode, math]
+import std/[strformat, math]
 
 import base
 import ../core/[geometry, buffer, colors]
@@ -332,7 +332,7 @@ method render*(widget: ProgressBar, area: Rect, buf: var Buffer) =
       buf.setString(area.x + x, area.y + y, " ", clearStyle)
 
   let text = widget.getLabelWithPercentage()
-  let textLen = text.runeLen
+  let textLen = text.displayWidth
 
   if widget.showBar:
     if (area.height >= 2 and textLen > 0) or widget.style == Hash:
@@ -344,7 +344,7 @@ method render*(widget: ProgressBar, area: Rect, buf: var Buffer) =
       let textX = area.x + max(0, (area.width - textLen) div 2)
       if widget.label.len > 0 and widget.showPercentage:
         # Split label and percentage
-        let labelLen = widget.label.runeLen
+        let labelLen = widget.label.displayWidth
         let percentText = widget.getPercentageText()
         buf.setString(textX, textY, widget.label, widget.textStyle)
         buf.setString(textX + labelLen + 1, textY, percentText, widget.percentageStyle)
@@ -368,7 +368,7 @@ method render*(widget: ProgressBar, area: Rect, buf: var Buffer) =
       let textY = area.y + max(0, (area.height - 1) div 2)
 
       if widget.label.len > 0 and widget.showPercentage:
-        let labelLen = widget.label.runeLen
+        let labelLen = widget.label.displayWidth
         let percentText = widget.getPercentageText()
         buf.setString(textX, textY, widget.label, widget.textStyle)
         buf.setString(textX + labelLen + 1, textY, percentText, widget.percentageStyle)
@@ -377,7 +377,7 @@ method render*(widget: ProgressBar, area: Rect, buf: var Buffer) =
 
 method getMinSize*(widget: ProgressBar): Size =
   ## Get minimum size for progress bar widget
-  let textLen = widget.getLabelWithPercentage().runeLen
+  let textLen = widget.getLabelWithPercentage().displayWidth
   var minBarWidth = max(widget.minWidth, textLen + 2)
 
   # Hash, Line, Arrow styles need extra space for brackets (if enabled)
