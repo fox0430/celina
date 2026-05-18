@@ -217,11 +217,11 @@ proc main() =
   )
 
   app.onEvent(
-    proc(event: Event): bool =
+    proc(event: Event): EventResult =
       if event.kind == EventKind.Key:
         if event.key.code == KeyCode.Char and event.key.char == "q":
-          return false
-      return true
+          return erQuit
+      return erContinue
   )
 
   app.run()

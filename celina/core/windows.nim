@@ -32,24 +32,24 @@ type
     bottomRight*: string
 
   # Event handling types
-  EventPhase* = enum
-    epCapture # Event travels down from root to target
-    epTarget # Event at target window
-    epBubble # Event bubbles up from target to root
-
-  WindowEvent* = object
-    originalEvent*: Event
-    phase*: EventPhase
-    target*: WindowId
-    currentTarget*: WindowId
-    propagationStopped*: bool
-    defaultPrevented*: bool
-
-  WindowEventHandler* = proc(window: Window, event: Event): bool
-  WindowKeyHandler* = proc(window: Window, key: KeyEvent): bool
-  WindowMouseHandler* = proc(window: Window, mouse: MouseEvent): bool
+  #
+  # Handlers return `EventResult` to participate in the window-first
+  # fallthrough chain:
+  #   `erConsume`  - event handled; do not propagate to global handler
+  #   `erContinue` - event not handled; allow global handler to run
+  #   `erQuit`     - meaningful only from global handlers; window handlers
+  #                  should not return this (treated as `erConsume`)
+  #
+  # `bool`-returning overloads are accepted via `setKeyHandler`/etc. for
+  # backward compatibility: `true` is wrapped to `erConsume`, `false` to
+  # `erContinue`.
+  WindowEventHandler* = proc(window: Window, event: Event): EventResult
+  WindowKeyHandler* = proc(window: Window, key: KeyEvent): EventResult
+  WindowMouseHandler* = proc(window: Window, mouse: MouseEvent): EventResult
   WindowResizeHandler* = proc(window: Window, newSize: Size): bool
-  EventHandler* = proc(event: var WindowEvent): bool
+    ## Resize handlers retain `bool` return because resize is broadcast to
+    ## every visible window (see `dispatchResize`); consumption semantics
+    ## do not apply to a broadcast event.
 
   BaseWindowManager* = ref object of RootObj
     ## Common base for window managers. Holds the single source of truth
@@ -99,7 +99,11 @@ type
     ## Manages multiple windows and their interactions
     windows*: seq[Window]
     nextWindowId: int
-    modalWindow*: Option[WindowId]
+    modalStack*: seq[WindowId]
+      ## Stack of modal window IDs, bottom-to-top. The last element (top)
+      ## receives all events; lower modals are inert until the top is
+      ## removed. Push on `addWindow(modal=true)`, remove on
+      ## `removeWindow(id)` regardless of position.
 
 # Window ID utilities
 
@@ -322,13 +326,55 @@ proc setEventHandler*(window: Window, handler: WindowEventHandler) =
   ## Set general event handler for window
   window.eventHandler = some(handler)
 
+proc setEventHandler*(
+    window: Window, handler: proc(w: Window, e: Event): bool
+) {.deprecated: "Use a handler returning EventResult instead of bool".} =
+  ## `bool`-returning overload (backward compatibility).
+  ## `true` is treated as `erConsume`, `false` as `erContinue`.
+  if handler.isNil:
+    window.eventHandler = none(WindowEventHandler)
+  else:
+    let captured = handler
+    window.eventHandler = some(
+      proc(w: Window, e: Event): EventResult =
+        if captured(w, e): erConsume else: erContinue
+    )
+
 proc setKeyHandler*(window: Window, handler: WindowKeyHandler) =
   ## Set key event handler for window
   window.keyHandler = some(handler)
 
+proc setKeyHandler*(
+    window: Window, handler: proc(w: Window, k: KeyEvent): bool
+) {.deprecated: "Use a handler returning EventResult instead of bool".} =
+  ## `bool`-returning overload (backward compatibility).
+  ## `true` is treated as `erConsume`, `false` as `erContinue`.
+  if handler.isNil:
+    window.keyHandler = none(WindowKeyHandler)
+  else:
+    let captured = handler
+    window.keyHandler = some(
+      proc(w: Window, k: KeyEvent): EventResult =
+        if captured(w, k): erConsume else: erContinue
+    )
+
 proc setMouseHandler*(window: Window, handler: WindowMouseHandler) =
   ## Set mouse event handler for window
   window.mouseHandler = some(handler)
+
+proc setMouseHandler*(
+    window: Window, handler: proc(w: Window, m: MouseEvent): bool
+) {.deprecated: "Use a handler returning EventResult instead of bool".} =
+  ## `bool`-returning overload (backward compatibility).
+  ## `true` is treated as `erConsume`, `false` as `erContinue`.
+  if handler.isNil:
+    window.mouseHandler = none(WindowMouseHandler)
+  else:
+    let captured = handler
+    window.mouseHandler = some(
+      proc(w: Window, m: MouseEvent): EventResult =
+        if captured(w, m): erConsume else: erContinue
+    )
 
 proc setResizeHandler*(window: Window, handler: WindowResizeHandler) =
   ## Set resize handler for window
@@ -341,30 +387,70 @@ proc clearEventHandlers*(window: Window) =
   window.mouseHandler = none(WindowMouseHandler)
   window.resizeHandler = none(WindowResizeHandler)
 
-proc handleWindowEvent*(window: Window, event: Event): bool =
-  ## Handle event for a specific window, returns true if handled
+proc handleWindowEvent*(window: Window, event: Event): EventResult =
+  ## Handle event for a specific window.
+  ##
+  ## Returns:
+  ## - `erConsume` when a handler accepted the event (no further propagation).
+  ## - `erContinue` when no handler matched, the handler returned
+  ##   `erContinue`, or the window is not accepting events.
+  ##
+  ## Handlers are tried in order: specific (key/mouse) → general
+  ## `eventHandler`. A specific handler returning `erContinue` falls back
+  ## to the general handler.
+  ##
+  ## `erQuit` from a window handler is normalized to `erConsume` here:
+  ## only the global `App.onEvent` handler can signal quit (see
+  ## `EventResult` in `events.nim`).
   if not window.acceptsEvents or not window.visible:
-    return false
+    return erContinue
+
+  template normalize(r: EventResult): EventResult =
+    if r == erQuit: erConsume else: r
 
   # Try specific handlers first
   case event.kind
   of EventKind.Key:
     if window.keyHandler.isSome():
-      return window.keyHandler.get()(window, event.key)
+      let r = window.keyHandler.get()(window, event.key)
+      if r != erContinue:
+        return normalize(r)
   of EventKind.Mouse:
     if window.mouseHandler.isSome():
       # Check if mouse event is within window bounds
       let mousePos = pos(event.mouse.x, event.mouse.y)
       if window.area.contains(mousePos):
-        return window.mouseHandler.get()(window, event.mouse)
+        let r = window.mouseHandler.get()(window, event.mouse)
+        if r != erContinue:
+          return normalize(r)
   else:
     discard
 
   # Try general event handler
   if window.eventHandler.isSome():
-    return window.eventHandler.get()(window, event)
+    return normalize(window.eventHandler.get()(window, event))
 
-  return false
+  return erContinue
+
+template bindWidget*(window: Window, widget: untyped) =
+  ## Forward this window's key and mouse events to `widget`.
+  ##
+  ## Whichever of the following the widget provides will be bound; the
+  ## other is skipped, so this template works for both full-input widgets
+  ## (e.g. `Button`, `List`) and key-only widgets (e.g. `Input`, `Table`):
+  ## - `handleKeyEvent(widget, KeyEvent): bool`
+  ## - `handleMouseEvent(widget, MouseEvent, Rect): bool`
+  ##
+  ## A `true` return from a widget handler is treated as `erConsume`;
+  ## `false` as `erContinue`, so unhandled keys still reach the global
+  ## `app.onEvent`. The mouse area passed to the widget is the window's
+  ## `contentArea`.
+  when compiles(widget.handleKeyEvent(KeyEvent())):
+    window.setKeyHandler proc(w: Window, k: KeyEvent): EventResult =
+      if widget.handleKeyEvent(k): erConsume else: erContinue
+  when compiles(widget.handleMouseEvent(MouseEvent(), Rect())):
+    window.setMouseHandler proc(w: Window, m: MouseEvent): EventResult =
+      if widget.handleMouseEvent(m, w.contentArea): erConsume else: erContinue
 
 # Window rendering
 
@@ -435,11 +521,15 @@ proc render*(window: Window, destBuffer: var Buffer) =
 proc newWindowManager*(): WindowManager =
   ## Create a new window manager
   WindowManager(
-    windows: @[],
-    nextWindowId: 1,
-    focusedWindow: none(WindowId),
-    modalWindow: none(WindowId),
+    windows: @[], nextWindowId: 1, focusedWindow: none(WindowId), modalStack: @[]
   )
+
+proc currentModal*(wm: WindowManager): Option[WindowId] {.inline.} =
+  ## Top of the modal stack, or `none` when no modal is active.
+  if wm.modalStack.len > 0:
+    some(wm.modalStack[^1])
+  else:
+    none(WindowId)
 
 proc getWindow*(wm: WindowManager, windowId: WindowId): Option[Window] =
   ## Get a window by ID
@@ -449,8 +539,14 @@ proc getWindow*(wm: WindowManager, windowId: WindowId): Option[Window] =
   return none(Window)
 
 proc focusWindow*(wm: WindowManager, windowId: WindowId): bool =
-  ## Focus a specific window
-  ## Returns true if the window was found and focused, false otherwise
+  ## Focus a specific window.
+  ## Returns true if the window was found and focused, false otherwise.
+  ##
+  ## Note: focusing a modal window does **not** push it onto `modalStack`.
+  ## Modal status is bound to `addWindow`/`removeWindow` only — `focusWindow`
+  ## just moves the focus pointer. (Prior versions re-asserted modal state
+  ## here; that behavior was removed to make the modal-stack the single
+  ## source of truth.)
   let windowOpt = wm.getWindow(windowId)
   if windowOpt.isSome():
     let window = windowOpt.get()
@@ -464,10 +560,6 @@ proc focusWindow*(wm: WindowManager, windowId: WindowId): bool =
         0
     window.zIndex = maxZ + 1
 
-    # Set as modal if the window is modal
-    if window.modal:
-      wm.modalWindow = some(windowId)
-
     return true
   return false
 
@@ -478,6 +570,9 @@ proc addWindow*(wm: WindowManager, window: Window, autoFocus: bool = true): Wind
   ## would silently grab events). For other windows, `autoFocus = true`
   ## (default) takes focus; pass `false` to add without disturbing the
   ## current focus.
+  ##
+  ## Modal windows are pushed onto `modalStack` so nested modals stack
+  ## correctly; the top of the stack receives events until removed.
   window.id = WindowId(wm.nextWindowId)
   inc wm.nextWindowId
 
@@ -490,9 +585,9 @@ proc addWindow*(wm: WindowManager, window: Window, autoFocus: bool = true): Wind
   if wm.windows.len == 1 or autoFocus or window.modal:
     wm.focusedWindow = some(window.id)
 
-  # Set as modal if the window is modal
+  # Push onto modal stack if the window is modal
   if window.modal:
-    wm.modalWindow = some(window.id)
+    wm.modalStack.add(window.id)
 
   return window.id
 
@@ -500,6 +595,10 @@ proc removeWindow*(wm: WindowManager, windowId: WindowId): bool =
   ## Remove a window from the manager
   ## Returns true if the window was found and removed, false otherwise
   ## All window resources (buffer, title, etc.) are automatically freed by Nim's GC
+  ##
+  ## When a modal window is removed (whether top of stack or not), it is
+  ## erased from `modalStack`. The next-highest remaining modal (if any)
+  ## becomes the new active modal.
   var removed: Window = nil
   for i, w in wm.windows:
     if w.id == windowId:
@@ -512,20 +611,29 @@ proc removeWindow*(wm: WindowManager, windowId: WindowId): bool =
 
   removed.managerRef = nil
 
+  # Remove from modal stack regardless of stack position. This runs
+  # *before* the refocus step so that, when the removed window was the
+  # focused (and possibly top-of-stack) modal, the refocus logic can
+  # see the remaining stack and prefer the next-highest modal.
+  for i in countdown(wm.modalStack.high, 0):
+    if wm.modalStack[i] == windowId:
+      wm.modalStack.delete(i)
+      break
+
   # Update focus if the focused window was removed
   if wm.focusedWindow.isSome():
     let focusedId = wm.focusedWindow.get()
     if focusedId == windowId:
-      if wm.windows.len > 0:
+      let topModal = wm.currentModal()
+      if topModal.isSome():
+        # Prefer the next active modal so focus and the modal stack
+        # stay in sync — otherwise focus could land on a window that
+        # the modal routing immediately overrides.
+        discard wm.focusWindow(topModal.get())
+      elif wm.windows.len > 0:
         discard wm.focusWindow(wm.windows[^1].id) # Focus last window
       else:
         wm.focusedWindow = none(WindowId)
-
-  # Clear modal if modal window was removed
-  if wm.modalWindow.isSome():
-    let modalId = wm.modalWindow.get()
-    if modalId == windowId:
-      wm.modalWindow = none(WindowId)
 
   return true
 
@@ -565,16 +673,38 @@ proc findWindowAt*(wm: WindowManager, pos: Position): Option[Window] =
 
   return none(Window)
 
-proc handleEvent*(wm: WindowManager, event: Event): bool =
-  ## Handle an event, routing it to the appropriate window
-  ## Returns true if the event was handled
+proc handleEvent*(wm: WindowManager, event: Event): EventResult =
+  ## Route an event to the appropriate window and return the propagation
+  ## outcome.
+  ##
+  ## Routing order:
+  ## 1. If a modal is active (top of `modalStack`), it receives the event
+  ##    exclusively. Mouse clicks outside the modal's bounds are dropped
+  ##    here (`erConsume`) so they neither reach lower windows nor the
+  ##    global handler — this preserves modal semantics even when the
+  ##    modal sets only a general `eventHandler` (which would otherwise
+  ##    bypass the mouse-bounds check inside `handleWindowEvent`).
+  ## 2. Mouse events go to the topmost visible window at the cursor
+  ##    position; on `Press`, that window is auto-focused.
+  ## 3. All other events go to the currently focused window.
+  ##
+  ## Returns `erConsume` when a window's handler accepted the event, or
+  ## `erContinue` otherwise (no window, no handler, or handler returned
+  ## `erContinue`).
 
   # If there's a modal window, only it can handle events
-  if wm.modalWindow.isSome():
-    let modalWindowId = wm.modalWindow.get()
-    let modalWindow = wm.getWindow(modalWindowId)
+  let modalOpt = wm.currentModal()
+  if modalOpt.isSome():
+    let modalWindow = wm.getWindow(modalOpt.get())
     if modalWindow.isSome():
-      return modalWindow.get().handleWindowEvent(event)
+      let modal = modalWindow.get()
+      # Drop mouse clicks outside the modal's area so a general
+      # eventHandler on the modal doesn't observe out-of-bounds clicks.
+      if event.kind == EventKind.Mouse:
+        let mousePos = pos(event.mouse.x, event.mouse.y)
+        if not modal.area.contains(mousePos):
+          return erConsume
+      return modal.handleWindowEvent(event)
 
   # For mouse events, find the topmost window at mouse position
   if event.kind == EventKind.Mouse:
@@ -592,13 +722,34 @@ proc handleEvent*(wm: WindowManager, event: Event): bool =
   if focusedWindow.isSome():
     return focusedWindow.get().handleWindowEvent(event)
 
-  return false
+  return erContinue
 
 proc dispatchResize*(wm: WindowManager, newSize: Size) =
-  ## Dispatch resize event to all windows with resize handlers
+  ## Broadcast a resize event to every visible window's `resizeHandler`.
+  ##
+  ## Intended to be called from the application tick after the terminal
+  ## size change is detected. The return value of each handler is
+  ## ignored because resize is a broadcast event, not a routed one.
+  ##
+  ## Exceptions raised by a handler are swallowed so one window's
+  ## failure does not block the others. We catch `Exception` (rather
+  ## than the narrower `CatchableError`) for two reasons:
+  ## 1. Resize handlers have no `{.raises.}` annotation, so the effect
+  ##    system treats them as potentially raising bare `Exception`.
+  ## 2. The async counterpart (`async_windows.nim:dispatchResize`) must
+  ##    catch `Exception` due to chronos's `{.async.}` raise inheritance
+  ##    rules — matching here keeps sync/async behavior identical.
+  ##
+  ## With `--panics:on` (recommended for production) `Defect`s terminate
+  ## the program before reaching this handler, so programmer bugs still
+  ## surface. With `--panics:off` (default) Defects are caught and the
+  ## broadcast continues; this matches async behavior.
   for window in wm.windows:
     if window.resizeHandler.isSome() and window.visible:
-      discard window.resizeHandler.get()(window, newSize)
+      try:
+        discard window.resizeHandler.get()(window, newSize)
+      except Exception:
+        discard
 
 proc render*(wm: WindowManager, destBuffer: var Buffer) =
   ## Render all windows to the destination buffer
@@ -606,35 +757,6 @@ proc render*(wm: WindowManager, destBuffer: var Buffer) =
 
   for window in visibleWindows:
     window.render(destBuffer)
-
-# Window Event System
-
-proc stopPropagation*(event: var WindowEvent) =
-  ## Stop event from propagating further
-  event.propagationStopped = true
-
-proc preventDefault*(event: var WindowEvent) =
-  ## Prevent default action for this event
-  event.defaultPrevented = true
-
-proc dispatchEvent*(wm: WindowManager, event: Event): bool =
-  ## Dispatch event through window hierarchy with bubbling
-
-  # Find target window based on event type
-  var targetWindow: Option[Window]
-
-  case event.kind
-  of EventKind.Mouse:
-    targetWindow = wm.findWindowAt(pos(event.mouse.x, event.mouse.y))
-  of EventKind.Key, EventKind.Paste:
-    targetWindow = wm.getFocusedWindow()
-  of EventKind.Resize, EventKind.FocusIn, EventKind.FocusOut, EventKind.Quit,
-      EventKind.Unknown:
-    targetWindow = wm.getFocusedWindow()
-
-  # Dispatch to target window's event handlers
-  if targetWindow.isSome():
-    result = targetWindow.get().handleWindowEvent(event)
 
 # Utility functions
 

@@ -6,6 +6,11 @@ import ../celina/core/[geometry, buffer, colors, events]
 
 import ../celina/core/windows {.all.}
 
+# These tests deliberately exercise the legacy `bool`-returning handler
+# overloads to verify backward compatibility, so the `Deprecated`
+# warnings they emit are expected noise — silence them here.
+{.push warning[Deprecated]: off.}
+
 suite "Window Tests":
   test "Create window with default settings":
     let area = rect(10, 5, 50, 20)
@@ -107,7 +112,8 @@ suite "WindowManager Tests":
 
     check wm.windows.len == 0
     check wm.focusedWindow.isNone()
-    check wm.modalWindow.isNone()
+    check wm.modalStack.len == 0
+    check wm.currentModal().isNone()
 
   test "Add window to manager":
     let wm = newWindowManager()
@@ -188,7 +194,7 @@ suite "WindowManager Tests":
     check dialog.focused == true
     check first.focused == false
     check wm.focusedWindow == some(dialogId)
-    check wm.modalWindow == some(dialogId)
+    check wm.currentModal() == some(dialogId)
 
   test "removeWindow refocuses next window (focused getter)":
     # When the focused window is removed, the next window must become
@@ -314,10 +320,11 @@ suite "WindowManager Tests":
     discard wm.addWindow(normalWindow)
     let modalId = wm.addWindow(modalWindow)
 
-    # Modal window should be focused and set as modal
+    # Modal window should be focused and pushed onto the modal stack
     check wm.focusedWindow.get() == modalId
-    check wm.modalWindow.isSome()
-    check wm.modalWindow.get() == modalId
+    check wm.currentModal().isSome()
+    check wm.currentModal().get() == modalId
+    check wm.modalStack.len == 1
 
   test "Find window at position":
     let wm = newWindowManager()
@@ -627,33 +634,7 @@ suite "Performance and Efficiency Tests":
       check wm.focusedWindow.get() == windowIds[1]
 
 suite "Window Event System Tests":
-  test "WindowEvent creation and manipulation":
-    let keyEvent = Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Enter))
-    var windowEvent = WindowEvent(
-      originalEvent: keyEvent,
-      phase: epTarget,
-      target: WindowId(1),
-      currentTarget: WindowId(1),
-      propagationStopped: false,
-      defaultPrevented: false,
-    )
-
-    check:
-      windowEvent.originalEvent.kind == EventKind.Key
-      windowEvent.phase == epTarget
-      windowEvent.target == WindowId(1)
-      not windowEvent.propagationStopped
-      not windowEvent.defaultPrevented
-
-    # Test event manipulation
-    windowEvent.stopPropagation()
-    windowEvent.preventDefault()
-
-    check:
-      windowEvent.propagationStopped
-      windowEvent.defaultPrevented
-
-  test "Window event handler assignment":
+  test "Window event handler assignment (bool compat)":
     let window = newWindow(rect(10, 10, 30, 20), "Test")
     var handlerCalled = false
 
@@ -670,7 +651,24 @@ suite "Window Event System Tests":
     let result = window.handleWindowEvent(testEvent)
 
     check:
-      result == true
+      result == erConsume
+      handlerCalled
+
+  test "Window event handler assignment (EventResult)":
+    let window = newWindow(rect(10, 10, 30, 20), "Test")
+    var handlerCalled = false
+
+    window.setEventHandler(
+      proc(w: Window, e: Event): EventResult =
+        handlerCalled = true
+        return erConsume
+    )
+
+    let testEvent = Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Enter))
+    let result = window.handleWindowEvent(testEvent)
+
+    check:
+      result == erConsume
       handlerCalled
 
   test "Window key handler specific":
@@ -687,7 +685,7 @@ suite "Window Event System Tests":
     let result = window.handleWindowEvent(keyEvent)
 
     check:
-      result == true
+      result == erConsume
       keyHandlerCalled
 
   test "Window mouse handler specific":
@@ -706,7 +704,7 @@ suite "Window Event System Tests":
     let result = window.handleWindowEvent(mouseEvent)
 
     check:
-      result == true
+      result == erConsume
       mouseHandlerCalled
 
   test "Window event handler priority (specific over general)":
@@ -730,9 +728,116 @@ suite "Window Event System Tests":
     let result = window.handleWindowEvent(keyEvent)
 
     check:
-      result == true
+      result == erConsume
       keyHandlerCalled
       not generalHandlerCalled # Specific handler should take precedence
+
+  test "Specific handler erContinue falls through to general":
+    # A specific (key/mouse) handler returning erContinue must allow the
+    # general eventHandler to run on the same event.
+    let window = newWindow(rect(10, 10, 30, 20), "Test")
+    var keyCalled = false
+    var generalCalled = false
+
+    window.setKeyHandler(
+      proc(w: Window, k: KeyEvent): EventResult =
+        keyCalled = true
+        return erContinue
+    )
+    window.setEventHandler(
+      proc(w: Window, e: Event): EventResult =
+        generalCalled = true
+        return erConsume
+    )
+
+    let keyEvent = Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Enter))
+    let result = window.handleWindowEvent(keyEvent)
+
+    check:
+      result == erConsume
+      keyCalled
+      generalCalled
+
+  test "bindWidget skips mouse handler when widget lacks handleMouseEvent":
+    # A "widget" with only handleKeyEvent (the shape used by Input/Table)
+    # must still bind successfully; the mouse handler is simply omitted.
+    type KeyOnlyWidget = ref object
+      called: bool
+
+    proc handleKeyEvent(w: KeyOnlyWidget, k: KeyEvent): bool =
+      w.called = true
+      true
+
+    let widget = KeyOnlyWidget()
+    let window = newWindow(rect(0, 0, 30, 20), "Key-only")
+    bindWidget(window, widget)
+
+    check window.keyHandler.isSome()
+    check window.mouseHandler.isNone()
+
+    let ev = Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Enter))
+    check window.handleWindowEvent(ev) == erConsume
+    check widget.called
+
+  test "bindWidget binds both handlers when widget supports both":
+    type FullWidget = ref object
+      keyCalled, mouseCalled: bool
+
+    proc handleKeyEvent(w: FullWidget, k: KeyEvent): bool =
+      w.keyCalled = true
+      true
+
+    proc handleMouseEvent(w: FullWidget, m: MouseEvent, area: Rect): bool =
+      w.mouseCalled = true
+      true
+
+    let widget = FullWidget()
+    let window = newWindow(rect(0, 0, 30, 20), "Full")
+    bindWidget(window, widget)
+
+    check window.keyHandler.isSome()
+    check window.mouseHandler.isSome()
+
+    discard window.handleWindowEvent(
+      Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Enter))
+    )
+    discard window.handleWindowEvent(
+      Event(
+        kind: EventKind.Mouse, mouse: MouseEvent(x: 5, y: 5, kind: Press, button: Left)
+      )
+    )
+    check widget.keyCalled
+    check widget.mouseCalled
+
+  test "Window handler returning erQuit is normalized to erConsume":
+    # Only the global App.onEvent handler can signal quit. A window
+    # handler that returns erQuit must be normalized to erConsume so
+    # the manager treats it as consumed (rather than silently falling
+    # through to the global handler).
+    let window = newWindow(rect(10, 10, 30, 20), "Test")
+    window.setKeyHandler(
+      proc(w: Window, k: KeyEvent): EventResult =
+        erQuit
+    )
+    let ev = Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Enter))
+    check window.handleWindowEvent(ev) == erConsume
+
+    let window2 = newWindow(rect(0, 0, 30, 30), "Test2")
+    window2.setMouseHandler(
+      proc(w: Window, m: MouseEvent): EventResult =
+        erQuit
+    )
+    let mev = Event(
+      kind: EventKind.Mouse, mouse: MouseEvent(x: 5, y: 5, kind: Press, button: Left)
+    )
+    check window2.handleWindowEvent(mev) == erConsume
+
+    let window3 = newWindow(rect(10, 10, 30, 20), "Test3")
+    window3.setEventHandler(
+      proc(w: Window, e: Event): EventResult =
+        erQuit
+    )
+    check window3.handleWindowEvent(ev) == erConsume
 
   test "Window event handler clearing":
     let window = newWindow(rect(10, 10, 30, 20), "Test")
@@ -782,7 +887,7 @@ suite "Window Event System Tests":
     let result = window.handleWindowEvent(testEvent)
 
     check:
-      result == false # Should not handle events when acceptsEvents is false
+      result == erContinue # Should not consume events when acceptsEvents is false
       not handlerCalled
 
   test "Hidden window ignores events":
@@ -801,11 +906,11 @@ suite "Window Event System Tests":
     let result = window.handleWindowEvent(testEvent)
 
     check:
-      result == false
+      result == erContinue
       not handlerCalled
 
 suite "WindowManager Event System Tests":
-  test "DispatchEvent to focused window":
+  test "handleEvent to focused window":
     let wm = newWindowManager()
     let window = newWindow(rect(10, 10, 30, 20), "Test")
     var handlerCalled = false
@@ -820,13 +925,13 @@ suite "WindowManager Event System Tests":
     discard wm.focusWindow(windowId)
 
     let keyEvent = Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Enter))
-    let result = wm.dispatchEvent(keyEvent)
+    let result = wm.handleEvent(keyEvent)
 
     check:
-      result == true
+      result == erConsume
       handlerCalled
 
-  test "DispatchEvent mouse to window at position":
+  test "handleEvent mouse to window at position":
     let wm = newWindowManager()
     let window1 = newWindow(rect(10, 10, 20, 15), "Window1")
     let window2 = newWindow(rect(30, 30, 20, 15), "Window2")
@@ -852,12 +957,157 @@ suite "WindowManager Event System Tests":
     let mouseEvent = Event(
       kind: EventKind.Mouse, mouse: MouseEvent(x: 35, y: 35, kind: Press, button: Left)
     )
-    let result = wm.dispatchEvent(mouseEvent)
+    let result = wm.handleEvent(mouseEvent)
 
     check:
-      result == true
+      result == erConsume
       not window1HandlerCalled
       window2HandlerCalled
+
+  test "Unhandled event returns erContinue (falls through to global)":
+    # A window handler returning erContinue must not consume the event;
+    # the manager must propagate erContinue so the app's global handler
+    # can run.
+    let wm = newWindowManager()
+    let window = newWindow(rect(10, 10, 30, 20), "Test")
+
+    window.setKeyHandler(
+      proc(w: Window, k: KeyEvent): bool =
+        false # not handled
+    )
+
+    discard wm.addWindow(window)
+    let keyEvent = Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Enter))
+    check wm.handleEvent(keyEvent) == erContinue
+
+  test "Modal stack: nested modals route to top, removal restores prior":
+    let wm = newWindowManager()
+    let base = newWindow(rect(0, 0, 30, 30), "Base")
+    let m1 = newWindow(rect(5, 5, 20, 20), "M1", modal = true)
+    let m2 = newWindow(rect(10, 10, 10, 10), "M2", modal = true)
+
+    var lastTarget = ""
+    base.setKeyHandler(
+      proc(w: Window, k: KeyEvent): bool =
+        lastTarget = "base"
+        true
+    )
+    m1.setKeyHandler(
+      proc(w: Window, k: KeyEvent): bool =
+        lastTarget = "m1"
+        true
+    )
+    m2.setKeyHandler(
+      proc(w: Window, k: KeyEvent): bool =
+        lastTarget = "m2"
+        true
+    )
+
+    discard wm.addWindow(base)
+    let m1Id = wm.addWindow(m1)
+    let m2Id = wm.addWindow(m2)
+
+    check wm.modalStack.len == 2
+    check wm.currentModal().get() == m2Id
+
+    let keyEvent = Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Enter))
+
+    # Top of stack receives the event.
+    discard wm.handleEvent(keyEvent)
+    check lastTarget == "m2"
+
+    # Removing the top modal restores m1 as the active modal.
+    discard wm.removeWindow(m2Id)
+    check wm.modalStack.len == 1
+    check wm.currentModal().get() == m1Id
+
+    discard wm.handleEvent(keyEvent)
+    check lastTarget == "m1"
+
+    # Removing the remaining modal clears the stack — base receives events.
+    discard wm.removeWindow(m1Id)
+    check wm.modalStack.len == 0
+    check wm.currentModal().isNone()
+
+    discard wm.focusWindow(base.id)
+    discard wm.handleEvent(keyEvent)
+    check lastTarget == "base"
+
+  test "Modal stack: removing middle modal keeps top active":
+    let wm = newWindowManager()
+    let m1 = newWindow(rect(5, 5, 20, 20), "M1", modal = true)
+    let m2 = newWindow(rect(10, 10, 10, 10), "M2", modal = true)
+    let m3 = newWindow(rect(12, 12, 6, 6), "M3", modal = true)
+
+    let m1Id = wm.addWindow(m1)
+    let m2Id = wm.addWindow(m2)
+    let m3Id = wm.addWindow(m3)
+    check wm.modalStack == @[m1Id, m2Id, m3Id]
+
+    # Removing the middle modal leaves the stack with [m1, m3]; top stays m3.
+    discard wm.removeWindow(m2Id)
+    check wm.modalStack == @[m1Id, m3Id]
+    check wm.currentModal().get() == m3Id
+
+  test "removeWindow refocuses next active modal when top modal is removed":
+    # When the focused window is the top modal and it's removed,
+    # focus must move to the next-highest remaining modal so the
+    # focused window stays in sync with `modalStack` (and modal
+    # routing). Without this, focus could land on a non-modal window
+    # underneath while modal routing would still divert events
+    # elsewhere — confusing for both UI and event handling.
+    let wm = newWindowManager()
+    let base = newWindow(rect(0, 0, 30, 30), "Base")
+    let m1 = newWindow(rect(5, 5, 20, 20), "M1", modal = true)
+    let m2 = newWindow(rect(10, 10, 10, 10), "M2", modal = true)
+
+    discard wm.addWindow(base)
+    let m1Id = wm.addWindow(m1)
+    let m2Id = wm.addWindow(m2)
+
+    check wm.focusedWindow.get() == m2Id
+
+    discard wm.removeWindow(m2Id)
+    check wm.modalStack == @[m1Id]
+    check wm.currentModal().get() == m1Id
+    check wm.focusedWindow.get() == m1Id # not `base.id`
+
+  test "dispatchResize broadcasts to all visible windows":
+    let wm = newWindowManager()
+    let w1 = newWindow(rect(0, 0, 10, 10), "W1")
+    let w2 = newWindow(rect(0, 0, 10, 10), "W2")
+    let w3 = newWindow(rect(0, 0, 10, 10), "W3")
+
+    var w1Called = false
+    var w2Called = false
+    var w3Called = false
+
+    w1.setResizeHandler(
+      proc(w: Window, s: Size): bool =
+        w1Called = true
+        true
+    )
+    w2.setResizeHandler(
+      proc(w: Window, s: Size): bool =
+        w2Called = true
+        true
+    )
+    w3.setResizeHandler(
+      proc(w: Window, s: Size): bool =
+        w3Called = true
+        true
+    )
+
+    discard wm.addWindow(w1)
+    discard wm.addWindow(w2)
+    discard wm.addWindow(w3)
+    w2.hide() # invisible windows are skipped
+
+    wm.dispatchResize(size(100, 50))
+
+    check w1Called
+    check not w2Called
+    check w3Called
 
   test "Modal window intercepts events":
     let wm = newWindowManager()
@@ -885,9 +1135,41 @@ suite "WindowManager Event System Tests":
     let result = wm.handleEvent(keyEvent)
 
     check:
-      result == true
+      result == erConsume
       not normalHandlerCalled
       modalHandlerCalled
+
+  test "Modal drops out-of-bounds mouse clicks at the manager":
+    # When a modal has only a general eventHandler (no mouseHandler),
+    # the modal's per-window bounds check would not run. The manager
+    # must still suppress out-of-bounds clicks so they don't leak to
+    # the modal's general handler or fall through to the global
+    # handler.
+    let wm = newWindowManager()
+    let modalWindow = newWindow(rect(20, 20, 10, 10), "Modal", modal = true)
+    var generalCalled = false
+
+    modalWindow.setEventHandler(
+      proc(w: Window, e: Event): EventResult =
+        generalCalled = true
+        return erContinue
+    )
+
+    discard wm.addWindow(modalWindow)
+
+    # Click outside the modal's bounds.
+    let outside = Event(
+      kind: EventKind.Mouse, mouse: MouseEvent(x: 0, y: 0, kind: Press, button: Left)
+    )
+    check wm.handleEvent(outside) == erConsume
+    check not generalCalled
+
+    # Click inside the modal's bounds is delivered normally.
+    let inside = Event(
+      kind: EventKind.Mouse, mouse: MouseEvent(x: 25, y: 25, kind: Press, button: Left)
+    )
+    discard wm.handleEvent(inside)
+    check generalCalled
 
   test "Mouse click auto-focuses window":
     let wm = newWindowManager()
@@ -1073,3 +1355,5 @@ suite "WindowInfo String Representation":
     check "WindowInfo(" in s
     check "\"Info Window\"" in s
     check "wsNormal" in s
+
+{.pop.}

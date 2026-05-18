@@ -4,6 +4,10 @@ import std/[unittest, options, monotimes, times, strutils]
 
 import ../celina
 
+# Legacy `bool`-returning handler overloads are exercised below to
+# verify backward compatibility; silence their Deprecated warnings.
+{.push warning[Deprecated]: off.}
+
 suite "App Creation and Configuration":
   test "newApp with default config":
     let app = newApp()
@@ -42,24 +46,24 @@ suite "App Event and Render Handlers":
   test "onEvent(nil) resets handler":
     let app = newApp()
     app.onEvent proc(event: Event, app: App): bool =
-      return false
+      return false # legacy bool: false maps to erQuit
 
-    check app.dispatchEvent(Event(kind: Resize)) == false
+    check app.dispatchEvent(Event(kind: Resize)) == erQuit
 
     let nilHandler: proc(event: Event, app: App): bool = nil
     app.onEvent(nilHandler)
-    check app.dispatchEvent(Event(kind: Resize)) == true
+    check app.dispatchEvent(Event(kind: Resize)) == erContinue
 
   test "onEvent(nil) resets simple-form handler":
     let app = newApp()
     app.onEvent proc(event: Event): bool =
       return false
 
-    check app.dispatchEvent(Event(kind: Resize)) == false
+    check app.dispatchEvent(Event(kind: Resize)) == erQuit
 
     let nilHandler: proc(event: Event): bool = nil
     app.onEvent(nilHandler)
-    check app.dispatchEvent(Event(kind: Resize)) == true
+    check app.dispatchEvent(Event(kind: Resize)) == erContinue
 
   test "onRender sets render handler":
     let app = newApp()
@@ -594,17 +598,17 @@ suite "App State and Info":
     check (now - frameTime).inMilliseconds < 1000
 
 suite "App handleWindowEvent":
-  test "handleWindowEvent with no window mode returns false":
+  test "handleWindowEvent with no window mode returns erContinue":
     let app = newApp()
     let event = Event(kind: Key)
-    check app.handleWindowEvent(event) == false
+    check app.handleWindowEvent(event) == erContinue
 
   test "handleWindowEvent with window mode enabled but no handlers":
     let config = AppConfig(windowMode: true)
     let app = newApp(config)
     let event = Event(kind: Key)
-    # No window has handlers, so should return false
-    check app.handleWindowEvent(event) == false
+    # No window has handlers, so should return erContinue
+    check app.handleWindowEvent(event) == erContinue
 
   test "handleWindowEvent with window that has key handler":
     let app = newApp()
@@ -621,8 +625,8 @@ suite "App handleWindowEvent":
     discard app.focusWindow(windowId)
 
     let event = Event(kind: Key)
-    # Window has a key handler, so should return true
-    check app.handleWindowEvent(event) == true
+    # Window has a key handler that returns true (consume), so erConsume
+    check app.handleWindowEvent(event) == erConsume
 
   test "handleWindowEvent mouse event with window that has mouse handler":
     let app = newApp()
@@ -637,8 +641,8 @@ suite "App handleWindowEvent":
 
     # Mouse event within window bounds
     let event = Event(kind: Mouse, mouse: MouseEvent(x: 15, y: 12))
-    # Window has a mouse handler, so should return true
-    check app.handleWindowEvent(event) == true
+    # Window has a mouse handler that returns true (consume), so erConsume
+    check app.handleWindowEvent(event) == erConsume
 
   test "handleWindowEvent resize event routes to focused window":
     let app = newApp()
@@ -651,9 +655,9 @@ suite "App handleWindowEvent":
     discard app.focusWindow(windowId)
 
     let event = Event(kind: Resize)
-    # Resize events are routed to focused window but window has no handler
-    # so returns false (resize is typically handled separately via dispatchResize)
-    check app.handleWindowEvent(event) == false
+    # Resize events are routed to focused window but window has no
+    # event handler; resize is broadcast separately via dispatchResize.
+    check app.handleWindowEvent(event) == erContinue
 
 suite "App Application Timeout":
   test "applicationTimeout default is 0":
@@ -844,3 +848,5 @@ suite "App restoreTerminal":
     let app = newApp()
     app.restoreTerminal()
     app.restoreTerminal()
+
+{.pop.}

@@ -102,14 +102,14 @@ tabWidget.removeTab(1)""",
 
   var app = newApp(config)
 
-  app.onEvent proc(event: Event): bool =
+  app.onEvent proc(event: Event): EventResult =
     case event.kind
     of EventKind.Key:
       case event.key.code
       of KeyCode.Char:
         case event.key.char
         of "q", "Q":
-          return false
+          return erQuit
         of "1":
           tabsWidget.setActiveTab(0)
         of "2":
@@ -130,12 +130,12 @@ tabWidget.removeTab(1)""",
       of KeyCode.ArrowRight:
         tabsWidget.nextTab()
       of KeyCode.Escape:
-        return false
+        return erQuit
       else:
         discard
     else:
       discard
-    return true
+    return erContinue
 
   app.onRender proc(buf: var Buffer) =
     buf.clear()

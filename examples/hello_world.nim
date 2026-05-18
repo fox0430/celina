@@ -30,13 +30,13 @@ proc main() =
 
   # Set up the event handler - processes keyboard/mouse input
   app.onEvent(
-    proc(event: Event): bool =
+    proc(event: Event): EventResult =
       # Check if this is a keyboard event
       if event.kind == EventKind.Key:
         if event.key.code == KeyCode.Char and event.key.char == "q":
           # Quit when 'q' is pressed
-          return false # Returning false exits the app
-      return true # Continue running for all other events
+          return erQuit
+      return erContinue # Continue running for all other events
   )
 
   # Start the main event loop

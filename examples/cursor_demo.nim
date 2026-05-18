@@ -69,7 +69,7 @@ proc main() =
   )
 
   app.onEvent(
-    proc(event: Event): bool =
+    proc(event: Event): EventResult =
       case event.kind
       of EventKind.Key:
         case event.key.code
@@ -116,17 +116,17 @@ proc main() =
 
           # Quit
           of "q", "Q":
-            return false
+            return erQuit
           else:
             discard
         of KeyCode.Escape:
-          return false
+          return erQuit
         else:
           discard
       else:
         discard
 
-      return true
+      return erContinue
   )
 
   app.run()
