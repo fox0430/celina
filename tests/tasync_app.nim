@@ -8,6 +8,10 @@ when hasAsyncSupport:
   import ../celina/async/async_app
   import ../celina/core/[geometry, events, windows, buffer, terminal_common]
 
+  # Legacy `bool`-returning handler overloads are exercised below to
+  # verify backward compatibility; silence their Deprecated warnings.
+  {.push warning[Deprecated]: off.}
+
   suite "AsyncApp Creation and Configuration":
     test "newAsyncApp with default config":
       let app = newAsyncApp()
@@ -84,24 +88,24 @@ when hasAsyncSupport:
     test "onEventAsync(nil) resets handler":
       let app = newAsyncApp()
       app.onEventAsync proc(event: Event, app: AsyncApp): Future[bool] {.async.} =
-        return false
+        return false # legacy bool: false maps to erQuit
 
-      check (waitFor app.dispatchEventAsync(Event(kind: Resize))) == false
+      check (waitFor app.dispatchEventAsync(Event(kind: Resize))) == erQuit
 
       let nilHandler: proc(event: Event, app: AsyncApp): Future[bool] {.async.} = nil
       app.onEventAsync(nilHandler)
-      check (waitFor app.dispatchEventAsync(Event(kind: Resize))) == true
+      check (waitFor app.dispatchEventAsync(Event(kind: Resize))) == erContinue
 
     test "onEventAsync(nil) resets simple-form handler":
       let app = newAsyncApp()
       app.onEventAsync proc(event: Event): Future[bool] {.async.} =
         return false
 
-      check (waitFor app.dispatchEventAsync(Event(kind: Resize))) == false
+      check (waitFor app.dispatchEventAsync(Event(kind: Resize))) == erQuit
 
       let nilHandler: proc(event: Event): Future[bool] {.async.} = nil
       app.onEventAsync(nilHandler)
-      check (waitFor app.dispatchEventAsync(Event(kind: Resize))) == true
+      check (waitFor app.dispatchEventAsync(Event(kind: Resize))) == erContinue
 
     test "onRenderAsync sets render handler":
       let app = newAsyncApp()
@@ -793,17 +797,16 @@ when hasAsyncSupport:
       check app.getApplicationTimeout() == 500
 
   suite "AsyncApp handleWindowEvent":
-    test "handleWindowEvent with no window mode returns false":
+    test "handleWindowEvent with no window mode returns erContinue":
       let app = newAsyncApp()
       let event = Event(kind: Key)
-      check app.handleWindowEvent(event) == false
+      check app.handleWindowEvent(event) == erContinue
 
     test "handleWindowEvent with window mode enabled but no handlers":
       let config = AppConfig(windowMode: true)
       let app = newAsyncApp(config)
       let event = Event(kind: Key)
-      # No window has handlers, so should return false
-      check app.handleWindowEvent(event) == false
+      check app.handleWindowEvent(event) == erContinue
 
     test "handleWindowEvent with window that has key handler":
       let config = AppConfig(windowMode: true)
@@ -820,8 +823,8 @@ when hasAsyncSupport:
       discard app.focusWindow(windowId)
 
       let event = Event(kind: Key)
-      # Window has a key handler, so should return true
-      check app.handleWindowEvent(event) == true
+      # Window has a key handler that returns true (consume), so erConsume
+      check app.handleWindowEvent(event) == erConsume
 
     test "handleWindowEvent mouse event with window that has mouse handler":
       let config = AppConfig(windowMode: true)
@@ -836,8 +839,7 @@ when hasAsyncSupport:
 
       # Mouse event within window bounds
       let event = Event(kind: Mouse, mouse: MouseEvent(x: 15, y: 12))
-      # Window has a mouse handler, so should return true
-      check app.handleWindowEvent(event) == true
+      check app.handleWindowEvent(event) == erConsume
 
     test "handleWindowEvent resize event":
       let config = AppConfig(windowMode: true)
@@ -851,9 +853,10 @@ when hasAsyncSupport:
       discard app.addWindow(window)
 
       let event = Event(kind: Resize)
-      # Resize events are handled separately via dispatchResize, not handleEvent
-      # This is consistent with sync WindowManager behavior
-      check app.handleWindowEvent(event) == false
+      # Resize is broadcast separately via dispatchResize; handleEvent
+      # routes Resize to the focused window which has no event handler
+      # for it, so erContinue.
+      check app.handleWindowEvent(event) == erContinue
   suite "AsyncApp restoreTerminal":
     test "restoreTerminal does not crash with default config":
       let app = newAsyncApp()
@@ -998,5 +1001,7 @@ when hasAsyncSupport:
         check not compiles(quickRunAsync(testEventHandlerWithApp, testRenderHandler))
       else:
         fail("quickRunAsync should be available")
+
+  {.pop.}
 else:
   echo "Skipping AsyncApp tests - no async backend available"

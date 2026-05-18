@@ -41,31 +41,31 @@ proc createTestWindow(
 
   # Set up key handler for the window
   window.setKeyHandler(
-    proc(win: Window, key: KeyEvent): bool =
+    proc(win: Window, key: KeyEvent): EventResult =
       case key.code
       of KeyCode.Char:
         case key.char
         of "c":
           demo.addMessage(&"Window '{win.title}' received 'c' key")
-          return true
+          return erConsume
         of "x":
           demo.addMessage(&"Closing window '{win.title}'")
           discard app.removeWindow(win.id)
-          return true
+          return erConsume
         else:
           discard
       of KeyCode.Delete:
         demo.addMessage(&"Deleting window '{win.title}'")
         discard app.removeWindow(win.id)
-        return true
+        return erConsume
       else:
         discard
-      return false
+      return erContinue
   )
 
   # Set up mouse handler for the window
   window.setMouseHandler(
-    proc(win: Window, mouse: MouseEvent): bool =
+    proc(win: Window, mouse: MouseEvent): EventResult =
       let relativeX = mouse.x - win.contentArea.x
       let relativeY = mouse.y - win.contentArea.y
 
@@ -75,18 +75,18 @@ proc createTestWindow(
         of Left:
           demo.addMessage(&"Left click in '{win.title}' at ({relativeX}, {relativeY})")
           demo.selectedWindowId = some(win.id)
-          return true
+          return erConsume
         of Right:
           demo.addMessage(&"Right click in '{win.title}' - creating modal dialog")
           # Create a modal dialog
           let dialogArea = rect(win.area.x + 5, win.area.y + 3, 30, 8)
           discard demo.createTestWindow(app, "Modal Dialog", dialogArea, modal = true)
-          return true
+          return erConsume
         else:
           discard
       else:
         discard
-      return false
+      return erContinue
   )
 
   return app.addWindow(window)
@@ -228,14 +228,14 @@ proc main() =
   demo.addMessage("Window demo started")
   demo.addMessage("Two initial windows created")
 
-  app.onEvent proc(event: Event): bool =
+  app.onEvent proc(event: Event): EventResult =
     case event.kind
     of Key:
       case event.key.code
       of Char:
         case event.key.char
         of "q":
-          return false # Quit
+          return erQuit # Quit
         of "1", "2", "3":
           let num = parseInt(event.key.char)
           let area = rect(5 + num * 8, 3 + num * 3, 30 + num * 2, 8 + num)
@@ -310,18 +310,18 @@ proc main() =
         else:
           demo.addMessage("No window focused for movement")
       of Escape:
-        return false # Quit on Escape
+        return erQuit # Quit on Escape
       else:
         discard
     of Mouse:
       # Mouse events are handled by the window system
       discard
     of Quit:
-      return false
+      return erQuit
     else:
       discard
 
-    return true # Continue running
+    return erContinue # Continue running
 
   app.onRender proc(buffer: var Buffer) =
     demo.renderMainContent(buffer)

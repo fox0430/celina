@@ -409,13 +409,15 @@ proc openSelectedAsync(fm: FileManagerApp): Future[void] {.async.} =
     fm.updateFlags.status = true
     await fm.updateWindowsAsync()
 
-proc handleKeyEventAsync(fm: FileManagerApp, key: KeyEvent): Future[bool] {.async.} =
+proc handleKeyEventAsync(
+    fm: FileManagerApp, key: KeyEvent
+): Future[EventResult] {.async.} =
   ## Handle keyboard input
   case key.code
   of Char:
     case key.char
     of "q", "Q":
-      return false # Quit
+      return erQuit # Quit
     of "j", "J":
       # Move down
       if fm.selectedIndex < fm.files.len - 1:
@@ -460,7 +462,7 @@ proc handleKeyEventAsync(fm: FileManagerApp, key: KeyEvent): Future[bool] {.asyn
   else:
     discard
 
-  return true
+  return erContinue
 
 proc updateWindowLayout(fm: FileManagerApp): Future[void] {.async.} =
   ## Update window layout based on current terminal size
@@ -541,7 +543,7 @@ proc newFileManagerApp(): Future[FileManagerApp] {.async.} =
 
   # Set up event handling
   let fm = result # Store reference for closure
-  result.app.onEventAsync proc(event: Event): Future[bool] {.async.} =
+  result.app.onEventAsync proc(event: Event): Future[EventResult] {.async.} =
     case event.kind
     of Key:
       return await fm.handleKeyEventAsync(event.key)
@@ -549,9 +551,9 @@ proc newFileManagerApp(): Future[FileManagerApp] {.async.} =
       # Handle terminal resize
       await fm.updateWindowLayout()
       await fm.updateWindowsAsync()
-      return true
+      return erContinue
     else:
-      return true
+      return erContinue
 
   # Set up rendering
   result.app.onRenderAsync proc(buffer: var Buffer) =

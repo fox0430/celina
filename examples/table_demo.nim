@@ -91,7 +91,7 @@ proc main() =
   var app = newApp(config)
 
   # Event handler
-  app.onEvent do(event: Event) -> bool:
+  app.onEvent do(event: Event) -> EventResult:
     case event.kind
     of EventKind.Key:
       # Handle application-specific keys first
@@ -99,10 +99,10 @@ proc main() =
       of KeyCode.Char:
         case event.key.char
         of "q":
-          return false
+          return erQuit
         of "?": # Show/hide help with '?'
           showHelp = not showHelp
-          return true
+          return erContinue
         of "B": # Capital B to cycle border styles (to avoid conflict with vim 'b')
           # Cycle through border styles
           currentBorderStyle =
@@ -112,7 +112,7 @@ proc main() =
             of table.RoundedBorder: table.DoubleBorder
             of table.DoubleBorder: table.NoBorder
           tableWidget.borderStyle = currentBorderStyle
-          return true
+          return erContinue
         of "M":
           # Capital M to cycle selection modes (to avoid conflict with vim movements)
           # Cycle through selection modes
@@ -123,23 +123,23 @@ proc main() =
             of table.Multiple: table.None
           tableWidget.selectionMode = currentSelectionMode
           tableWidget.clearSelection()
-          return true
+          return erContinue
         of "C": # Capital C to clear selection
           tableWidget.clearSelection()
-          return true
+          return erContinue
         else:
           discard
       of KeyCode.Escape:
-        return false
+        return erQuit
       else:
         discard
 
       # Let the table handle vim-like navigation and other keys
       if tableWidget.handleKeyEvent(event.key):
-        return true
+        return erContinue
     else:
       discard
-    return true
+    return erContinue
 
   # Render handler
   app.onRender do(buffer: var Buffer):

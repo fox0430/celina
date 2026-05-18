@@ -47,14 +47,14 @@ proc main() =
   var app = newApp(config)
 
   app.onEvent(
-    proc(event: Event): bool =
+    proc(event: Event): EventResult =
       case event.kind
       of EventKind.Key:
         case event.key.code
         of KeyCode.Char:
           case event.key.char
           of "q", "Q":
-            return false # Quit
+            return erQuit # Quit
           of "r", "R": # Reset
             progress = 0.0
             tasksCompleted = 0
@@ -68,7 +68,7 @@ proc main() =
         of KeyCode.Space: # Pause/Resume
           incrementDirection = if incrementDirection == 0.0: 1.0 else: 0.0
         of KeyCode.Escape:
-          return false
+          return erQuit
         of KeyCode.ArrowUp: # Increase progress
           progress = min(1.0, progress + 0.1)
           tasksCompleted = min(10, tasksCompleted + 1)
@@ -81,7 +81,7 @@ proc main() =
           discard
       else:
         discard
-      return true
+      return erContinue
   )
 
   app.onRender(

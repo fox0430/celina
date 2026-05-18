@@ -13,6 +13,25 @@ export key_logic.KeyCode, key_logic.KeyEvent
 export utf8_utils
 
 type
+  EventResult* = enum
+    ## Outcome of event handling.
+    ##
+    ## Returned by event handlers to control propagation through the
+    ## window-first fallthrough chain (`Window` handler -> global
+    ## `App.onEvent` handler):
+    ## - `erContinue`: handler did not consume the event; allow the next
+    ##   layer to process it.
+    ## - `erConsume`: handler consumed the event; stop propagation.
+    ##   (Only window/widget handlers cause stop; from a global handler
+    ##   this is equivalent to `erContinue` because there is no next layer.)
+    ## - `erQuit`: signal the application to exit. Meaningful only from a
+    ##   global handler. If a window handler returns `erQuit` it is
+    ##   normalized to `erConsume` by `handleWindowEvent` — only the
+    ##   global handler can quit.
+    erContinue
+    erConsume
+    erQuit
+
   EventKind* = enum
     Key
     Mouse

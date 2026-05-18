@@ -184,23 +184,23 @@ proc main() =
 
   var app = newApp(config)
 
-  app.onEvent proc(event: Event): bool =
+  app.onEvent proc(event: Event): EventResult =
     case event.kind
     of Key:
       # Handle keyboard events
       if event.key.code == Char and event.key.char == "q":
-        return false # Quit on 'q'
+        return erQuit # Quit on 'q'
       elif event.key.code == Escape:
-        return false # Quit on Escape
+        return erQuit # Quit on Escape
     of Mouse:
       # Handle mouse events
       demo.handleMouseEvent(event.mouse)
     of Quit:
-      return false # Quit on Ctrl+C
+      return erQuit # Quit on Ctrl+C
     else:
       discard
 
-    return true # Continue running
+    return erContinue # Continue running
 
   app.onRender proc(buffer: var Buffer) =
     demo.renderDemo(buffer)

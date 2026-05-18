@@ -23,20 +23,20 @@ proc main() {.async.} =
   var app = newAsyncApp(config)
 
   # Set up async event handler
-  app.onEventAsync proc(event: Event): Future[bool] {.async.} =
+  app.onEventAsync proc(event: Event): Future[EventResult] {.async.} =
     case event.kind
     of EventKind.Key:
       case event.key.code
       of KeyCode.Char:
         if event.key.char == "q":
-          return false # Quit on 'q'
+          return erQuit # Quit on 'q'
       of KeyCode.Escape:
-        return false # Quit on Escape
+        return erQuit # Quit on Escape
       else:
         discard
     else:
       discard
-    return true # Continue running
+    return erContinue # Continue running
 
   # Set up render handler
   app.onRenderAsync proc(buffer: var Buffer) =

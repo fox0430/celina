@@ -39,7 +39,7 @@ proc main() =
 
   var app = newApp(config)
 
-  app.onEvent proc(event: Event): bool =
+  app.onEvent proc(event: Event): EventResult =
     case event.kind
     of EventKind.Key:
       case event.key.code
@@ -47,7 +47,7 @@ proc main() =
         if event.key.code == Escape or (
           event.key.code == Char and event.key.char == "q"
         ):
-          return false
+          return erQuit
         elif event.key.code == Char:
           case event.key.char
           of "1":
@@ -96,7 +96,7 @@ proc main() =
     else:
       discard
 
-    return true
+    return erContinue
 
   app.onRender proc(buffer: var Buffer) =
     buffer.clear()

@@ -6,18 +6,11 @@
 ##
 ## Event Handling
 ## --------------
-## Two event handling functions are provided:
-##
-## - `handleEventSync`: Synchronous handler that **invokes** window event handlers.
-##   Mirrors `core/windows.nim:handleEvent` semantics, including modal-window
-##   routing. Use this when you need actual event processing. Safe to call from
-##   async contexts with `{.cast(gcsafe).}`.
-##
-## - `handleEventAsync`: Async handler that only **checks** if handlers exist.
-##   Due to GC safety constraints, it cannot invoke handlers directly.
-##   Returns true if an appropriate handler exists for the event.
-##
-## For most use cases, prefer `handleEventSync` for actual event processing.
+## `handleEventSync` is the canonical entry point for routing events
+## through the manager. It mirrors `core/windows.nim:handleEvent` —
+## including modal-stack routing — and returns `EventResult` so callers
+## can participate in the window-first fallthrough chain. Safe to call
+## from async contexts under `{.cast(gcsafe).}`.
 
 import std/[algorithm, options]
 
@@ -25,18 +18,19 @@ import async_backend, async_buffer
 import ../core/[geometry, buffer, events, windows]
 
 export
-  WindowId, Window, WindowState, WindowBorder, BorderChars, EventPhase, WindowEvent,
-  WindowEventHandler, WindowKeyHandler, WindowMouseHandler, WindowResizeHandler,
-  EventHandler, newWindow, WindowInfo, toWindowInfo
+  WindowId, Window, WindowState, WindowBorder, BorderChars, WindowEventHandler,
+  WindowKeyHandler, WindowMouseHandler, WindowResizeHandler, newWindow, WindowInfo,
+  toWindowInfo
 
 type
   ## Async window manager for cooperative multitasking
   AsyncWindowManager* = ref object of BaseWindowManager
     windows: seq[Window]
     nextWindowId: int
-    modalWindow*: Option[WindowId]
-      ## ID of the currently active modal window, if any.
-      ## When set, `handleEventSync` routes all events to this window only.
+    modalStack*: seq[WindowId]
+      ## Stack of modal window IDs, bottom-to-top. Mirrors the sync
+      ## `WindowManager.modalStack`. The top of the stack receives all
+      ## events; lower modals are inert until the top is removed.
 
   AsyncWindowError* = object of CatchableError
 
@@ -72,7 +66,14 @@ proc newAsyncWindowManager*(): AsyncWindowManager =
   result.windows = @[]
   result.nextWindowId = 1
   result.focusedWindow = none(WindowId)
-  result.modalWindow = none(WindowId)
+  result.modalStack = @[]
+
+proc currentModal*(awm: AsyncWindowManager): Option[WindowId] {.inline.} =
+  ## Top of the modal stack, or `none` when no modal is active.
+  if awm.modalStack.len > 0:
+    some(awm.modalStack[^1])
+  else:
+    none(WindowId)
 
 # Async Window Operations
 
@@ -112,7 +113,7 @@ proc addWindowAsync*(
     awm.focusedWindow = some(window.id)
 
   if window.modal:
-    awm.modalWindow = some(window.id)
+    awm.modalStack.add(window.id)
 
   await sleepMs(0)
   return window.id
@@ -136,25 +137,36 @@ proc removeWindowAsync*(
 
   removed.manager = nil
 
+  # Remove from modal stack first so the refocus step below can prefer
+  # the next-highest remaining modal. Mirrors `core/windows.nim`.
+  for i in countdown(awm.modalStack.high, 0):
+    if awm.modalStack[i] == windowId:
+      awm.modalStack.delete(i)
+      break
+
   # Update focused window if necessary
   if awm.focusedWindow.isSome() and awm.focusedWindow.get() == windowId:
-    # Focus the next available window
-    if awm.windows.len > 0:
+    let topModal = awm.currentModal()
+    if topModal.isSome():
+      # Prefer the next active modal so focus stays in sync with modal
+      # routing.
+      awm.focusedWindow = topModal
+    elif awm.windows.len > 0:
       let nextWindow = awm.windows[^1] # Focus the top window
       awm.focusedWindow = some(nextWindow.id)
     else:
       awm.focusedWindow = none(WindowId)
-
-  # Clear modal if the modal window was removed
-  if awm.modalWindow.isSome() and awm.modalWindow.get() == windowId:
-    awm.modalWindow = none(WindowId)
 
   return true
 
 proc focusWindowAsync*(
     awm: AsyncWindowManager, windowId: WindowId
 ): Future[bool] {.async.} =
-  ## Focus a specific window asynchronously
+  ## Focus a specific window asynchronously.
+  ##
+  ## Note: focusing a modal window does **not** modify `modalStack`. Modal
+  ## status is bound to `addWindow`/`removeWindow` only. (Prior versions
+  ## re-asserted modal state here.)
   if awm.isNil:
     return false
 
@@ -164,8 +176,6 @@ proc focusWindowAsync*(
   for window in awm.windows:
     if not window.isNil and window.id == windowId and window.visible:
       awm.focusWindowHelper(window)
-      if window.modal:
-        awm.modalWindow = some(windowId)
       return true
 
   return false
@@ -235,7 +245,11 @@ proc findWindowAtSync*(awm: AsyncWindowManager, pos: Position): Option[Window] =
   return none(Window)
 
 proc focusWindowSync*(awm: AsyncWindowManager, windowId: WindowId): bool =
-  ## Focus a specific window synchronously
+  ## Focus a specific window synchronously.
+  ##
+  ## Note: focusing a modal window does **not** modify `modalStack`. Modal
+  ## status is bound to `addWindow`/`removeWindow` only. (Prior versions
+  ## re-asserted modal state here.)
   if awm.isNil:
     return false
 
@@ -243,8 +257,6 @@ proc focusWindowSync*(awm: AsyncWindowManager, windowId: WindowId): bool =
   for window in awm.windows:
     if not window.isNil and window.id == windowId and window.visible:
       awm.focusWindowHelper(window)
-      if window.modal:
-        awm.modalWindow = some(windowId)
       return true
 
   return false
@@ -262,67 +274,40 @@ proc getFocusedWindowSync*(awm: AsyncWindowManager): Option[Window] =
 
   return none(Window)
 
-# Async Event Handling
+# Event Handling
+#
+# `handleEventSync` is the canonical entry point. The previous
+# `handleEventAsync` only checked handler presence (never invoked them)
+# due to a GC-safety workaround and was never called from the async tick
+# loop — it has been removed. Async callers (`async_app.tickAsync`) use
+# `handleEventSync` under `{.cast(gcsafe).}`.
 
-proc handleEventAsync*(awm: AsyncWindowManager, event: Event): Future[bool] {.async.} =
-  ## Handle an event asynchronously - checks if a window can handle the event.
+proc handleEventSync*(awm: AsyncWindowManager, event: Event): EventResult =
+  ## Route an event through the async window manager and return the
+  ## propagation outcome. Mirrors `core/windows.nim:handleEvent`.
   ##
-  ## Note: Due to GC safety constraints in async contexts, this function only
-  ## checks if an appropriate handler exists but does not invoke it.
-  ## For actual event handling, use handleEventSync which can safely invoke handlers.
-  ##
-  ## Returns true if a window has an appropriate handler for the event.
-
+  ## Routing order: modal stack top -> mouse position -> focused window.
+  ## Returns `erConsume` when a window's handler accepted the event, or
+  ## `erContinue` otherwise (no window, no handler, or handler returned
+  ## `erContinue`). A handler that raises is treated as `erContinue`.
   if awm.isNil:
-    return false
-
-  try:
-    case event.kind
-    of Key:
-      # Check if focused window has a key handler
-      let focusedWindowOpt = await awm.getFocusedWindowAsync()
-      if focusedWindowOpt.isSome():
-        let window = focusedWindowOpt.get()
-        return window.keyHandler.isSome()
-      return false
-    of Mouse:
-      # Check if window at position has a mouse handler
-      let windowOpt = await awm.findWindowAtAsync(pos(event.mouse.x, event.mouse.y))
-      if windowOpt.isSome():
-        let window = windowOpt.get()
-        return window.mouseHandler.isSome()
-      return false
-    of Resize:
-      # Check if any visible window has a resize handler
-      let visibleWindows = await awm.getVisibleWindowsAsync()
-      for window in visibleWindows:
-        if window.resizeHandler.isSome():
-          return true
-      return false
-    else:
-      return false
-  except CatchableError:
-    # Handler check failed - window state may be invalid
-    return false
-
-proc handleEventSync*(awm: AsyncWindowManager, event: Event): bool =
-  ## Synchronous event handling for AsyncWindowManager.
-  ## Routes events to appropriate windows and invokes their handlers,
-  ## mirroring `core/windows.nim:handleEvent`.
-  ##
-  ## Unlike handleEventAsync, this function actually invokes the event handlers.
-  ## Safe to call from async contexts with `{.cast(gcsafe).}`.
-  ##
-  ## Returns true if the event was handled by a window.
-  if awm.isNil:
-    return false
+    return erContinue
 
   try:
     # If there's a modal window, only it can handle events
-    if awm.modalWindow.isSome():
-      let modalOpt = getWindowHelper(awm, awm.modalWindow.get())
-      if modalOpt.isSome():
-        return modalOpt.get().handleWindowEvent(event)
+    let modalOpt = awm.currentModal()
+    if modalOpt.isSome():
+      let modalWindow = getWindowHelper(awm, modalOpt.get())
+      if modalWindow.isSome():
+        let modal = modalWindow.get()
+        # Drop mouse clicks outside the modal's area so a general
+        # eventHandler on the modal doesn't observe out-of-bounds clicks.
+        # Mirrors `core/windows.nim:handleEvent`.
+        if event.kind == EventKind.Mouse:
+          let mousePos = pos(event.mouse.x, event.mouse.y)
+          if not modal.area.contains(mousePos):
+            return erConsume
+        return modal.handleWindowEvent(event)
 
     # For mouse events, find the topmost window at mouse position
     if event.kind == EventKind.Mouse:
@@ -335,17 +320,15 @@ proc handleEventSync*(awm: AsyncWindowManager, event: Event): bool =
         # window on top without reordering `awm.windows`.
         if event.mouse.kind == Press:
           awm.focusWindowHelper(window)
-          if window.modal:
-            awm.modalWindow = some(window.id)
         return window.handleWindowEvent(event)
-      return false
+      return erContinue
 
     # For other events, route to focused window
     let focused = awm.getFocusedWindowSync()
     if focused.isSome():
       return focused.get().handleWindowEvent(event)
 
-    return false
+    return erContinue
   except Exception:
     # User-supplied window handler raised - treat as unhandled.
     #
@@ -360,7 +343,21 @@ proc handleEventSync*(awm: AsyncWindowManager, event: Event): bool =
     # current default); with `--panics:on` they terminate the program and
     # never reach this handler. Either way, downstream code does not rely
     # on observing defects through this path.
-    return false
+    return erContinue
+
+proc dispatchResize*(awm: AsyncWindowManager, newSize: Size) =
+  ## Broadcast a resize event to every visible window's `resizeHandler`.
+  ## Mirrors `core/windows.nim:dispatchResize` exactly — see that proc's
+  ## docstring for the rationale on catching `Exception` (rather than
+  ## `CatchableError`) and the `--panics:on/off` interaction with Defects.
+  if awm.isNil:
+    return
+  for window in awm.windows:
+    if not window.isNil and window.resizeHandler.isSome() and window.visible:
+      try:
+        discard window.resizeHandler.get()(window, newSize)
+      except Exception:
+        discard
 
 # Async Window Border Drawing
 
@@ -580,7 +577,7 @@ proc addWindowSync*(
     awm.focusedWindow = some(window.id)
 
   if window.modal:
-    awm.modalWindow = some(window.id)
+    awm.modalStack.add(window.id)
 
   return window.id
 
@@ -598,17 +595,22 @@ proc removeWindowSync*(awm: AsyncWindowManager, windowId: WindowId): bool =
 
   removed.manager = nil
 
+  # Remove from modal stack first so the refocus step can prefer the
+  # next-highest remaining modal. Mirrors `core/windows.nim`.
+  for i in countdown(awm.modalStack.high, 0):
+    if awm.modalStack[i] == windowId:
+      awm.modalStack.delete(i)
+      break
+
   # Update focused window if necessary
   if awm.focusedWindow.isSome() and awm.focusedWindow.get() == windowId:
-    # Focus the next available window
-    if awm.windows.len > 0:
+    let topModal = awm.currentModal()
+    if topModal.isSome():
+      awm.focusedWindow = topModal
+    elif awm.windows.len > 0:
       let nextWindow = awm.windows[^1]
       awm.focusedWindow = some(nextWindow.id)
     else:
       awm.focusedWindow = none(WindowId)
-
-  # Clear modal if the modal window was removed
-  if awm.modalWindow.isSome() and awm.modalWindow.get() == windowId:
-    awm.modalWindow = none(WindowId)
 
   return true

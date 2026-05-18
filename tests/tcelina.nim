@@ -4,6 +4,10 @@ import std/[unittest, options, pegs, strutils]
 
 import ../celina {.all.}
 
+# Legacy `bool`-returning handler overloads are exercised below to
+# verify backward compatibility; silence their Deprecated warnings.
+{.push warning[Deprecated]: off.}
+
 suite "Celina Main Module Tests":
   suite "Basic API Tests":
     test "version returns valid version string":
@@ -245,8 +249,8 @@ suite "Integration Tests":
       let info = app.getWindowInfo(WindowId(1))
       check info.isNone()
 
-      let handled = app.handleWindowEvent(Event(kind: EventKind.Unknown))
-      check handled == false
+      let res = app.handleWindowEvent(Event(kind: EventKind.Unknown))
+      check res == erContinue
 
   suite "FPS Control API":
     test "default FPS is 60":
@@ -325,3 +329,5 @@ suite "Integration Tests":
       # Test that newApp() without config uses default
       let app2 = newApp()
       check app2.getTargetFps() == 60 # Should use default
+
+{.pop.}

@@ -36,15 +36,15 @@ proc main() =
   # Start with button focused for keyboard interaction
   btn.setState(Focused)
 
-  app.onEvent proc(event: Event): bool =
+  app.onEvent proc(event: Event): EventResult =
     case event.kind
     of EventKind.Key:
       case event.key.code
       of KeyCode.Escape:
-        return false
+        return erQuit
       of KeyCode.Char:
         if event.key.char == "q":
-          return false
+          return erQuit
       of KeyCode.Enter, KeyCode.Space:
         # Button-specific activation keys
         discard btn.handleKeyEvent(event.key)
@@ -65,7 +65,7 @@ proc main() =
       discard
     else:
       discard
-    return true
+    return erContinue
 
   app.onRender proc(buffer: var Buffer) =
     buffer.clear()

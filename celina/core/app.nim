@@ -14,7 +14,7 @@ export config
 
 type
   AppHandlers = object ## User-supplied callbacks invoked during the event loop
-    event: proc(event: Event, app: App): bool
+    event: proc(event: Event, app: App): EventResult
     render: proc(buffer: var Buffer, app: App)
     tick: proc(app: App): bool
     timeout: proc(app: App): bool
@@ -93,38 +93,85 @@ proc newApp*(config: AppConfig = DefaultAppConfig): App =
     result.windowManager = newWindowManager()
 
 # Event and render handlers
-proc onEvent*(app: App, handler: proc(event: Event): bool) =
-  ## Set the event handler for the application
+#
+# Dispatch order (window-first fallthrough):
+#   1. When `windowMode` is enabled, the focused window's handlers run
+#      first via the window manager.
+#   2. The global handler set here runs only if the window manager
+#      returned `erContinue` (i.e. no window/widget consumed the event).
+#
+# **Behavior change** (vs. pre-`EventResult` releases): previously the
+# global handler ran *before* window dispatch and window dispatch was
+# unconditional, so both layers saw every event. Now a window handler
+# returning `true` (legacy) / `erConsume` (new) stops the event from
+# reaching the global handler. Apps that relied on the global handler
+# observing keys already consumed by a focused window must either
+# (a) return `false` / `erContinue` from the window handler, or
+# (b) move the logic into the window handler.
+#
+# Apps not using `windowMode` are unaffected.
+#
+# Backward compatibility: `bool`-returning overloads accept legacy
+# handlers where `false` signals quit and `true` signals continue. These
+# are wrapped to return `erQuit`/`erContinue` respectively.
+
+proc onEvent*(app: App, handler: proc(event: Event): EventResult) =
+  ## Set the event handler for the application.
   ##
-  ## For access to the App object (e.g., for suspend/resume), use the
-  ## overload that accepts `proc(event: Event, app: App): bool` instead.
+  ## Returning `erQuit` from the handler exits the application loop.
+  ## `erConsume` and `erContinue` are equivalent at the global layer
+  ## because no further layer follows it.
+  ##
+  ## Example:
+  ## ```nim
+  ## app.onEvent proc(event: Event): EventResult =
+  ##   if event.kind == Key and event.key.code == KeyCode.Char and
+  ##       event.key.char == "q":
+  ##     return erQuit
+  ##   return erContinue
+  ## ```
   app.handlers.event =
     if handler.isNil:
       nil
     else:
-      # Bind to a local so the wrapping closure captures the handler value.
       let captured = handler
-      proc(event: Event, app: App): bool =
+      proc(event: Event, app: App): EventResult =
         captured(event)
 
-proc onEvent*(app: App, handler: proc(event: Event, app: App): bool) =
-  ## Set the event handler with App context for the application
+proc onEvent*(app: App, handler: proc(event: Event, app: App): EventResult) =
+  ## Set the event handler with `App` context for the application.
   ##
-  ## This overload provides access to the App object, enabling features like
-  ## suspend/resume for shell command execution.
-  ##
-  ## Example:
-  ## ```nim
-  ## app.onEvent proc(event: Event, app: App): bool =
-  ##   if event.kind == Key and event.key.char == "!":
-  ##     app.withSuspend:
-  ##       discard execShellCmd("ls -la")
-  ##       echo "Press Enter..."
-  ##       discard stdin.readLine()
-  ##     return true
-  ##   return true
-  ## ```
+  ## See the single-arg overload for the return-value contract.
   app.handlers.event = handler
+
+proc onEvent*(
+    app: App, handler: proc(event: Event): bool
+) {.deprecated: "Use a handler returning EventResult instead of bool".} =
+  ## Legacy `bool`-returning overload. `false` -> `erQuit`,
+  ## `true` -> `erContinue`. Prefer the `EventResult`-returning overload
+  ## in new code.
+  app.handlers.event =
+    if handler.isNil:
+      nil
+    else:
+      let captured = handler
+      proc(event: Event, app: App): EventResult =
+        if captured(event): erContinue else: erQuit
+
+proc onEvent*(
+    app: App, handler: proc(event: Event, app: App): bool
+) {.deprecated: "Use a handler returning EventResult instead of bool".} =
+  ## Legacy `bool`-returning overload with `App` context.
+  ## `false` -> `erQuit`, `true` -> `erContinue`.
+  ## Prefer the `EventResult`-returning overload in new code; see its
+  ## docstring for example usage.
+  app.handlers.event =
+    if handler.isNil:
+      nil
+    else:
+      let captured = handler
+      proc(event: Event, app: App): EventResult =
+        if captured(event, app): erContinue else: erQuit
 
 proc onRender*(app: App, handler: proc(buffer: var Buffer)) =
   ## Set the render handler for the application
@@ -244,16 +291,16 @@ proc handleResize(app: App) =
   # Force full render on next frame to ensure clean redraw
   app.state.forceNextRender = true
 
-proc dispatchEvent*(app: App, event: Event): bool =
+proc dispatchEvent*(app: App, event: Event): EventResult =
   ## Invoke the configured event handler for the given event.
   ##
-  ## Returns `true` when no handler is configured. Primarily used internally
-  ## by `tick`, but exported so tests and callers can trigger the handler
-  ## directly.
+  ## Returns `erContinue` when no handler is configured. Primarily used
+  ## internally by `tick`, but exported so tests and callers can trigger
+  ## the handler directly.
   if app.handlers.event != nil:
     app.handlers.event(event, app)
   else:
-    true
+    erContinue
 
 proc dispatchRender*(app: App) =
   ## Invoke the configured render handler against the app's current buffer.
@@ -329,9 +376,18 @@ proc tick(app: App): bool =
       let resizeEvent = Event(kind: Resize)
       app.handleResize()
 
+      # Broadcast to per-window resize handlers before the global handler.
+      # Windows that need to relayout (e.g. flex panels) act first, then
+      # the global handler observes the final state.
+      if app.state.windowMode and not app.windowManager.isNil:
+        app.windowManager.dispatchResize(currentSize)
+
       # Pass resize event to user handler
-      if not app.dispatchEvent(resizeEvent):
+      case app.dispatchEvent(resizeEvent)
+      of erQuit:
         return false
+      else:
+        discard
 
     # Calculate remaining time until next render (used as poll timeout)
     let remainingTime = app.fpsMonitor.getRemainingFrameTime()
@@ -368,13 +424,20 @@ proc tick(app: App): bool =
           let event = eventOpt.get
           eventCount.inc()
 
-          # User event handler first
-          if not app.dispatchEvent(event):
-            return false
-
-          # Window manager event handling
+          # Window-first fallthrough: route through the window manager
+          # first; only fall through to the global handler when no
+          # window consumed the event.
+          var winConsumed = false
           if app.state.windowMode and not app.windowManager.isNil:
-            discard app.windowManager.handleEvent(event)
+            if app.windowManager.handleEvent(event) == erConsume:
+              winConsumed = true
+
+          if not winConsumed:
+            case app.dispatchEvent(event)
+            of erQuit:
+              return false
+            else:
+              discard
         else:
           break
 
@@ -618,10 +681,12 @@ proc getWindowInfo*(app: App, windowId: WindowId): Option[WindowInfo] =
       return some(windowOpt.get.toWindowInfo())
   return none(WindowInfo)
 
-proc handleWindowEvent*(app: App, event: Event): bool =
-  ## Handle an event through the window manager
+proc handleWindowEvent*(app: App, event: Event): EventResult =
+  ## Handle an event through the window manager.
+  ## Returns `erContinue` when window mode is disabled or no manager is set.
   if app.state.windowMode and not app.windowManager.isNil:
     return app.windowManager.handleEvent(event)
+  return erContinue
 
 # State and info queries
 
@@ -675,22 +740,20 @@ proc getBufferContent*(app: App): seq[string] =
 # Convenience functions
 
 proc quickRun*(
-    eventHandler: proc(event: Event): bool,
+    eventHandler: proc(event: Event): EventResult,
     renderHandler: proc(buffer: var Buffer),
     config: AppConfig = DefaultAppConfig,
 ) =
-  ## Quick way to run a simple CLI application
+  ## Quick way to run a simple CLI application.
   ##
   ## Example:
   ## ```nim
   ## quickRun(
-  ##   eventHandler = proc(event: Event): bool =
-  ##     case event.kind
-  ##     of EventKind.Key:
-  ##       if event.key.code == KeyCode.Char and event.key.char == "q":
-  ##         return false
-  ##     else: discard
-  ##     return true,
+  ##   eventHandler = proc(event: Event): EventResult =
+  ##     if event.kind == EventKind.Key and
+  ##         event.key.code == KeyCode.Char and event.key.char == "q":
+  ##       return erQuit
+  ##     return erContinue,
   ##
   ##   renderHandler = proc(buffer: var Buffer) =
   ##     buffer.setString(10, 5, "Press 'q' to quit", defaultStyle())
@@ -702,7 +765,7 @@ proc quickRun*(
   app.run()
 
 proc quickRun*(
-    eventHandler: proc(event: Event, app: App): bool,
+    eventHandler: proc(event: Event, app: App): EventResult,
     renderHandler: proc(buffer: var Buffer, app: App),
     config: AppConfig = DefaultAppConfig,
 ) =
@@ -716,11 +779,11 @@ proc quickRun*(
   ## import std/strformat
   ##
   ## quickRun(
-  ##   eventHandler = proc(event: Event, app: App): bool =
+  ##   eventHandler = proc(event: Event, app: App): EventResult =
   ##     if event.kind == EventKind.Key and
-  ##        event.key.code == KeyCode.Char and event.key.char == "q":
+  ##         event.key.code == KeyCode.Char and event.key.char == "q":
   ##       app.quit()
-  ##     return true,
+  ##     return erContinue,
   ##
   ##   renderHandler = proc(buffer: var Buffer, app: App) =
   ##     let size = app.getTerminalSize()
@@ -729,5 +792,37 @@ proc quickRun*(
   ## ```
   var app = newApp(config)
   app.onEvent(eventHandler)
+  app.onRender(renderHandler)
+  app.run()
+
+proc quickRun*(
+    eventHandler: proc(event: Event): bool,
+    renderHandler: proc(buffer: var Buffer),
+    config: AppConfig = DefaultAppConfig,
+) {.deprecated: "Use a handler returning EventResult instead of bool".} =
+  ## Legacy `bool`-returning overload. `false` -> `erQuit`,
+  ## `true` -> `erContinue`. Prefer the `EventResult`-returning overload.
+  var app = newApp(config)
+  let captured = eventHandler
+  app.onEvent(
+    proc(event: Event): EventResult =
+      if captured(event): erContinue else: erQuit
+  )
+  app.onRender(renderHandler)
+  app.run()
+
+proc quickRun*(
+    eventHandler: proc(event: Event, app: App): bool,
+    renderHandler: proc(buffer: var Buffer, app: App),
+    config: AppConfig = DefaultAppConfig,
+) {.deprecated: "Use a handler returning EventResult instead of bool".} =
+  ## Legacy `bool`-returning overload with App context. `false` -> `erQuit`,
+  ## `true` -> `erContinue`. Prefer the `EventResult`-returning overload.
+  var app = newApp(config)
+  let captured = eventHandler
+  app.onEvent(
+    proc(event: Event, app: App): EventResult =
+      if captured(event, app): erContinue else: erQuit
+  )
   app.onRender(renderHandler)
   app.run()

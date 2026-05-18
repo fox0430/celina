@@ -42,12 +42,12 @@ proc main() =
 
   var app = newApp()
 
-  app.onEvent proc(event: Event): bool =
+  app.onEvent proc(event: Event): EventResult =
     case event.kind
     of EventKind.Key:
       # Always handle ESC at app level first, regardless of focus
       if event.key.code == KeyCode.Escape:
-        return false
+        return erQuit
 
       case event.key.code
       of KeyCode.Tab:
@@ -55,14 +55,14 @@ proc main() =
         inputs[focusedInput].setFocus(false)
         focusedInput = (focusedInput + 1) mod inputs.len
         inputs[focusedInput].setFocus(true)
-        return true
+        return erContinue
       else:
         # Forward to focused input
         discard inputs[focusedInput].handleKeyEvent(event.key)
-        return true
+        return erContinue
     else:
       discard
-    return true
+    return erContinue
 
   app.onRender proc(buffer: var Buffer) =
     buffer.clear()

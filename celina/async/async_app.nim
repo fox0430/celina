@@ -17,7 +17,7 @@ export config
 type
   AsyncAppHandlers = object
     ## User-supplied callbacks invoked during the async event loop
-    event: proc(event: Event, app: AsyncApp): Future[bool] {.async.}
+    event: proc(event: Event, app: AsyncApp): Future[EventResult] {.async.}
     render: proc(buffer: var Buffer, app: AsyncApp)
     tick: proc(app: AsyncApp): Future[bool] {.async.}
     timeout: proc(app: AsyncApp): Future[bool] {.async.}
@@ -103,57 +103,89 @@ proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
     result.windowManager = newAsyncWindowManager()
 
 # Event and render handlers
-proc onEventAsync*(app: AsyncApp, handler: proc(event: Event): Future[bool] {.async.}) =
-  ## Set the async event handler for the application
+#
+# Dispatch order (window-first fallthrough):
+#   1. When `windowMode` is enabled, the focused window's handlers run
+#      first via the window manager.
+#   2. The global handler set here runs only if the window manager
+#      returned `erContinue` (i.e. no window/widget consumed the event).
+#
+# **Behavior change** (vs. pre-`EventResult` releases): previously the
+# global handler ran *before* window dispatch and window dispatch was
+# unconditional, so both layers saw every event. Now a window handler
+# returning `true` (legacy) / `erConsume` (new) stops the event from
+# reaching the global handler. Apps that relied on the global handler
+# observing keys already consumed by a focused window must either
+# (a) return `false` / `erContinue` from the window handler, or
+# (b) move the logic into the window handler.
+#
+# Apps not using `windowMode` are unaffected.
+#
+# Backward compatibility: `bool`-returning overloads accept legacy
+# handlers where `false` signals quit and `true` signals continue. These
+# are wrapped to return `erQuit`/`erContinue` respectively.
+
+proc onEventAsync*(
+    app: AsyncApp, handler: proc(event: Event): Future[EventResult] {.async.}
+) =
+  ## Set the async event handler for the application.
   ##
-  ## The handler should return true if the event was handled,
-  ## false if the application should quit.
-  ##
-  ## For access to the AsyncApp object (e.g., for suspend/resume), use the
-  ## overload that accepts `proc(event: Event, app: AsyncApp): Future[bool]` instead.
+  ## Return `erQuit` to exit the loop. `erConsume`/`erContinue` are
+  ## equivalent at the global layer.
   ##
   ## Example:
   ## ```nim
-  ## app.onEventAsync proc(event: Event): Future[bool] {.async.} =
-  ##   case event.kind
-  ##   of EventKind.Key:
-  ##     if event.key.code == KeyCode.Char and event.key.char == "q":
-  ##       return false  # Quit application
-  ##     elif event.key.code == KeyCode.Escape:
-  ##       return false  # Quit on escape
-  ##   else:
-  ##     discard
-  ##   return true  # Continue running
+  ## app.onEventAsync proc(event: Event): Future[EventResult] {.async.} =
+  ##   if event.kind == Key and event.key.code == KeyCode.Char and
+  ##       event.key.char == "q":
+  ##     return erQuit
+  ##   return erContinue
   ## ```
   app.handlers.event =
     if handler.isNil:
       nil
     else:
-      # Bind to a local so the wrapping closure captures the handler value.
       let captured = handler
-      proc(event: Event, app: AsyncApp): Future[bool] {.async.} =
+      proc(event: Event, app: AsyncApp): Future[EventResult] {.async.} =
         return await captured(event)
 
 proc onEventAsync*(
-    app: AsyncApp, handler: proc(event: Event, app: AsyncApp): Future[bool] {.async.}
+    app: AsyncApp,
+    handler: proc(event: Event, app: AsyncApp): Future[EventResult] {.async.},
 ) =
-  ## Set the async event handler with AsyncApp context for the application
-  ##
-  ## This overload provides access to the AsyncApp object, enabling features like
-  ## suspend/resume for shell command execution.
-  ##
-  ## Example:
-  ## ```nim
-  ## app.onEventAsync proc(event: Event, app: AsyncApp): Future[bool] {.async.} =
-  ##   if event.kind == Key and event.key.char == "!":
-  ##     app.withSuspendAsync:
-  ##       discard execShellCmd("ls -la")
-  ##       echo "Press Enter..."
-  ##       discard stdin.readLine()
-  ##     return true
-  ##   return true
-  ## ```
+  ## Set the async event handler with `AsyncApp` context.
+  ## See the single-arg overload for the return-value contract.
   app.handlers.event = handler
+
+proc onEventAsync*(
+    app: AsyncApp, handler: proc(event: Event): Future[bool] {.async.}
+) {.deprecated: "Use a handler returning Future[EventResult] instead of Future[bool]".} =
+  ## Legacy `bool`-returning overload. `false` -> `erQuit`,
+  ## `true` -> `erContinue`. Prefer the `EventResult`-returning overload;
+  ## see its docstring for example usage.
+  app.handlers.event =
+    if handler.isNil:
+      nil
+    else:
+      let captured = handler
+      proc(event: Event, app: AsyncApp): Future[EventResult] {.async.} =
+        let cont = await captured(event)
+        return if cont: erContinue else: erQuit
+
+proc onEventAsync*(
+    app: AsyncApp, handler: proc(event: Event, app: AsyncApp): Future[bool] {.async.}
+) {.deprecated: "Use a handler returning Future[EventResult] instead of Future[bool]".} =
+  ## Legacy `bool`-returning overload with `AsyncApp` context.
+  ## `false` -> `erQuit`, `true` -> `erContinue`. Prefer the
+  ## `EventResult`-returning overload in new code.
+  app.handlers.event =
+    if handler.isNil:
+      nil
+    else:
+      let captured = handler
+      proc(event: Event, app: AsyncApp): Future[EventResult] {.async.} =
+        let cont = await captured(event, app)
+        return if cont: erContinue else: erQuit
 
 proc onRenderAsync*(app: AsyncApp, handler: proc(buffer: var Buffer)) =
   ## Set the render handler for the application
@@ -293,16 +325,16 @@ proc handleResizeAsync(app: AsyncApp) {.async.} =
   # Force full render on next frame to ensure clean redraw
   app.state.forceNextRender = true
 
-proc dispatchEventAsync*(app: AsyncApp, event: Event): Future[bool] {.async.} =
+proc dispatchEventAsync*(app: AsyncApp, event: Event): Future[EventResult] {.async.} =
   ## Invoke the configured async event handler for the given event.
   ##
-  ## Returns `true` when no handler is configured. Primarily used internally
-  ## by `tickAsync`, but exported so tests and callers can trigger the handler
-  ## directly.
+  ## Returns `erContinue` when no handler is configured. Primarily used
+  ## internally by `tickAsync`, but exported so tests and callers can
+  ## trigger the handler directly.
   if app.handlers.event != nil:
     return await app.handlers.event(event, app)
   else:
-    return true
+    return erContinue
 
 proc dispatchRenderAsync*(app: AsyncApp) =
   ## Invoke the configured render handler against the app's current buffer.
@@ -380,9 +412,18 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
       let resizeEvent = Event(kind: Resize)
       await app.handleResizeAsync()
 
+      # Broadcast to per-window resize handlers before the global handler
+      # (same ordering as the sync App; see `core/app.nim`).
+      if app.state.windowMode and not app.windowManager.isNil:
+        {.cast(gcsafe).}:
+          app.windowManager.dispatchResize(currentSize)
+
       # Pass resize event to user handler
-      if not (await app.dispatchEventAsync(resizeEvent)):
+      case (await app.dispatchEventAsync(resizeEvent))
+      of erQuit:
         return false
+      else:
+        discard
 
     # Calculate remaining time until next render (used as poll timeout)
     let remainingTime = app.fpsMonitor.getRemainingFrameTime()
@@ -420,14 +461,21 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
           let event = eventOpt.get()
           eventCount.inc()
 
-          # User event handler first
-          if not (await app.dispatchEventAsync(event)):
-            return false
-
-          # Window manager event handling
+          # Window-first fallthrough: route through the window manager
+          # first; only fall through to the global handler when no
+          # window consumed the event.
+          var winConsumed = false
           if app.state.windowMode and not app.windowManager.isNil:
             {.cast(gcsafe).}:
-              discard app.windowManager.handleEventSync(event)
+              if app.windowManager.handleEventSync(event) == erConsume:
+                winConsumed = true
+
+          if not winConsumed:
+            case (await app.dispatchEventAsync(event))
+            of erQuit:
+              return false
+            else:
+              discard
         else:
           break
 
@@ -872,10 +920,12 @@ proc getWindowInfo*(app: AsyncApp, windowId: WindowId): Option[WindowInfo] =
       return some(windowOpt.get.toWindowInfo())
   return none(WindowInfo)
 
-proc handleWindowEvent*(app: AsyncApp, event: Event): bool =
-  ## Handle an event through the window manager
+proc handleWindowEvent*(app: AsyncApp, event: Event): EventResult =
+  ## Handle an event through the window manager.
+  ## Returns `erContinue` when window mode is disabled or no manager is set.
   if app.state.windowMode and not app.windowManager.isNil:
     return app.windowManager.handleEventSync(event)
+  return erContinue
 
 # State and info queries
 
@@ -929,22 +979,20 @@ proc getBufferContent*(app: AsyncApp): seq[string] =
 # Convenience functions
 
 proc quickRunAsync*(
-    eventHandler: proc(event: Event): Future[bool] {.async.},
+    eventHandler: proc(event: Event): Future[EventResult] {.async.},
     renderHandler: proc(buffer: var Buffer),
     config: AppConfig = DefaultAppConfig,
 ) {.async.} =
-  ## Quick way to run a simple async CLI application
+  ## Quick way to run a simple async CLI application.
   ##
   ## Example:
   ## ```nim
   ## await quickRunAsync(
-  ##   eventHandler = proc(event: Event): Future[bool] {.async.} =
-  ##     case event.kind
-  ##     of EventKind.Key:
-  ##       if event.key.code == KeyCode.Char and event.key.char == "q":
-  ##         return false
-  ##     else: discard
-  ##     return true,
+  ##   eventHandler = proc(event: Event): Future[EventResult] {.async.} =
+  ##     if event.kind == EventKind.Key and
+  ##         event.key.code == KeyCode.Char and event.key.char == "q":
+  ##       return erQuit
+  ##     return erContinue,
   ##
   ##   renderHandler = proc(buffer: var Buffer) =
   ##     buffer.setString(10, 5, "Press 'q' to quit", defaultStyle())
@@ -956,7 +1004,7 @@ proc quickRunAsync*(
   await app.runAsync()
 
 proc quickRunAsync*(
-    eventHandler: proc(event: Event, app: AsyncApp): Future[bool] {.async.},
+    eventHandler: proc(event: Event, app: AsyncApp): Future[EventResult] {.async.},
     renderHandler: proc(buffer: var Buffer, app: AsyncApp),
     config: AppConfig = DefaultAppConfig,
 ) {.async.} =
@@ -970,11 +1018,11 @@ proc quickRunAsync*(
   ## import std/strformat
   ##
   ## await quickRunAsync(
-  ##   eventHandler = proc(event: Event, app: AsyncApp): Future[bool] {.async.} =
+  ##   eventHandler = proc(event: Event, app: AsyncApp): Future[EventResult] {.async.} =
   ##     if event.kind == EventKind.Key and
-  ##        event.key.code == KeyCode.Char and event.key.char == "q":
+  ##         event.key.code == KeyCode.Char and event.key.char == "q":
   ##       app.quit()
-  ##     return true,
+  ##     return erContinue,
   ##
   ##   renderHandler = proc(buffer: var Buffer, app: AsyncApp) =
   ##     let size = app.getTerminalSize()
@@ -983,5 +1031,46 @@ proc quickRunAsync*(
   ## ```
   var app = newAsyncApp(config)
   app.onEventAsync(eventHandler)
+  app.onRenderAsync(renderHandler)
+  await app.runAsync()
+
+proc quickRunAsync*(
+    eventHandler: proc(event: Event): Future[bool] {.async.},
+    renderHandler: proc(buffer: var Buffer),
+    config: AppConfig = DefaultAppConfig,
+) {.
+    async,
+    deprecated: "Use a handler returning Future[EventResult] instead of Future[bool]"
+.} =
+  ## Legacy `bool`-returning overload. `false` -> `erQuit`,
+  ## `true` -> `erContinue`. Prefer the `EventResult`-returning overload.
+  var app = newAsyncApp(config)
+  let captured = eventHandler
+  app.onEventAsync(
+    proc(event: Event): Future[EventResult] {.async.} =
+      let cont = await captured(event)
+      return if cont: erContinue else: erQuit
+  )
+  app.onRenderAsync(renderHandler)
+  await app.runAsync()
+
+proc quickRunAsync*(
+    eventHandler: proc(event: Event, app: AsyncApp): Future[bool] {.async.},
+    renderHandler: proc(buffer: var Buffer, app: AsyncApp),
+    config: AppConfig = DefaultAppConfig,
+) {.
+    async,
+    deprecated: "Use a handler returning Future[EventResult] instead of Future[bool]"
+.} =
+  ## Legacy `bool`-returning overload with AsyncApp context.
+  ## `false` -> `erQuit`, `true` -> `erContinue`. Prefer the
+  ## `EventResult`-returning overload.
+  var app = newAsyncApp(config)
+  let captured = eventHandler
+  app.onEventAsync(
+    proc(event: Event, app: AsyncApp): Future[EventResult] {.async.} =
+      let cont = await captured(event, app)
+      return if cont: erContinue else: erQuit
+  )
   app.onRenderAsync(renderHandler)
   await app.runAsync()
