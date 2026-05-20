@@ -9,7 +9,10 @@ when not hasAsyncSupport and not hasAsyncDispatch and not hasChronos:
   {.fatal: "This example require `-d:asyncBackend=asyncdispatch|chronos`".}
 
 proc main() {.async.} =
-  # Configure the async app
+  # Configure the async app. With the chronos backend on POSIX,
+  # `installSignalHandler: true` installs SIGINT/SIGTERM handlers that
+  # call `shutdownAsync` and restore the terminal on exit. Ignored
+  # under asyncdispatch and on non-POSIX platforms.
   let config = AppConfig(
     title: "Async Hello World",
     alternateScreen: true,
@@ -17,6 +20,7 @@ proc main() {.async.} =
     rawMode: true,
     windowMode: false,
     targetFps: 60,
+    installSignalHandler: true,
   )
 
   # Create the async app

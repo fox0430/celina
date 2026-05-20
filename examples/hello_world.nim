@@ -6,6 +6,10 @@ proc main() =
   # Create a new application instance
   var app = newApp()
 
+  # Restore the terminal if the user presses Ctrl-C. Process-wide and
+  # permanent (Nim has no `unsetControlCHook`), so call once at startup.
+  installDefaultCrashGuard(app)
+
   # Set up the render handler - called each frame to draw the UI
   app.onRender(
     proc(buf: var Buffer) =

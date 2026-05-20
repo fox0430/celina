@@ -97,6 +97,30 @@ proc isTimeoutReached*(
   ## has passed since the last event.
   applicationTimeout > 0 and elapsedSinceLastEvent >= applicationTimeout
 
+proc logTickFailure*(label: string, e: ref CatchableError) =
+  ## Best-effort stderr report for an unexpected tick error.
+  ##
+  ## Always writes the one-line summary `[celina] <label> failed: <msg>`.
+  ## Under `-d:celinaDebug`, the captured stack trace is also emitted —
+  ## guarded because release builds that opted into `--stackTrace:on`
+  ## would otherwise dump a noisy multi-line trace into the user's
+  ## terminal on every tick failure. Applications that need the trace
+  ## in production can either rebuild with `-d:celinaDebug` or rely on
+  ## the re-raise (`tick` / `tickAsync` propagate the exception, so the
+  ## awaiter sees the full trace anyway).
+  ##
+  ## Swallows `IOError` so that diagnostic logging cannot itself crash
+  ## the crash handler. Shared by `App.tick` and `AsyncApp.tickAsync` so
+  ## the two loops emit consistent output.
+  try:
+    stderr.writeLine("[celina] " & label & " failed: " & e.msg)
+    when defined(celinaDebug):
+      let trace = e.getStackTrace()
+      if trace.len > 0:
+        stderr.writeLine(trace)
+  except IOError:
+    discard
+
 proc computePollTimeoutWithState*(
     remainingFrameTime: int,
     applicationTimeout: int,
