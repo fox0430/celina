@@ -507,7 +507,7 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
     # `runAsyncInner`'s finally still restores the terminal before the
     # exception reaches the caller.
     logTickFailure("tickAsync", e)
-    raise
+    raise e
 
 proc cleanupQuietly(app: AsyncApp) {.async.} =
   ## Run cleanupAsync, swallowing exceptions. Used so cleanup failures do
