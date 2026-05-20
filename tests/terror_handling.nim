@@ -3,7 +3,7 @@
 ## This test module verifies that the error handling system works correctly.
 
 import std/[unittest, os]
-import ../celina/core/[errors, terminal]
+import ../celina/core/[errors, terminal, tick_common]
 
 {.push warning[UnreachableCode]: off.}
 
@@ -118,5 +118,15 @@ suite "Error Handling Tests":
       check cleanupCalled == false # Should not be called yet
 
     check cleanupCalled == true # Should be called after block
+
+  test "logTickFailure does not raise":
+    # The shared helper used by both App.tick and AsyncApp.tickAsync
+    # must absorb its own stderr write failures (IOError) so the
+    # surrounding `raise` is not shadowed by a logging exception.
+    let err = newException(CatchableError, "synthetic tick failure")
+    logTickFailure("tick", err)
+    logTickFailure("tickAsync", err)
+    # Reaching here means no exception escaped.
+    check true
 
 {.pop.}

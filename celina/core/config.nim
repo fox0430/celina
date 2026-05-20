@@ -20,7 +20,9 @@ type AppConfig* = object ## Application configuration options
     ## shutdownAsync. Ignored under the sync App, asyncdispatch, and
     ## `asyncBackend=none` builds, and on non-POSIX platforms (e.g.
     ## Windows) where the signal-handling code is not compiled because
-    ## chronos signal APIs are unavailable.
+    ## chronos signal APIs are unavailable. The sync `App` uses
+    ## `installDefaultCrashGuard` (an explicit function call) instead
+    ## of a config flag for Ctrl-C handling.
 
 proc `$`*(config: AppConfig): string =
   ## String representation of AppConfig for debugging

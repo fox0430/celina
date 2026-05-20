@@ -501,8 +501,13 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
     raise e
   except TerminalError as e:
     raise e
-  except CatchableError:
-    return false
+  except CatchableError as e:
+    # Surface unexpected errors instead of silently dropping out of the
+    # loop (mirrors the sync `App.tick`). The cleanup in
+    # `runAsyncInner`'s finally still restores the terminal before the
+    # exception reaches the caller.
+    logTickFailure("tickAsync", e)
+    raise
 
 proc cleanupQuietly(app: AsyncApp) {.async.} =
   ## Run cleanupAsync, swallowing exceptions. Used so cleanup failures do
@@ -557,6 +562,13 @@ proc runAsync*(app: AsyncApp) {.async.} =
   ## 1. Setup terminal state asynchronously using config from newAsyncApp
   ## 2. Enter main async event loop
   ## 3. Cleanup terminal state on exit
+  ##
+  ## **Behavior change:** an unexpected `CatchableError` raised from
+  ## inside the tick loop is now re-raised to the awaiter after
+  ## cleanup runs, instead of being swallowed and silently exiting the
+  ## loop. `CancelledError` and `TerminalError` continue to propagate
+  ## as before. Wrap `await app.runAsync()` in a `try`/`except` if you
+  ## need to recover or report.
   ##
   ## Example:
   ## ```nim

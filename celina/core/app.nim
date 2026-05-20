@@ -456,8 +456,14 @@ proc tick(app: App): bool =
     return not app.state.shouldQuit
   except TerminalError:
     raise
-  except CatchableError:
-    return false
+  except CatchableError as e:
+    # Surface unexpected errors instead of silently dropping out of the
+    # loop. The previous behavior (`return false`) left users wondering
+    # why the app exited; now we log to stderr and re-raise so `run`'s
+    # finally block can restore the terminal before the exception
+    # propagates to the caller.
+    logTickFailure("tick", e)
+    raise
 
 proc restoreTerminal*(app: App) =
   ## Best-effort terminal state restoration.
@@ -478,8 +484,95 @@ proc restoreTerminal*(app: App) =
   ## ```
   app.terminal.cleanup()
 
+# Default Ctrl-C terminal guard
+#
+# Opt-in via `installDefaultCrashGuard`. Sync App cannot use chronos's
+# `addSignal`, so we rely on Nim's `setControlCHook` to restore the
+# terminal if Ctrl-C arrives while `run` is active. The install is an
+# explicit function call rather than a config flag because
+# `setControlCHook` has no `unset` counterpart: once installed, the
+# hook is process-wide and outlives `run`. Surfacing the install at
+# the call site (instead of hiding it behind a boolean) makes that
+# permanence visible.
+#
+# Unhandled exceptions raised from inside the tick loop are restored
+# by `run`'s own `try/finally`, so there is no `onUnhandledException`
+# hook here — by the time it would fire, the terminal has already
+# been restored and the hook would have no work to do.
+
+var crashGuardApp: App
+  ## Currently registered crash-guard owner. Nil until the first
+  ## `installDefaultCrashGuard` call; a later call with a different
+  ## `App` replaces this slot. The C-level Ctrl-C hook itself is
+  ## registered only once per process. Plain global (not
+  ## `{.threadvar.}`) because the signal callback may fire on any
+  ## thread; running multiple sync `App`s in parallel within one
+  ## process is unsupported.
+
+proc onCelinaControlC() {.noconv.} =
+  ## Default Ctrl-C hook: restore the registered app's terminal, then
+  ## `quit(1)`. Safe to be invoked re-entrantly — a second SIGINT
+  ## during `quit` terminates the process directly.
+  {.cast(gcsafe).}:
+    if crashGuardApp != nil:
+      try:
+        crashGuardApp.restoreTerminal()
+      except CatchableError:
+        discard
+  quit(1)
+
+proc installDefaultCrashGuard*(app: App) =
+  ## Register a process-global Ctrl-C handler that restores `app`'s
+  ## terminal before exiting with `quit(1)`.
+  ##
+  ## **Lifecycle:** the hook is process-wide and permanent. Nim does
+  ## not expose `unsetControlCHook`, so it stays installed after
+  ## `run` returns. A subsequent call with a different `App` replaces
+  ## the active reference; the C-level hook is registered only once.
+  ##
+  ## **Caveat:** any prior Ctrl-C handler installed by the
+  ## application is overwritten and cannot be restored.
+  ##
+  ## Call once during startup, before `run`:
+  ## ```nim
+  ## var app = newApp()
+  ## installDefaultCrashGuard(app)
+  ## app.run()
+  ## ```
+  ##
+  ## Unhandled exceptions raised from the tick loop are restored by
+  ## `run`'s `try/finally` regardless of whether this guard is
+  ## installed.
+  if crashGuardApp == nil:
+    setControlCHook(onCelinaControlC)
+  crashGuardApp = app
+
 proc run*(app: App) =
-  ## Run the application main loop
+  ## Run the application main loop.
+  ##
+  ## Returns normally when the app quits via `app.quit()` or when the
+  ## quit handler signals shutdown.
+  ##
+  ## **Behavior change:** an unexpected `CatchableError` raised from
+  ## inside the tick loop (event handler, render, tick callback) is
+  ## now re-raised to the caller after the terminal is restored,
+  ## instead of being swallowed and silently exiting the loop.
+  ## `TerminalError` continues to propagate as before. Wrap `run` in a
+  ## `try`/`except` if you need to recover or report; without it, the
+  ## program will terminate with the exception trace once `run`
+  ## returns.
+  ##
+  ## For Ctrl-C safety, call `installDefaultCrashGuard(app)` once
+  ## during startup before invoking `run`.
+  when defined(celinaDebug):
+    if app.config.installSignalHandler:
+      try:
+        stderr.writeLine(
+          "[celina] config.installSignalHandler is ignored by the sync " &
+            "App; call installDefaultCrashGuard(app) instead"
+        )
+      except IOError:
+        discard
   try:
     app.setup()
     app.state.running = true

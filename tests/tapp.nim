@@ -3,6 +3,7 @@
 import std/[unittest, options, monotimes, times, strutils]
 
 import ../celina
+import ../celina/core/app {.all.}
 
 # Legacy `bool`-returning handler overloads are exercised below to
 # verify backward compatibility; silence their Deprecated warnings.
@@ -30,6 +31,31 @@ suite "App Creation and Configuration":
     let config = AppConfig(windowMode: true)
     let app = newApp(config)
     check app.getWindowCount() == 0
+
+suite "installDefaultCrashGuard":
+  # `setControlCHook` is process-global with no `unset` counterpart, so
+  # these tests intentionally leak the hook into the test runner. The
+  # hook itself is a no-op until SIGINT arrives.
+
+  test "newApp does not register a crash guard":
+    # Construction must not touch the global slot; the registration is
+    # explicit via `installDefaultCrashGuard`.
+    let beforeGuard = crashGuardApp
+    discard newApp()
+    check crashGuardApp == beforeGuard
+
+  test "installDefaultCrashGuard sets crashGuardApp":
+    let app = newApp()
+    installDefaultCrashGuard(app)
+    check crashGuardApp == app
+
+  test "installDefaultCrashGuard replaces the active reference":
+    let app1 = newApp()
+    let app2 = newApp()
+    installDefaultCrashGuard(app1)
+    check crashGuardApp == app1
+    installDefaultCrashGuard(app2)
+    check crashGuardApp == app2
 
 suite "App Event and Render Handlers":
   test "onEvent sets event handler":
