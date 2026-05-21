@@ -18,7 +18,7 @@
 import std/[termios, posix]
 
 import geometry, colors, buffer, errors, terminal_common
-from events import clearPendingByte
+from events import clearPendingByte, setStdinNonBlockingPinned
 
 export errors.TerminalError
 
@@ -33,6 +33,8 @@ type Terminal* = ref object ## Terminal interface for screen management
   lastBuffer*: Buffer
   rawModeEnabled: bool # Track raw mode state internally
   originalTermios: Termios # Store original terminal settings per instance
+  originalStdinFlags: cint # Saved stdin descriptor flags (for O_NONBLOCK restore)
+  stdinFlagsSaved: bool # Whether originalStdinFlags holds a captured value
   suspendState: SuspendState
 
 proc getTerminalSize*(): Size =
@@ -77,6 +79,14 @@ proc newTerminal*(): Terminal =
 proc enableRawMode*(terminal: Terminal) =
   ## Enable raw mode for direct key input
   ## Raises TerminalError if unable to configure terminal
+  ##
+  ## **Threading**: must be paired with `disableRawMode` on the *same thread*.
+  ## Event readers consult a thread-local pin flag (`stdinNonBlockingPinned`)
+  ## to skip per-tick fcntl probes. Calling `disableRawMode` from a different
+  ## thread would clear the global stdin O_NONBLOCK state without clearing
+  ## the pin flag on the enabling thread, causing subsequent `pollKey`/
+  ## `readKeyInput` calls there to issue blocking reads against a
+  ## now-blocking stdin and hang.
   if terminal.rawModeEnabled:
     return # Already enabled
 
@@ -92,6 +102,45 @@ proc enableRawMode*(terminal: Terminal) =
     checkSystemCallVoid(
       tcsetattr(STDIN_FILENO, TCSAFLUSH, addr raw), "Failed to set raw mode"
     )
+    # Capture stdin descriptor flags once and ensure O_NONBLOCK holds for the
+    # lifetime of raw mode. Per-call toggling in readKeyInput is a TOCTOU race
+    # against any other code that touches stdin flags, and burns up to 3
+    # fcntl(2) calls per tick. Setting the pin flag here lets event readers
+    # short-circuit to zero fcntl calls per tick on the in-App fast path.
+    # `pollKey` delegates to `readKeyInput`, so the same fast path covers it.
+    #
+    # The pin flag means "event readers may assume stdin is non-blocking for
+    # the duration of raw mode" — it does not necessarily mean *this* call
+    # was the one that set O_NONBLOCK. If stdin was already non-blocking when
+    # we entered (e.g. the host application set it for its own reasons), we
+    # adopt that state and still raise the pin so readers benefit; the
+    # original flags are restored verbatim on disableRawMode either way.
+    let curFlags = fcntl(STDIN_FILENO, F_GETFL)
+    if curFlags != -1:
+      terminal.originalStdinFlags = curFlags
+      terminal.stdinFlagsSaved = true
+      if (curFlags and O_NONBLOCK) == 0:
+        if fcntl(STDIN_FILENO, F_SETFL, curFlags or O_NONBLOCK) == -1:
+          when defined(celinaDebug):
+            stderr.writeLine(
+              "Warning: failed to pin stdin O_NONBLOCK (errno=" & $errno & ")"
+            )
+        else:
+          # We promoted stdin to non-blocking; raise the pin so readers skip
+          # their per-tick fcntl probe.
+          setStdinNonBlockingPinned(true)
+      else:
+        # stdin was already non-blocking before raw mode; adopt that state
+        # and raise the pin so readers skip their per-tick fcntl probe. The
+        # original flags are still saved and will be restored verbatim, so
+        # this is non-destructive even though we did not change anything.
+        setStdinNonBlockingPinned(true)
+    else:
+      when defined(celinaDebug):
+        stderr.writeLine(
+          "Warning: failed to read stdin flags for raw-mode pin (errno=" & $errno &
+            "); event readers will fall back to per-tick fcntl toggling"
+        )
     terminal.rawMode = true
     terminal.rawModeEnabled = true
     # Drop any UTF-8 resync byte buffered before mode transition so it
@@ -103,6 +152,11 @@ proc enableRawMode*(terminal: Terminal) =
 proc disableRawMode*(terminal: Terminal) =
   ## Disable raw mode, restoring original terminal settings
   ## Best effort - doesn't raise on error to ensure cleanup
+  ##
+  ## **Threading**: must be called on the same thread that invoked
+  ## `enableRawMode`. The pin flag cleared here is thread-local, so a
+  ## cross-thread disable would leave a stale `true` on the enabling thread
+  ## while the underlying stdin O_NONBLOCK state has already been restored.
   if not terminal.rawModeEnabled:
     return # Not enabled
 
@@ -110,6 +164,18 @@ proc disableRawMode*(terminal: Terminal) =
   if tcsetattr(STDIN_FILENO, TCSAFLUSH, addr terminal.originalTermios) == -1:
     when defined(celinaDebug):
       stderr.writeLine("Warning: Failed to restore terminal settings")
+  # Restore stdin descriptor flags captured in enableRawMode. Best effort;
+  # callers see disableRawMode as infallible. The pin flag is cleared only
+  # when we actually set one; if enableRawMode never captured flags (F_GETFL
+  # failed), the pin was never set in the first place.
+  if terminal.stdinFlagsSaved:
+    if fcntl(STDIN_FILENO, F_SETFL, terminal.originalStdinFlags) == -1:
+      when defined(celinaDebug):
+        stderr.writeLine(
+          "Warning: failed to restore stdin flags after raw mode (errno=" & $errno & ")"
+        )
+    terminal.stdinFlagsSaved = false
+    setStdinNonBlockingPinned(false)
   terminal.rawMode = false
   terminal.rawModeEnabled = false
   clearPendingByte()

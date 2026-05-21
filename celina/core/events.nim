@@ -195,6 +195,27 @@ proc clearPendingByte*() =
   ## across mode transitions.
   pendingByte = none(byte)
 
+# Tracks whether Terminal.enableRawMode has pinned stdin to O_NONBLOCK for the
+# lifetime of the current raw-mode session. When true, pollKey/readKeyInput
+# skip the per-tick fcntl(F_GETFL)+F_SETFL dance entirely — without this flag
+# they would still pay an F_GETFL on every tick just to learn the pin state.
+#
+# The flag is thread-local but the underlying stdin O_NONBLOCK state is
+# process-global; in multi-threaded readers the flag only short-circuits the
+# thread that owns raw mode. Other threads correctly fall back to per-tick
+# fcntl toggling.
+var stdinNonBlockingPinned {.threadvar.}: bool
+
+proc setStdinNonBlockingPinned*(pinned: bool) =
+  ## Mark stdin as pinned to non-blocking mode by the raw-mode owner.
+  ## Called by Terminal.enableRawMode/disableRawMode; event readers consult
+  ## this flag to short-circuit the per-tick fcntl toggle.
+  stdinNonBlockingPinned = pinned
+
+proc isStdinNonBlockingPinned*(): bool {.inline.} =
+  ## Read-only accessor for the pin flag, intended for tests and diagnostics.
+  stdinNonBlockingPinned
+
 # Blocking I/O helper functions
 proc readByteBlocking(): tuple[success: bool, ch: char] =
   ## Read a single byte in blocking mode
@@ -414,20 +435,6 @@ proc readKey*(): Event =
   except IOError:
     return Event(kind: Unknown)
 
-# Polling key reading
-proc pollKey*(): Event =
-  ## Poll for a key event (non-blocking)
-  # Set stdin to non-blocking mode temporarily
-  let flags = fcntl(STDIN_FILENO, F_GETFL)
-  discard fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK)
-
-  let event = readKey()
-
-  # Restore blocking mode
-  discard fcntl(STDIN_FILENO, F_SETFL, flags)
-
-  return event
-
 # File descriptor management helpers
 type FdFlags = object ## RAII-style file descriptor flags manager
   fd: cint
@@ -597,26 +604,38 @@ proc readPasteContentNonBlocking(): string =
 proc readKeyInput*(): Option[Event] =
   ## Read a single key input event (non-blocking)
   ## Returns none(Event) if no input is available or on error
-  var fdFlags = getFdFlags(STDIN_FILENO)
-  if fdFlags.isNone:
-    return none(Event)
-
-  var flags = fdFlags.get()
-  if not flags.setNonBlocking():
-    return none(Event)
+  ##
+  ## Inside an active raw-mode session `stdinNonBlockingPinned` is true and
+  ## the entire fcntl(2) toggle is skipped. Standalone callers still get the
+  ## legacy auto-toggle behavior.
+  let pinned = stdinNonBlockingPinned
+  var flags: FdFlags
+  var needRestore = false
+  if not pinned:
+    let fdFlags = getFdFlags(STDIN_FILENO)
+    if fdFlags.isNone:
+      return none(Event)
+    flags = fdFlags.get()
+    if (flags.originalFlags and O_NONBLOCK) == 0:
+      if not flags.setNonBlocking():
+        return none(Event)
+      needRestore = true
 
   let readResult = readByteNonBlocking(STDIN_FILENO)
 
   # No data available or error
   if not readResult.success:
-    flags.restore()
+    if needRestore:
+      flags.restore()
     return none(Event)
 
   let ch = readResult.ch
 
-  # Restore flags before returning
+  # Restore flags before returning (no-op when stdin was pinned by raw mode
+  # or was already non-blocking when we entered)
   defer:
-    flags.restore()
+    if needRestore:
+      flags.restore()
 
   # Handle escape sequences via the unified routing template (non-blocking I/O).
   # The 20ms post-ESC select() distinguishes a standalone ESC keypress from the
@@ -667,6 +686,19 @@ proc readKeyInput*(): Option[Event] =
   else:
     # Invalid UTF-8 start byte — emit U+FFFD (KeyEvent.char invariant).
     return some(Event(kind: Key, key: KeyEvent(code: Char, char: Utf8ReplacementChar)))
+
+proc pollKey*(): Event =
+  ## Poll for a key event (non-blocking).
+  ##
+  ## Thin wrapper over `readKeyInput` that collapses `none(Event)` to
+  ## `Event(kind: Unknown)`. All fcntl management (raw-mode pin fast-path,
+  ## standalone auto-toggle, F_GETFL failure handling) lives in `readKeyInput`
+  ## so the two entry points cannot drift apart in behavior or syscall cost.
+  let opt = readKeyInput()
+  if opt.isSome:
+    opt.get
+  else:
+    Event(kind: Unknown)
 
 # Check if input is available
 proc hasInput*(): bool =
