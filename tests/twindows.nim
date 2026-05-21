@@ -152,7 +152,7 @@ suite "WindowManager Tests":
 
     discard wm.addWindow(window)
 
-    check window.manager == BaseWindowManager(wm)
+    check window.manager == wm
     check window.focused == true
 
   test "addWindow autoFocus parameter":
@@ -246,7 +246,7 @@ suite "WindowManager Tests":
     discard wm.addWindow(window2)
 
     # window1 is currently not focused (window2 is), but is still attached.
-    check window1.manager == BaseWindowManager(wm)
+    check window1.manager == wm
 
     check wm.removeWindow(id1) == true
 
