@@ -195,6 +195,27 @@ proc clearPendingByte*() =
   ## across mode transitions.
   pendingByte = none(byte)
 
+# Tracks whether Terminal.enableRawMode has pinned stdin to O_NONBLOCK for the
+# lifetime of the current raw-mode session. When true, pollKey/readKeyInput
+# skip the per-tick fcntl(F_GETFL)+F_SETFL dance entirely — without this flag
+# they would still pay an F_GETFL on every tick just to learn the pin state.
+#
+# The flag is thread-local but the underlying stdin O_NONBLOCK state is
+# process-global; in multi-threaded readers the flag only short-circuits the
+# thread that owns raw mode. Other threads correctly fall back to per-tick
+# fcntl toggling.
+var stdinNonBlockingPinned {.threadvar.}: bool
+
+proc setStdinNonBlockingPinned*(pinned: bool) =
+  ## Mark stdin as pinned to non-blocking mode by the raw-mode owner.
+  ## Called by Terminal.enableRawMode/disableRawMode; event readers consult
+  ## this flag to short-circuit the per-tick fcntl toggle.
+  stdinNonBlockingPinned = pinned
+
+proc isStdinNonBlockingPinned*(): bool {.inline.} =
+  ## Read-only accessor for the pin flag, intended for tests and diagnostics.
+  stdinNonBlockingPinned
+
 # Blocking I/O helper functions
 proc readByteBlocking(): tuple[success: bool, ch: char] =
   ## Read a single byte in blocking mode
@@ -417,14 +438,28 @@ proc readKey*(): Event =
 # Polling key reading
 proc pollKey*(): Event =
   ## Poll for a key event (non-blocking)
-  # Set stdin to non-blocking mode temporarily
+  # When called inside an active raw-mode session, Terminal.enableRawMode has
+  # already pinned stdin to non-blocking and flipped stdinNonBlockingPinned.
+  # We skip every fcntl(2) call on that path. Standalone callers (e.g. tests
+  # outside an App) still get the legacy auto-toggle.
+  if stdinNonBlockingPinned:
+    return readKey()
+
   let flags = fcntl(STDIN_FILENO, F_GETFL)
-  discard fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK)
+  if flags == -1:
+    # F_GETFL failure means we can't safely flip stdin into non-blocking mode.
+    # Falling through to readKey() here would issue a blocking read and hang
+    # the event loop, so surface the probe failure as Unknown. The caller's
+    # next tick retries; no fd state was mutated.
+    return Event(kind: Unknown)
+  let needToggle = (flags and O_NONBLOCK) == 0
+  if needToggle:
+    discard fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK)
 
   let event = readKey()
 
-  # Restore blocking mode
-  discard fcntl(STDIN_FILENO, F_SETFL, flags)
+  if needToggle:
+    discard fcntl(STDIN_FILENO, F_SETFL, flags)
 
   return event
 
@@ -597,26 +632,38 @@ proc readPasteContentNonBlocking(): string =
 proc readKeyInput*(): Option[Event] =
   ## Read a single key input event (non-blocking)
   ## Returns none(Event) if no input is available or on error
-  var fdFlags = getFdFlags(STDIN_FILENO)
-  if fdFlags.isNone:
-    return none(Event)
-
-  var flags = fdFlags.get()
-  if not flags.setNonBlocking():
-    return none(Event)
+  ##
+  ## Inside an active raw-mode session `stdinNonBlockingPinned` is true and
+  ## the entire fcntl(2) toggle is skipped. Standalone callers still get the
+  ## legacy auto-toggle behavior.
+  let pinned = stdinNonBlockingPinned
+  var flags: FdFlags
+  var needRestore = false
+  if not pinned:
+    let fdFlags = getFdFlags(STDIN_FILENO)
+    if fdFlags.isNone:
+      return none(Event)
+    flags = fdFlags.get()
+    if (flags.originalFlags and O_NONBLOCK) == 0:
+      if not flags.setNonBlocking():
+        return none(Event)
+      needRestore = true
 
   let readResult = readByteNonBlocking(STDIN_FILENO)
 
   # No data available or error
   if not readResult.success:
-    flags.restore()
+    if needRestore:
+      flags.restore()
     return none(Event)
 
   let ch = readResult.ch
 
-  # Restore flags before returning
+  # Restore flags before returning (no-op when stdin was pinned by raw mode
+  # or was already non-blocking when we entered)
   defer:
-    flags.restore()
+    if needRestore:
+      flags.restore()
 
   # Handle escape sequences via the unified routing template (non-blocking I/O).
   # The 20ms post-ESC select() distinguishes a standalone ESC keypress from the

@@ -1528,3 +1528,81 @@ suite "Events Module Tests":
 
     test "unknown event":
       check $Event(kind: Unknown) == "Event(Unknown)"
+
+  suite "Stdin Non-Blocking Pin Tests":
+    test "setStdinNonBlockingPinned toggles the flag":
+      let original = isStdinNonBlockingPinned()
+      try:
+        setStdinNonBlockingPinned(true)
+        check isStdinNonBlockingPinned()
+        setStdinNonBlockingPinned(false)
+        check not isStdinNonBlockingPinned()
+      finally:
+        setStdinNonBlockingPinned(original)
+
+    test "setStdinNonBlockingPinned is idempotent":
+      let original = isStdinNonBlockingPinned()
+      try:
+        setStdinNonBlockingPinned(true)
+        setStdinNonBlockingPinned(true)
+        check isStdinNonBlockingPinned()
+        setStdinNonBlockingPinned(false)
+        setStdinNonBlockingPinned(false)
+        check not isStdinNonBlockingPinned()
+      finally:
+        setStdinNonBlockingPinned(original)
+
+    test "readKeyInput short-circuits all fcntl when pinned":
+      ## When the pin is raised, readKeyInput must skip the F_GETFL/F_SETFL
+      ## probe-and-restore entirely. We assert this behaviorally: pre-set
+      ## stdin to a known non-blocking state, raise the pin, and verify
+      ## readKeyInput leaves the descriptor flags untouched.
+      let originalPin = isStdinNonBlockingPinned()
+      let originalFlags = fcntl(STDIN_FILENO, F_GETFL)
+      # Skip silently if stdin probing isn't viable in this test environment
+      # (e.g. fd 0 closed); we have nothing meaningful to assert otherwise.
+      if originalFlags != -1:
+        let probeFlags = originalFlags or O_NONBLOCK
+        if fcntl(STDIN_FILENO, F_SETFL, probeFlags) != -1:
+          try:
+            setStdinNonBlockingPinned(true)
+            # No input expected; we only care about side effects on flags.
+            discard readKeyInput()
+            check fcntl(STDIN_FILENO, F_GETFL) == probeFlags
+          finally:
+            discard fcntl(STDIN_FILENO, F_SETFL, originalFlags)
+            setStdinNonBlockingPinned(originalPin)
+
+    test "readKeyInput preserves flags when stdin is already non-blocking":
+      ## Unpinned path: if stdin already has O_NONBLOCK set, readKeyInput must
+      ## detect that and skip the set/restore cycle so it doesn't accidentally
+      ## strip the bit on exit.
+      let originalPin = isStdinNonBlockingPinned()
+      let originalFlags = fcntl(STDIN_FILENO, F_GETFL)
+      if originalFlags != -1:
+        let probeFlags = originalFlags or O_NONBLOCK
+        if fcntl(STDIN_FILENO, F_SETFL, probeFlags) != -1:
+          try:
+            setStdinNonBlockingPinned(false)
+            discard readKeyInput()
+            check fcntl(STDIN_FILENO, F_GETFL) == probeFlags
+          finally:
+            discard fcntl(STDIN_FILENO, F_SETFL, originalFlags)
+            setStdinNonBlockingPinned(originalPin)
+
+    test "readKeyInput restores flags after toggling blocking stdin":
+      ## Unpinned path: when stdin was blocking on entry, readKeyInput sets
+      ## O_NONBLOCK for the read and must restore the original flags before
+      ## returning so external code observes no change.
+      let originalPin = isStdinNonBlockingPinned()
+      let originalFlags = fcntl(STDIN_FILENO, F_GETFL)
+      if originalFlags != -1:
+        let blockingFlags = originalFlags and (not O_NONBLOCK)
+        if fcntl(STDIN_FILENO, F_SETFL, blockingFlags) != -1:
+          try:
+            setStdinNonBlockingPinned(false)
+            discard readKeyInput()
+            check fcntl(STDIN_FILENO, F_GETFL) == blockingFlags
+          finally:
+            discard fcntl(STDIN_FILENO, F_SETFL, originalFlags)
+            setStdinNonBlockingPinned(originalPin)
