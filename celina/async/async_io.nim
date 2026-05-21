@@ -22,8 +22,6 @@ type
     usePolling: bool # Use polling instead of selector for raw mode
     selectorRegistered: bool # Track if selector registration succeeded
 
-var globalInputReader {.threadvar.}: AsyncInputReader
-
 proc newAsyncInputReader*(): AsyncInputReader =
   ## Create a new async input reader
   result = AsyncInputReader()
@@ -43,18 +41,24 @@ proc newAsyncInputReader*(): AsyncInputReader =
     result.selectorRegistered = false
 
 proc closeAsyncInputReader*(reader: AsyncInputReader) =
-  ## Close the async input reader
+  ## Close the async input reader. Safe to call on a nil reader and safe
+  ## to call repeatedly: after the first call `reader.selector` is set to
+  ## nil so a second call cannot double-close the underlying fd.
+  if reader.isNil:
+    return
   if reader.selector != nil:
     if reader.selectorRegistered:
       try:
         reader.selector.unregister(reader.stdinFd)
       except Exception:
         discard
+      reader.selectorRegistered = false
 
     try:
       reader.selector.close()
     except Exception:
       discard
+    reader.selector = nil
 
 # Non-blocking I/O Operations
 
@@ -74,6 +78,8 @@ proc hasDataAvailable*(reader: AsyncInputReader, timeoutMs: int = 0): bool =
       return false
   else:
     # Selector mode: original implementation
+    if reader.selector == nil:
+      return false
     try:
       let events = reader.selector.select(timeoutMs)
       return events.len > 0
@@ -122,102 +128,61 @@ proc readCharNonBlocking*(reader: AsyncInputReader): char =
 
 # Async Wrapper Functions
 
-proc initAsyncIO*() {.raises: [].} =
-  ## Initialize async I/O system
-  try:
-    if globalInputReader.isNil:
-      globalInputReader = newAsyncInputReader()
-  except Exception:
-    discard
-
-proc cleanupAsyncIO*() =
-  ## Cleanup async I/O system
-  if not globalInputReader.isNil:
-    globalInputReader.closeAsyncInputReader()
-    globalInputReader = nil
-
-proc hasInputAsync*(timeoutMs: int = 1): Future[bool] {.async.} =
+proc hasInputAsync*(
+    reader: AsyncInputReader, timeoutMs: int = 1
+): Future[bool] {.async.} =
   ## Check if input is available asynchronously
-  if globalInputReader.isNil:
-    initAsyncIO()
-
-  # Double-check that initialization succeeded
-  if globalInputReader.isNil:
+  if reader.isNil:
     return false
-
-  # timeoutMs already provided as parameter
 
   # Yield to other async tasks first
   await sleepMs(0)
 
-  # Check for buffered data - ensure globalInputReader is not nil
-  if not globalInputReader.isNil and globalInputReader.buffer.len > 0:
+  if reader.buffer.len > 0:
     return true
 
-  # Check for new data - ensure globalInputReader is not nil
-  if not globalInputReader.isNil:
-    return globalInputReader.hasDataAvailable(timeoutMs)
-  else:
-    return false
+  return reader.hasDataAvailable(timeoutMs)
 
-proc readCharAsync*(): Future[char] {.async.} =
+proc readCharAsync*(reader: AsyncInputReader): Future[char] {.async.} =
   ## Read a character asynchronously
-  if globalInputReader.isNil:
-    initAsyncIO()
-
-  # Double-check that initialization succeeded
-  if globalInputReader.isNil:
+  if reader.isNil:
     return '\0'
 
   # Yield to other async tasks
   await sleepMs(0)
 
-  # Try to read from buffer or stdin - ensure globalInputReader is not nil
-  if not globalInputReader.isNil:
-    result = globalInputReader.readCharNonBlocking()
-  else:
-    result = '\0'
+  result = reader.readCharNonBlocking()
 
-proc peekCharAsync*(): Future[char] {.async.} =
+proc peekCharAsync*(reader: AsyncInputReader): Future[char] {.async.} =
   ## Peek at next character without consuming it
-  if globalInputReader.isNil:
-    initAsyncIO()
-
-  # Double-check that initialization succeeded
-  if globalInputReader.isNil:
+  if reader.isNil:
     return '\0'
 
   await sleepMs(0)
 
-  # Ensure globalInputReader is not nil before accessing
-  if not globalInputReader.isNil:
-    if globalInputReader.buffer.len > 0:
-      return globalInputReader.buffer[0]
+  if reader.buffer.len > 0:
+    return reader.buffer[0]
 
-    if globalInputReader.hasDataAvailable(0):
-      let newData = globalInputReader.readNonBlocking()
-      if newData.len > 0:
-        globalInputReader.buffer.add(newData)
-        if globalInputReader.buffer.len > 0:
-          return globalInputReader.buffer[0]
+  if reader.hasDataAvailable(0):
+    let newData = reader.readNonBlocking()
+    if newData.len > 0:
+      reader.buffer.add(newData)
+      if reader.buffer.len > 0:
+        return reader.buffer[0]
 
   return '\0'
 
-proc readStdinAsync*(timeoutMs: int = 10): Future[string] {.async.} =
+proc readStdinAsync*(
+    reader: AsyncInputReader, timeoutMs: int = 10
+): Future[string] {.async.} =
   ## Read available stdin data asynchronously
-  if globalInputReader.isNil:
-    initAsyncIO()
-
-  # Double-check that initialization succeeded
-  if globalInputReader.isNil:
+  if reader.isNil:
     return ""
 
-  # timeoutMs already provided as parameter
   await sleepMs(0)
 
-  # Ensure globalInputReader is not nil before accessing
-  if not globalInputReader.isNil and globalInputReader.hasDataAvailable(timeoutMs):
-    return globalInputReader.readNonBlocking()
+  if reader.hasDataAvailable(timeoutMs):
+    return reader.readNonBlocking()
   else:
     return ""
 
@@ -261,53 +226,49 @@ proc showCursorAsync*(): Future[void] {.async.} =
 
 # Buffer Management
 
-proc clearInputBuffer*() =
+proc clearBuffer*(reader: AsyncInputReader) =
   ## Clear the input buffer
-  if not globalInputReader.isNil:
-    globalInputReader.buffer = ""
-    globalInputReader.pendingByte = none(byte)
+  if not reader.isNil:
+    reader.buffer = ""
+    reader.pendingByte = none(byte)
 
-proc setPendingByteAsync*(b: byte) =
+proc setPendingByteAsync*(reader: AsyncInputReader, b: byte) =
   ## Stash a byte to be re-injected as the first byte of the next event
   ## (Unicode §3.9 resync). Called from `readKeyAsync` after a UTF-8
-  ## assembly produces a leftover byte. A no-op if the global reader
-  ## hasn't been initialised.
-  if not globalInputReader.isNil:
-    globalInputReader.pendingByte = some(b)
+  ## assembly produces a leftover byte. A no-op if `reader` is nil.
+  if not reader.isNil:
+    reader.pendingByte = some(b)
 
-proc clearPendingByteAsync*() =
+proc clearPendingByteAsync*(reader: AsyncInputReader) =
   ## Drop any byte waiting to be re-injected. Call from raw-mode toggles
   ## to prevent stale bytes from leaking across mode transitions.
-  if not globalInputReader.isNil:
-    globalInputReader.pendingByte = none(byte)
+  if not reader.isNil:
+    reader.pendingByte = none(byte)
 
-proc getInputBufferStats*(): tuple[size: int, available: bool] =
+proc bufferStats*(reader: AsyncInputReader): tuple[size: int, available: bool] =
   ## Get input buffer statistics
-  if globalInputReader.isNil:
+  if reader.isNil:
     return (0, false)
-  return (globalInputReader.buffer.len, globalInputReader.hasDataAvailable(0))
+  return (reader.buffer.len, reader.hasDataAvailable(0))
 
 # Testing and Validation
 
 proc testAsyncIO*(): Future[bool] {.async.} =
-  ## Test async I/O functionality
+  ## Test async I/O functionality. Creates a temporary reader to exercise
+  ## the I/O path; callers that need a persistent reader should manage one
+  ## themselves via `newAsyncInputReader`.
   try:
-    initAsyncIO()
+    let reader = newAsyncInputReader()
+    defer:
+      reader.closeAsyncInputReader()
 
     # Test output
     discard await writeStdoutAsync("Testing async I/O...\n")
     await flushStdoutAsync()
 
     # Test input availability check
-    discard await hasInputAsync(10)
+    discard await reader.hasInputAsync(10)
 
     return true
   except CatchableError:
     return false
-
-# Backwards Compatibility Functions
-
-# Export the same interface as async_io.nim for drop-in replacement
-export hasInputAsync, readCharAsync, peekCharAsync, readStdinAsync
-export writeStdoutAsync, flushStdoutAsync, clearScreenAsync, moveCursorAsync
-export hideCursorAsync, showCursorAsync, clearInputBuffer, testAsyncIO

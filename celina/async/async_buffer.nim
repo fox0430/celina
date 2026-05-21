@@ -14,25 +14,6 @@ import ../core/[buffer, geometry, colors]
 
 export buffer, geometry, colors
 
-type AsyncBufferMetrics* = object ## Performance monitoring
-  activeBuffers*: int
-  totalCreated*: int
-  poolHits*: int
-
-var globalAsyncBufferMetrics* {.threadvar.}: AsyncBufferMetrics
-
-# Metrics and tracking functions (defined early for use in other functions)
-
-proc trackAsyncBufferCreation*() =
-  globalAsyncBufferMetrics.totalCreated.inc()
-  globalAsyncBufferMetrics.activeBuffers.inc()
-
-proc trackAsyncBufferDestroy*() =
-  globalAsyncBufferMetrics.activeBuffers.dec()
-
-proc getAsyncBufferMetrics*(): AsyncBufferMetrics =
-  globalAsyncBufferMetrics
-
 type
   AsyncBuffer* = ref object ## Reference to a Buffer for async operations
     buffer: Buffer
@@ -271,14 +252,12 @@ proc getBuffer*(pool: AsyncBufferPool, area: Rect): AsyncBuffer =
   ## Get a buffer from the pool or create new one
   if pool.buffers.len > 0:
     result = pool.buffers.pop()
-    trackAsyncBufferCreation() # Count as reuse
     if result.buffer.area != area:
       result.buffer.resize(area)
     else:
       result.buffer.clear()
   else:
     result = newAsyncBuffer(area)
-    trackAsyncBufferCreation()
 
 proc returnBuffer*(pool: AsyncBufferPool, asyncBuffer: AsyncBuffer) =
   ## Return a buffer to the pool
@@ -288,7 +267,6 @@ proc returnBuffer*(pool: AsyncBufferPool, asyncBuffer: AsyncBuffer) =
   else:
     # Pool is full, destroy the buffer
     asyncBuffer.destroyAsync()
-    trackAsyncBufferDestroy()
 
 # Async-Safe Rendering Utilities
 

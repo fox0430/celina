@@ -19,7 +19,7 @@ import std/[termios, posix]
 
 import async_backend, async_buffer
 import ../core/[geometry, colors, buffer, terminal_common]
-from async_io import clearPendingByteAsync
+from async_io import AsyncInputReader, clearPendingByteAsync
 
 type
   AsyncTerminal* = ref object ## Async terminal interface for screen management
@@ -70,9 +70,18 @@ proc newAsyncTerminal*(): AsyncTerminal =
   # Initialize lastBuffer to avoid initial full redraw
   result.lastBuffer = newBuffer(rect(0, 0, result.size.width, result.size.height))
 
-proc enableRawMode*(terminal: AsyncTerminal) =
+proc enableRawMode*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) =
   ## Enable raw mode for direct key input
   ## Best effort - logs errors in debug mode but doesn't raise
+  ##
+  ## When `reader` is non-nil, drops any UTF-8 resync byte buffered before
+  ## the mode transition so it cannot leak across modes as a phantom
+  ## keypress.
+  ##
+  ## **If you own an `AsyncInputReader` you MUST pass it**, otherwise a
+  ## resync byte stashed in the previous mode will surface as a phantom
+  ## keypress after the toggle. The `nil` default exists only for
+  ## standalone terminal users who manage no reader at all.
   if terminal.rawModeEnabled:
     return # Already enabled
 
@@ -91,13 +100,17 @@ proc enableRawMode*(terminal: AsyncTerminal) =
 
   terminal.rawMode = true
   terminal.rawModeEnabled = true
-  # Drop any UTF-8 resync byte buffered before mode transition so it
-  # cannot leak across modes as a phantom keypress.
-  clearPendingByteAsync()
+  if not reader.isNil:
+    reader.clearPendingByteAsync()
 
-proc disableRawMode*(terminal: AsyncTerminal) =
+proc disableRawMode*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) =
   ## Disable raw mode, restoring original terminal settings
   ## Best effort - doesn't raise on error to ensure cleanup
+  ##
+  ## When `reader` is non-nil, drops any UTF-8 resync byte buffered before
+  ## the mode transition. Same ownership rule as `enableRawMode`: callers
+  ## that hold a reader MUST pass it to avoid a phantom keypress after
+  ## the toggle.
   if not terminal.rawModeEnabled:
     return # Not enabled
 
@@ -106,7 +119,8 @@ proc disableRawMode*(terminal: AsyncTerminal) =
       stderr.writeLine("Warning: Failed to restore terminal settings")
   terminal.rawMode = false
   terminal.rawModeEnabled = false
-  clearPendingByteAsync()
+  if not reader.isNil:
+    reader.clearPendingByteAsync()
 
 # Alternate screen control
 proc enableAlternateScreen*(terminal: AsyncTerminal) {.inline.} =
@@ -338,35 +352,43 @@ proc renderFullAsync*(terminal: AsyncTerminal, buffer: Buffer) {.async.} =
   terminal.lastBuffer.clearDirty()
 
 # Terminal setup and cleanup
-proc setupAsync*(terminal: AsyncTerminal) {.async.} =
+proc setupAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.async.} =
   ## Setup terminal for CLI mode asynchronously
   terminal.enableAlternateScreen()
-  terminal.enableRawMode()
+  terminal.enableRawMode(reader)
   await clearScreenAsync()
   terminal.updateSize()
 
-proc setupWithHiddenCursorAsync*(terminal: AsyncTerminal) {.async.} =
+proc setupWithHiddenCursorAsync*(
+    terminal: AsyncTerminal, reader: AsyncInputReader = nil
+) {.async.} =
   ## Setup terminal for CLI mode with cursor hidden asynchronously
-  await terminal.setupAsync()
+  await terminal.setupAsync(reader)
   await hideCursorAsync()
 
-proc setupWithMouseAsync*(terminal: AsyncTerminal) {.async.} =
+proc setupWithMouseAsync*(
+    terminal: AsyncTerminal, reader: AsyncInputReader = nil
+) {.async.} =
   ## Setup terminal for CLI mode with mouse support asynchronously
-  await terminal.setupAsync()
+  await terminal.setupAsync(reader)
   terminal.enableMouse()
 
-proc setupWithPasteAsync*(terminal: AsyncTerminal) {.async.} =
+proc setupWithPasteAsync*(
+    terminal: AsyncTerminal, reader: AsyncInputReader = nil
+) {.async.} =
   ## Setup terminal for CLI mode with bracketed paste support asynchronously
-  await terminal.setupAsync()
+  await terminal.setupAsync(reader)
   terminal.enableBracketedPaste()
 
-proc setupWithMouseAndPasteAsync*(terminal: AsyncTerminal) {.async.} =
+proc setupWithMouseAndPasteAsync*(
+    terminal: AsyncTerminal, reader: AsyncInputReader = nil
+) {.async.} =
   ## Setup terminal for CLI mode with mouse and bracketed paste support asynchronously
-  await terminal.setupAsync()
+  await terminal.setupAsync(reader)
   terminal.enableMouse()
   terminal.enableBracketedPaste()
 
-proc runDisableSequence(terminal: AsyncTerminal) =
+proc runDisableSequence(terminal: AsyncTerminal, reader: AsyncInputReader = nil) =
   ## LIFO disable sequence shared by `cleanupAsync` and the sync `cleanup`.
   ##
   ## Each step is guarded individually because the underlying disables on
@@ -389,11 +411,11 @@ proc runDisableSequence(terminal: AsyncTerminal) =
   guard:
     terminal.disableMouse()
   guard:
-    terminal.disableRawMode()
+    terminal.disableRawMode(reader)
   guard:
     terminal.disableAlternateScreen()
 
-proc cleanup*(terminal: AsyncTerminal) =
+proc cleanup*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) =
   ## Synchronous cleanup variant for crash handlers and signal hooks.
   ##
   ## Mirrors `cleanupAsync` but uses a blocking cursor restore so it can
@@ -404,9 +426,9 @@ proc cleanup*(terminal: AsyncTerminal) =
     stdout.flushFile()
   except CatchableError:
     discard
-  runDisableSequence(terminal)
+  runDisableSequence(terminal, reader)
 
-proc cleanupAsync*(terminal: AsyncTerminal) {.async.} =
+proc cleanupAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.async.} =
   ## Cleanup and restore terminal asynchronously.
   ##
   ## Disable order is the reverse of `setupAsync` (LIFO): raw mode is
@@ -414,7 +436,7 @@ proc cleanupAsync*(terminal: AsyncTerminal) {.async.} =
   ## runs while the program-mode screen is still active. Mirrors the sync
   ## `terminal.cleanup()` policy — app-level wrappers should delegate here.
   await showCursorAsync()
-  runDisableSequence(terminal)
+  runDisableSequence(terminal, reader)
 
   # AsyncFD cleanup is handled automatically by Chronos
   # No manual unregistration needed
@@ -423,7 +445,7 @@ proc isSuspended*(terminal: AsyncTerminal): bool {.inline.} =
   ## Check if terminal is currently suspended
   terminal.suspendState.isSuspended
 
-proc suspendAsync*(terminal: AsyncTerminal) {.async.} =
+proc suspendAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.async.} =
   ## Suspend terminal to return to shell mode temporarily
   ##
   ## Saves current terminal state and restores normal shell mode.
@@ -447,21 +469,32 @@ proc suspendAsync*(terminal: AsyncTerminal) {.async.} =
   terminal.disableFocusEvents()
   terminal.disableBracketedPaste()
   terminal.disableMouse()
-  terminal.disableRawMode()
+  terminal.disableRawMode(reader)
   terminal.disableAlternateScreen()
 
   terminal.suspendState.isSuspended = true
 
-proc resumeAsync*(terminal: AsyncTerminal) {.async.} =
+proc resumeAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.async.} =
   ## Resume terminal after suspend, restoring program mode
   ##
   ## Restores terminal state that was saved by `suspendAsync()`.
   ## After resume, call `drawAsync(buffer, force = true)` to redraw the screen.
+  ##
+  ## When `reader` is non-nil, drops any UTF-8 resync byte that may have
+  ## accumulated during suspend, mirroring the `enableRawMode(reader)`
+  ## contract so the pending-byte invariant survives the round trip.
   if not terminal.isSuspended:
     return # Not suspended
 
-  # Restore saved state
+  # Restore saved state. `restoreSuspendedFeatures` is a shared template
+  # used by both the sync and async terminals, so it cannot thread the
+  # reader through its internal `enableRawMode()` call — that call clears
+  # no pending byte. We compensate by clearing explicitly here; if the
+  # template ever starts forwarding a reader, this fallback becomes a
+  # harmless double-clear.
   restoreSuspendedFeatures(terminal)
+  if not reader.isNil:
+    reader.clearPendingByteAsync()
   await hideCursorAsync()
 
   # Clear lastBuffer to force full redraw on next drawAsync()
