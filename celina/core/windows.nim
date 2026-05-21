@@ -51,11 +51,6 @@ type
     ## every visible window (see `dispatchResize`); consumption semantics
     ## do not apply to a broadcast event.
 
-  BaseWindowManager* = ref object of RootObj
-    ## Common base for window managers. Holds the single source of truth
-    ## for which window is focused.
-    focusedWindow*: Option[WindowId]
-
   Window* = ref object ## Represents a window within the terminal
     id*: WindowId
     area*: Rect ## Window position and size
@@ -66,10 +61,9 @@ type
     zIndex*: int ## Z-order for overlapping windows
     border*: Option[WindowBorder] ## Border configuration
     visible*: bool ## Whether window is visible
-    managerRef {.cursor.}: BaseWindowManager
+    managerRef {.cursor.}: WindowManager
       ## Owning manager; focus is derived from it. Not exported — read via the
-      ## `manager*` getter, mutated only by manager implementations (which can
-      ## reach this field via an `{.all.}` import).
+      ## `manager*` getter, mutated only by manager implementations.
       ## `{.cursor.}` makes this a non-counted back-reference so that
       ## the parent/child cycle (manager <-> windows) is broken under
       ## --mm:arc/orc and the window does not keep the manager alive.
@@ -95,8 +89,10 @@ type
     movable*: bool
     modal*: bool
 
-  WindowManager* = ref object of BaseWindowManager
-    ## Manages multiple windows and their interactions
+  WindowManager* = ref object ## Manages multiple windows and their interactions
+    focusedWindow*: Option[WindowId]
+      ## ID of the currently focused window, if any. Single source of truth
+      ## for focus state; `Window.focused` is derived from this field.
     windows*: seq[Window]
     nextWindowId: int
     modalStack*: seq[WindowId]
@@ -111,14 +107,14 @@ proc `==`*(a, b: WindowId): bool {.borrow.}
 proc `$`*(id: WindowId): string =
   $int(id)
 
-proc manager*(window: Window): BaseWindowManager {.inline.} =
+proc manager*(window: Window): WindowManager {.inline.} =
   ## The window's owning manager, or nil if not attached.
   window.managerRef
 
-proc `manager=`*(window: Window, m: BaseWindowManager) {.inline.} =
-  ## Set the window's owning manager. Intended for use by manager
-  ## implementations to attach/detach windows; application code should not
-  ## call this directly.
+proc `manager=`*(window: Window, m: WindowManager) {.inline.} =
+  ## Set the window's owning manager. Intended for use by `WindowManager`
+  ## to attach/detach windows; application code should not call this
+  ## directly.
   window.managerRef = m
 
 proc focused*(window: Window): bool {.inline.} =
@@ -732,17 +728,16 @@ proc dispatchResize*(wm: WindowManager, newSize: Size) =
   ##
   ## Exceptions raised by a handler are swallowed so one window's
   ## failure does not block the others. We catch `Exception` (rather
-  ## than the narrower `CatchableError`) for two reasons:
-  ## 1. Resize handlers have no `{.raises.}` annotation, so the effect
-  ##    system treats them as potentially raising bare `Exception`.
-  ## 2. The async counterpart (`async_windows.nim:dispatchResize`) must
-  ##    catch `Exception` due to chronos's `{.async.}` raise inheritance
-  ##    rules — matching here keeps sync/async behavior identical.
+  ## than the narrower `CatchableError`) because resize handlers have
+  ## no `{.raises.}` annotation, so the effect system treats them as
+  ## potentially raising bare `Exception`. This also lets the same
+  ## proc be called from chronos `{.async.}` contexts without leaking
+  ## an unlisted raise effect to the caller.
   ##
   ## With `--panics:on` (recommended for production) `Defect`s terminate
   ## the program before reaching this handler, so programmer bugs still
   ## surface. With `--panics:off` (default) Defects are caught and the
-  ## broadcast continues; this matches async behavior.
+  ## broadcast continues.
   for window in wm.windows:
     if window.resizeHandler.isSome() and window.visible:
       try:

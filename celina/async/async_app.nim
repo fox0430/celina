@@ -5,7 +5,7 @@
 
 import std/[options, monotimes, times, strformat]
 
-import async_backend, async_terminal, async_events, async_windows, async_renderer
+import async_backend, async_terminal, async_events, async_renderer
 import
   ../core/[
     geometry, buffer, events, fps, config, tick_common, cursor, terminal,
@@ -33,7 +33,7 @@ type
     terminal: AsyncTerminal
     renderer: AsyncRenderer
     fpsMonitor: FpsMonitor
-    windowManager: AsyncWindowManager
+    windowManager: WindowManager
     config: AppConfig
     handlers: AsyncAppHandlers
     timings: AsyncAppTimings
@@ -55,7 +55,7 @@ proc `$`*(app: AsyncApp): string =
   ## String representation of AsyncApp for debugging
   let windowCount =
     if app.state.windowMode and not app.windowManager.isNil:
-      app.windowManager.getWindowCountSync()
+      app.windowManager.windows.len
     else:
       0
   &"AsyncApp(running: {app.state.running}, fps: {app.fpsMonitor.getCurrentFps():.1f}, frames: {app.timings.frameCounter}, windows: {windowCount}, config: {app.config})"
@@ -98,9 +98,9 @@ proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
     ),
   )
 
-  # Initialize async window manager if enabled
+  # Initialize window manager if enabled
   if config.windowMode:
-    result.windowManager = newAsyncWindowManager()
+    result.windowManager = newWindowManager()
 
 # Event and render handlers
 #
@@ -382,7 +382,7 @@ proc renderAsync(app: AsyncApp) {.async.} =
 
   # If window mode is enabled, render windows on top
   if app.state.windowMode and not app.windowManager.isNil:
-    app.windowManager.renderSync(app.renderer.getBuffer())
+    app.windowManager.render(app.renderer.getBuffer())
 
   # Render to terminal (force if requested after resize)
   if app.state.forceNextRender:
@@ -464,11 +464,22 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
           # Window-first fallthrough: route through the window manager
           # first; only fall through to the global handler when no
           # window consumed the event.
+          #
+          # `try/except Exception` is required here because window
+          # handlers carry no `{.raises.}` annotation, so chronos's
+          # `{.async.}` effect inference would otherwise propagate a
+          # bare `Exception` raise out of `tickAsync`. A handler that
+          # raises is treated as `erContinue` so the global handler can
+          # still react. `Defect`s are caught under `--panics:off`
+          # (default) and propagate under `--panics:on`.
           var winConsumed = false
           if app.state.windowMode and not app.windowManager.isNil:
             {.cast(gcsafe).}:
-              if app.windowManager.handleEventSync(event) == erConsume:
-                winConsumed = true
+              try:
+                if app.windowManager.handleEvent(event) == erConsume:
+                  winConsumed = true
+              except Exception:
+                discard
 
           if not winConsumed:
             case (await app.dispatchEventAsync(event))
@@ -868,7 +879,7 @@ proc enableWindowMode*(app: AsyncApp) =
   ## Enable window management mode
   app.state.windowMode = true
   if app.windowManager.isNil:
-    app.windowManager = newAsyncWindowManager()
+    app.windowManager = newWindowManager()
 
 proc addWindow*(app: AsyncApp, window: Window, autoFocus: bool = true): WindowId =
   ## Add a window to the application.
@@ -876,58 +887,58 @@ proc addWindow*(app: AsyncApp, window: Window, autoFocus: bool = true): WindowId
   ## The first window added is always auto-focused, and modal windows are
   ## always focused regardless of `autoFocus`. The default (`autoFocus = true`)
   ## takes focus on add; pass `false` to add a non-modal window without
-  ## disturbing the current focus. See `AsyncWindowManager.addWindowSync` /
-  ## `addWindowAsync` for the full semantics.
+  ## disturbing the current focus. See `WindowManager.addWindow` for the
+  ## full semantics.
   if not app.state.windowMode:
     app.enableWindowMode()
-  return app.windowManager.addWindowSync(window, autoFocus)
+  return app.windowManager.addWindow(window, autoFocus)
 
 proc removeWindow*(app: AsyncApp, windowId: WindowId): bool =
   ## Remove a window from the application
   ## Returns true if the window was found and removed, false otherwise
   if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.removeWindowSync(windowId)
+    return app.windowManager.removeWindow(windowId)
 
 proc getWindow*(app: AsyncApp, windowId: WindowId): Option[Window] =
   ## Get a window by ID
   if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.getWindowSync(windowId)
+    return app.windowManager.getWindow(windowId)
   return none(Window)
 
 proc focusWindow*(app: AsyncApp, windowId: WindowId): bool =
   ## Focus a specific window
   ## Returns true if the window was found and focused, false otherwise
   if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.focusWindowSync(windowId)
+    return app.windowManager.focusWindow(windowId)
 
 proc getFocusedWindow*(app: AsyncApp): Option[Window] =
   ## Get the currently focused window
   if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.getFocusedWindowSync()
+    return app.windowManager.getFocusedWindow()
   return none(Window)
 
 proc getWindows*(app: AsyncApp): seq[Window] =
   ## Get all windows in the application
   if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.getWindowsSync()
+    return app.windowManager.windows
   return @[]
 
 proc getWindowCount*(app: AsyncApp): int =
   ## Get the total number of windows
   if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.getWindowCountSync()
+    return app.windowManager.windows.len
   return 0
 
 proc getFocusedWindowId*(app: AsyncApp): Option[WindowId] =
   ## Get the ID of the currently focused window
   if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.getFocusedWindowIdSync()
+    return app.windowManager.focusedWindow
   return none(WindowId)
 
 proc getWindowInfo*(app: AsyncApp, windowId: WindowId): Option[WindowInfo] =
   ## Get window information by ID
   if app.state.windowMode and not app.windowManager.isNil:
-    let windowOpt = app.windowManager.getWindowSync(windowId)
+    let windowOpt = app.windowManager.getWindow(windowId)
     if windowOpt.isSome():
       return some(windowOpt.get.toWindowInfo())
   return none(WindowInfo)
@@ -936,7 +947,7 @@ proc handleWindowEvent*(app: AsyncApp, event: Event): EventResult =
   ## Handle an event through the window manager.
   ## Returns `erContinue` when window mode is disabled or no manager is set.
   if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.handleEventSync(event)
+    return app.windowManager.handleEvent(event)
   return erContinue
 
 # State and info queries
