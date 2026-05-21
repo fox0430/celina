@@ -35,33 +35,14 @@ when hasAsyncDispatch:
   proc now*(): Moment =
     epochTime()
 
-suite "Async Event System Initialization":
-  test "Initialize and cleanup async event system":
-    # Should not raise exceptions
-    try:
-      initAsyncEventSystem()
-      cleanupAsyncEventSystem()
-      check true
-    except CatchableError:
-      check false
-
-  test "Initialize event system handles errors gracefully":
-    # Should not raise exceptions even if called multiple times
-    try:
-      initAsyncEventSystem()
-      initAsyncEventSystem()
-      cleanupAsyncEventSystem()
-      cleanupAsyncEventSystem()
-      check true
-    except CatchableError:
-      check false
-
 suite "Async Key Reading":
   test "readKeyAsync handles unknown input":
     # This test simulates reading when no input is available
     # Should return unknown event when no input
-    let event = waitFor readKeyAsync()
+    let reader = newAsyncInputReader()
+    let event = waitFor reader.readKeyAsync()
     check event.kind == EventKind.Unknown
+    reader.closeAsyncInputReader()
 
   test "AsyncEventError type is properly defined":
     let error = newException(AsyncEventError, "Test error")
@@ -77,36 +58,44 @@ suite "Async Key Reading":
 
 suite "Non-blocking Event Polling":
   test "pollKeyAsync returns none when no input":
-    let eventOpt = waitFor pollKeyAsync()
+    let reader = newAsyncInputReader()
+    let eventOpt = waitFor reader.pollKeyAsync()
     # Should return none when no input is available
     check eventOpt.isNone()
+    reader.closeAsyncInputReader()
 
 suite "Event Polling with Timeout":
   test "pollEventsAsync handles timeout":
-    let hasEvents = waitFor pollEventsAsync(1) # 1ms timeout
+    let reader = newAsyncInputReader()
+    let hasEvents = waitFor reader.pollEventsAsync(1) # 1ms timeout
     # This test just verifies the function works (input may or may not be available)
     check hasEvents == hasEvents # Always passes
+    reader.closeAsyncInputReader()
 
 suite "Async Event Waiting":
   test "waitForKeyAsync structure (simulated)":
     # This test verifies the function exists and has correct structure
     # Real testing would require simulated input
+    let reader = newAsyncInputReader()
     try:
       # This will likely timeout or return unknown in test environment
       when hasChronos:
-        discard waitFor waitForKeyAsync().wait(chronos.milliseconds(10))
+        discard waitFor reader.waitForKeyAsync().wait(chronos.milliseconds(10))
       else:
-        discard waitFor waitForKeyAsync().wait(10)
+        discard waitFor reader.waitForKeyAsync().wait(10)
     except AsyncTimeoutError:
       # Expected in test environment
       check true
+    reader.closeAsyncInputReader()
 
   test "waitForAnyKeyAsync structure (simulated)":
+    let reader = newAsyncInputReader()
     try:
-      discard waitFor waitForAnyKeyAsync().wait(chronos.milliseconds(10))
+      discard waitFor reader.waitForAnyKeyAsync().wait(chronos.milliseconds(10))
     except AsyncTimeoutError:
       # Expected in test environment
       check true
+    reader.closeAsyncInputReader()
 
 suite "Async Event Stream Resize Detection":
   test "AsyncEventStream detects and handles resize events":
@@ -114,26 +103,33 @@ suite "Async Event Stream Resize Detection":
     # and that the resize counter mechanism exists
     var receivedResize = false
 
+    let reader = newAsyncInputReader()
     let stream = newAsyncEventStream(
+      reader,
       proc(event: Event): Future[bool] {.async.} =
         if event.kind == EventKind.Resize:
           receivedResize = true
           return false # Stop after receiving resize
-        return true
+        return true,
     )
 
     # Verify stream was created correctly
     check stream != nil
     check stream.running == false
+    reader.closeAsyncInputReader()
 
 suite "Mouse Event Parsing (Async)":
   test "parseMouseEventX10 returns unknown (placeholder)":
-    let event = waitFor parseMouseEventX10()
+    let reader = newAsyncInputReader()
+    let event = waitFor reader.parseMouseEventX10()
     check event.kind == EventKind.Unknown
+    reader.closeAsyncInputReader()
 
   test "parseMouseEventSGR returns unknown (placeholder)":
-    let event = waitFor parseMouseEventSGR()
+    let reader = newAsyncInputReader()
+    let event = waitFor reader.parseMouseEventSGR()
     check event.kind == EventKind.Unknown
+    reader.closeAsyncInputReader()
 
 suite "Async Event Stream":
   test "AsyncEventStream creation":
@@ -146,10 +142,12 @@ suite "Async Event Stream":
       except CatchableError:
         return false
 
-    let stream = newAsyncEventStream(testCallback)
+    let reader = newAsyncInputReader()
+    let stream = newAsyncEventStream(reader, testCallback)
 
     check not stream.running
     check stream.eventCallback != nil
+    reader.closeAsyncInputReader()
 
   test "AsyncEventStream start and stop":
     var callbackCalled = false
@@ -161,7 +159,8 @@ suite "Async Event Stream":
       except CatchableError:
         return false
 
-    let stream = newAsyncEventStream(testCallback)
+    let reader = newAsyncInputReader()
+    let stream = newAsyncEventStream(reader, testCallback)
     check not stream.running
 
     # Spawn the stream in background
@@ -180,9 +179,11 @@ suite "Async Event Stream":
 
     # After stop, should not be running
     check not stream.running
+    reader.closeAsyncInputReader()
 
   test "AsyncEventStream with nil callback":
-    let stream = newAsyncEventStream(nil)
+    let reader = newAsyncInputReader()
+    let stream = newAsyncEventStream(reader, nil)
 
     # Should handle nil callback gracefully
     try:
@@ -195,6 +196,7 @@ suite "Async Event Stream":
       check not stream.running
     except CatchableError:
       check false
+    reader.closeAsyncInputReader()
 
 suite "Error Handling":
   test "AsyncEventError with custom message":
@@ -218,16 +220,18 @@ suite "Error Handling":
       check false
 
   test "Error handling in async functions":
+    let reader = newAsyncInputReader()
     try:
       # Test various async functions handle errors gracefully
-      discard waitFor pollKeyAsync()
-      discard waitFor pollEventsAsync(1)
+      discard waitFor reader.pollKeyAsync()
+      discard waitFor reader.pollEventsAsync(1)
       check true
     except AsyncEventError:
       check false # Should not raise in normal test environment
     except CatchableError:
       # Other exceptions might occur in test environment
       check true
+    reader.closeAsyncInputReader()
 
 suite "Integration with Core Events":
   test "Event types compatibility":
@@ -266,26 +270,29 @@ suite "Integration with Core Events":
 suite "Async I/O Integration":
   test "Async I/O functions are accessible":
     # This test verifies that the async_io functions are properly imported
+    let reader = newAsyncInputReader()
     try:
       # Test that the functions exist and can be called
       when hasChronos:
-        discard waitFor hasInputAsync(1)
+        discard waitFor reader.hasInputAsync(1)
       else:
-        discard waitFor hasInputAsync(chronos.milliseconds(1))
-      discard waitFor readCharAsync()
+        discard waitFor reader.hasInputAsync(chronos.milliseconds(1))
+      discard waitFor reader.readCharAsync()
       # These should not raise compilation errors
       check true
     except CatchableError:
       # Runtime errors are acceptable in test environment
       check true
+    reader.closeAsyncInputReader()
 
 suite "Performance and Resource Management":
   test "Multiple async operations don't block":
+    let reader = newAsyncInputReader()
     let startTime = now()
 
     # Run multiple async operations concurrently
-    let future1 = pollKeyAsync()
-    let future2 = pollEventsAsync(1)
+    let future1 = reader.pollKeyAsync()
+    let future2 = reader.pollEventsAsync(1)
 
     discard waitFor future1
     discard waitFor future2
@@ -294,13 +301,17 @@ suite "Performance and Resource Management":
     # Should complete quickly since they're all non-blocking
     # Simple existence check - detailed timing is complex with different backends
     check endTime >= startTime
+    reader.closeAsyncInputReader()
 
   test "Async event stream resource cleanup":
+    var readers: seq[AsyncInputReader] = @[]
     var streams: seq[AsyncEventStream] = @[]
 
     # Create multiple streams
     for i in 0 ..< 5:
-      let stream = newAsyncEventStream(nil)
+      let reader = newAsyncInputReader()
+      readers.add(reader)
+      let stream = newAsyncEventStream(reader, nil)
       streams.add(stream)
 
     # Start and stop all streams
@@ -315,6 +326,9 @@ suite "Performance and Resource Management":
     # All streams should be properly stopped
     for stream in streams:
       check not stream.running
+
+    for reader in readers:
+      reader.closeAsyncInputReader()
 
   # ESC Key Detection Fix Tests - Async Version
   # Tests for the 20ms timeout mechanism in async event handling
@@ -414,13 +428,15 @@ suite "Performance and Resource Management":
 
     test "Async input availability checking":
       # Test that hasInputAsync function works correctly
+      let reader = newAsyncInputReader()
       try:
-        let hasInput = waitFor hasInputAsync(1) # 1ms timeout
+        let hasInput = waitFor reader.hasInputAsync(1) # 1ms timeout
         # Function should complete without error (result may vary)
         check hasInput == hasInput # Always true, just verifies function works
       except CatchableError:
         # Acceptable in test environment
         check true
+      reader.closeAsyncInputReader()
 
     test "Async vs sync timeout consistency":
       # Ensure async and sync versions use same timeout values
@@ -446,8 +462,10 @@ suite "Performance and Resource Management":
         except CatchableError:
           return false
 
-      let stream = newAsyncEventStream(escCallback)
+      let reader = newAsyncInputReader()
+      let stream = newAsyncEventStream(reader, escCallback)
 
       # Verify stream creation with ESC-aware callback
       check stream.eventCallback != nil
       check not stream.running
+      reader.closeAsyncInputReader()

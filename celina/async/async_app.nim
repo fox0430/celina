@@ -6,6 +6,7 @@
 import std/[options, monotimes, times, strformat]
 
 import async_backend, async_terminal, async_events, async_renderer
+from async_io import AsyncInputReader, newAsyncInputReader, closeAsyncInputReader
 import
   ../core/[
     geometry, buffer, events, fps, config, tick_common, cursor, terminal,
@@ -34,6 +35,12 @@ type
     renderer: AsyncRenderer
     fpsMonitor: FpsMonitor
     windowManager: WindowManager
+    inputReader: AsyncInputReader
+      ## Per-app non-blocking stdin reader. Owned by the AsyncApp; lazily
+      ## created in `setupAsync` (so a `newAsyncApp` that is never run
+      ## does not leak a selector fd) and closed in `runAsyncInner`'s
+      ## cleanup so the selector/fd resources do not outlive the app
+      ## instance.
     config: AppConfig
     handlers: AsyncAppHandlers
     timings: AsyncAppTimings
@@ -287,11 +294,14 @@ proc getApplicationTimeout*(app: AsyncApp): int =
 # AsyncApp Lifecycle Management
 
 proc setupAsync(app: AsyncApp) {.async.} =
+  if app.inputReader.isNil:
+    app.inputReader = newAsyncInputReader()
+
   if app.config.alternateScreen:
     app.terminal.enableAlternateScreen()
 
   if app.config.rawMode:
-    app.terminal.enableRawMode()
+    app.terminal.enableRawMode(app.inputReader)
 
   app.terminal.updateSize()
 
@@ -314,7 +324,7 @@ proc cleanupAsync(app: AsyncApp) {.async.} =
   ## ordering (raw mode before alternate screen) is defined in one place.
   ## Each underlying `disableX` is idempotent and state-gated, so calling
   ## the full sequence is safe regardless of `app.config` flags.
-  await app.terminal.cleanupAsync()
+  await app.terminal.cleanupAsync(app.inputReader)
 
 proc handleResizeAsync(app: AsyncApp) {.async.} =
   ## Handle terminal resize events asynchronously
@@ -438,7 +448,7 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
     let timeout = clampTimeout(rawTimeout, 1)
 
     # Poll for events with timeout - blocks until event arrives OR timeout expires
-    let eventsAvailable = await pollEventsAsync(timeout)
+    let eventsAvailable = await app.inputReader.pollEventsAsync(timeout)
 
     if eventsAvailable:
       app.timings.lastEventTime = getMonoTime()
@@ -456,7 +466,7 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
       var eventCount = 0
 
       while eventCount < maxEventsPerTick:
-        let eventOpt = await pollKeyAsync()
+        let eventOpt = await app.inputReader.pollKeyAsync()
         if eventOpt.isSome():
           let event = eventOpt.get()
           eventCount.inc()
@@ -553,16 +563,13 @@ proc runAsyncInner(app: AsyncApp) {.async.} =
     await app.setupAsync()
     app.state.running = true
 
-    # Initialize async event system for resize detection
-    initAsyncEventSystem()
-
     # Main async application loop
     while await app.tickAsync():
       discard
   finally:
     app.state.running = false
-    cleanupAsyncEventSystem()
     await cleanupQuietly(app)
+    app.inputReader.closeAsyncInputReader()
     when hasChronos and defined(posix):
       removeSignalHandlers(app)
 
@@ -776,13 +783,13 @@ proc suspendAsync*(app: AsyncApp) {.async.} =
   ## discard execShellCmd("vim myfile.txt")
   ## await app.resumeAsync()
   ## ```
-  await app.terminal.suspendAsync()
+  await app.terminal.suspendAsync(app.inputReader)
 
 proc resumeAsync*(app: AsyncApp) {.async.} =
   ## Resume the TUI after a `suspendAsync()` call.
   ##
   ## Restores terminal state and forces a full redraw on the next frame.
-  await app.terminal.resumeAsync()
+  await app.terminal.resumeAsync(app.inputReader)
   app.state.forceNextRender = true
 
 proc isSuspended*(app: AsyncApp): bool =

@@ -21,47 +21,27 @@ suite "AsyncInputReader Lifecycle":
     reader.closeAsyncInputReader()
     reader.closeAsyncInputReader() # Should not crash
 
-suite "Global AsyncIO Management":
-  test "initAsyncIO and cleanupAsyncIO":
-    initAsyncIO()
-    cleanupAsyncIO()
+suite "AsyncIO Buffer Operations":
+  test "clearBuffer is safe":
+    let reader = newAsyncInputReader()
+    reader.clearBuffer()
+    reader.closeAsyncInputReader()
 
-  test "initialization and cleanup are idempotent":
-    initAsyncIO()
-    initAsyncIO()
-    cleanupAsyncIO()
-    cleanupAsyncIO()
+  test "bufferStats returns valid data":
+    let reader = newAsyncInputReader()
+    let stats = reader.bufferStats()
+    check stats.size >= 0
+    reader.closeAsyncInputReader()
 
-  test "global functions that don't require reader creation":
-    initAsyncIO()
-    clearInputBuffer()
+  test "clearBuffer with nil reader is a no-op":
+    var reader: AsyncInputReader = nil
+    reader.clearBuffer()
 
-    let stats = getInputBufferStats()
-    check(stats.size >= 0)
-    check(stats.available == true or stats.available == false)
-
-    cleanupAsyncIO()
-
-  test "error handling with no global reader":
-    cleanupAsyncIO()
-
-    clearInputBuffer()
-
-    let stats = getInputBufferStats()
+  test "bufferStats with nil reader returns defaults":
+    var reader: AsyncInputReader = nil
+    let stats = reader.bufferStats()
     check(stats.size == 0)
     check(stats.available == false)
-
-suite "AsyncIO Buffer Operations":
-  test "clearInputBuffer is safe":
-    initAsyncIO()
-    clearInputBuffer()
-    cleanupAsyncIO()
-
-  test "getInputBufferStats returns valid data":
-    initAsyncIO()
-    let stats = getInputBufferStats()
-    check stats.size >= 0
-    cleanupAsyncIO()
 
 suite "Async Output Functions":
   test "writeStdoutAsync writes data":
@@ -92,29 +72,29 @@ suite "Async Cursor Control":
     waitFor showCursorAsync()
 
 suite "Async Input Functions":
-  test "hasInputAsync with nil reader auto-initializes":
-    cleanupAsyncIO()
-    let hasInput = waitFor hasInputAsync(0)
-    check hasInput == true or hasInput == false
+  test "hasInputAsync with nil reader returns false":
+    var reader: AsyncInputReader = nil
+    let hasInput = waitFor reader.hasInputAsync(0)
+    check hasInput == false
 
   test "readCharAsync returns valid char":
-    initAsyncIO()
-    let ch = waitFor readCharAsync()
+    let reader = newAsyncInputReader()
+    let ch = waitFor reader.readCharAsync()
     check ch.ord >= 0
-    cleanupAsyncIO()
+    reader.closeAsyncInputReader()
 
   test "peekCharAsync doesn't consume buffer":
-    initAsyncIO()
-    let ch1 = waitFor peekCharAsync()
-    let ch2 = waitFor peekCharAsync()
+    let reader = newAsyncInputReader()
+    let ch1 = waitFor reader.peekCharAsync()
+    let ch2 = waitFor reader.peekCharAsync()
     check ch1 == ch2
-    cleanupAsyncIO()
+    reader.closeAsyncInputReader()
 
   test "readStdinAsync with timeout":
-    initAsyncIO()
-    let data = waitFor readStdinAsync(1)
+    let reader = newAsyncInputReader()
+    let data = waitFor reader.readStdinAsync(1)
     check data.len >= 0
-    cleanupAsyncIO()
+    reader.closeAsyncInputReader()
 
 suite "AsyncInputReader Non-Blocking Operations":
   test "reader lifecycle":

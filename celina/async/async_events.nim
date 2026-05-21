@@ -16,26 +16,11 @@ type
   AsyncEventError* = object of CatchableError
 
   AsyncEventStream* = ref object
+    reader: AsyncInputReader
     running*: bool
     eventCallback*: proc(event: Event): Future[bool] {.async.}
     lastWidth: int ## Track last seen terminal width
     lastHeight: int ## Track last seen terminal height
-
-# Initialize async event system
-proc initAsyncEventSystem*() =
-  ## Initialize async event handling system
-  try:
-    initAsyncIO()
-  except CatchableError as e:
-    raise
-      newException(AsyncEventError, "Failed to initialize async event system: " & e.msg)
-
-proc cleanupAsyncEventSystem*() =
-  ## Cleanup async event system
-  try:
-    cleanupAsyncIO()
-  except CatchableError:
-    discard # Ignore cleanup errors
 
 # Async mouse event parsing (using shared logic from mouse_logic module)
 
@@ -52,7 +37,7 @@ proc toEvent(data: mouse_logic.MouseEventData): Event =
     ),
   )
 
-proc parseMouseEventX10(): Future[Event] {.async.} =
+proc parseMouseEventX10(reader: AsyncInputReader): Future[Event] {.async.} =
   ## Parse X10 mouse format: ESC[Mbxy
   ## where b is button byte, x,y are coordinate bytes
   ##
@@ -61,7 +46,7 @@ proc parseMouseEventX10(): Future[Event] {.async.} =
 
   # Read 3 bytes for X10 format (async I/O)
   for i in 0 .. 2:
-    let ch = await readCharAsync()
+    let ch = await reader.readCharAsync()
     if ch == '\0':
       return Event(kind: Unknown)
     data[i] = ch
@@ -69,7 +54,7 @@ proc parseMouseEventX10(): Future[Event] {.async.} =
   # Use shared parsing logic - no duplication with sync version!
   return parseMouseDataX10(data).toEvent()
 
-proc parseMouseEventSGR(): Future[Event] {.async.} =
+proc parseMouseEventSGR(reader: AsyncInputReader): Future[Event] {.async.} =
   ## Parse SGR mouse format: ESC[<button;x;y;M/m
   ## M for press, m for release
   ##
@@ -80,7 +65,7 @@ proc parseMouseEventSGR(): Future[Event] {.async.} =
 
   # Read until we get M or m, with safety limits (async I/O)
   while readCount < MaxSGRMouseReadBytes:
-    ch = await readCharAsync()
+    ch = await reader.readCharAsync()
     readCount.inc()
     if ch == '\0':
       return Event(kind: Unknown)
@@ -114,7 +99,9 @@ proc parseMouseEventSGR(): Future[Event] {.async.} =
 # pure helper directly because each continuation-byte read must `await`. The
 # semantics — including the Unicode §3.9 leftover byte for invalid
 # continuations — are kept identical; see `assembleUtf8Char` for the contract.
-proc readUtf8CharAsync(firstByte: byte): Future[Utf8AssemblyResult] {.async.} =
+proc readUtf8CharAsync(
+    reader: AsyncInputReader, firstByte: byte
+): Future[Utf8AssemblyResult] {.async.} =
   let byteLen = utf8ByteLength(firstByte)
   if byteLen == 0:
     return Utf8AssemblyResult(text: "", leftover: none(byte))
@@ -124,7 +111,7 @@ proc readUtf8CharAsync(firstByte: byte): Future[Utf8AssemblyResult] {.async.} =
 
   var continuationBytes: seq[byte] = @[]
   for i in 1 ..< byteLen:
-    let nextByte = await readCharAsync()
+    let nextByte = await reader.readCharAsync()
 
     if nextByte == '\0':
       # Truncated: nothing to push back.
@@ -147,13 +134,15 @@ proc readUtf8CharAsync(firstByte: byte): Future[Utf8AssemblyResult] {.async.} =
 # Each reader expression is `await`-wrapped so the template's repeated use
 # of the parameter becomes a fresh async byte read at each occurrence.
 
-proc readByteTupleAsync(): Future[tuple[success: bool, ch: char]] {.async.} =
+proc readByteTupleAsync(
+    reader: AsyncInputReader
+): Future[tuple[success: bool, ch: char]] {.async.} =
   ## Async adapter that exposes readCharAsync() with the same shape the
   ## unified routing template expects (sentinel '\0' becomes success=false).
-  let ch = await readCharAsync()
+  let ch = await reader.readCharAsync()
   return (success: ch != '\0', ch: ch)
 
-proc readPasteContentAsync(): Future[string] {.async.} =
+proc readPasteContentAsync(reader: AsyncInputReader): Future[string] {.async.} =
   ## Read all content until paste end sequence ESC[201~ (async mode).
   ## Uses the shared paste-end state machine from escape_sequence_logic;
   ## differs from the sync versions only in how each byte is awaited.
@@ -163,12 +152,12 @@ proc readPasteContentAsync(): Future[string] {.async.} =
 
   while true:
     # Check for data with reasonable timeout
-    let hasData = await hasInputAsync(1000) # 1 second timeout
+    let hasData = await reader.hasInputAsync(1000) # 1 second timeout
     if not hasData:
       resultStr.add(pending)
       return resultStr
 
-    let ch = await readCharAsync()
+    let ch = await reader.readCharAsync()
     if ch == '\0':
       resultStr.add(pending)
       return resultStr
@@ -177,10 +166,10 @@ proc readPasteContentAsync(): Future[string] {.async.} =
       return resultStr
 
 # Async key reading with escape sequence support
-proc readKeyAsync*(): Future[Event] {.async.} =
+proc readKeyAsync*(reader: AsyncInputReader): Future[Event] {.async.} =
   ## Read a key event asynchronously using non-blocking I/O
   try:
-    let ch = await readCharAsync()
+    let ch = await reader.readCharAsync()
 
     if ch == '\0':
       return Event(kind: Unknown)
@@ -208,22 +197,22 @@ proc readKeyAsync*(): Future[Event] {.async.} =
     # The 20ms post-ESC timeout check distinguishes standalone ESC from a
     # sequence start; if no follow-up byte arrives, return a bare ESC.
     if ch == '\x1b':
-      let hasMoreData = await hasInputAsync(20)
+      let hasMoreData = await reader.hasInputAsync(20)
       if not hasMoreData:
         return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
       return parseEscapeSequenceUnified(
-        await readByteTupleAsync(),
-        await readPasteContentAsync(),
-        await parseMouseEventX10(),
-        await parseMouseEventSGR(),
+        await reader.readByteTupleAsync(),
+        await reader.readPasteContentAsync(),
+        await reader.parseMouseEventX10(),
+        await reader.parseMouseEventSGR(),
       )
 
     # Handle regular UTF-8 characters
-    let assembly = await readUtf8CharAsync(ch.byte)
+    let assembly = await reader.readUtf8CharAsync(ch.byte)
     if assembly.leftover.isSome:
       # Resync byte: stash for the next readCharAsync to pick up as the
       # first byte of the next event (Unicode §3.9 best practice).
-      setPendingByteAsync(assembly.leftover.get)
+      reader.setPendingByteAsync(assembly.leftover.get)
     if assembly.text.len > 0:
       return Event(kind: Key, key: KeyEvent(code: Char, char: assembly.text))
     else:
@@ -237,16 +226,16 @@ proc readKeyAsync*(): Future[Event] {.async.} =
     raise newException(AsyncEventError, "Async key reading failed: " & e.msg)
 
 # Non-blocking async event reading
-proc pollKeyAsync*(): Future[Option[Event]] {.async.} =
+proc pollKeyAsync*(reader: AsyncInputReader): Future[Option[Event]] {.async.} =
   ## Poll for a key event asynchronously (non-blocking)
   try:
     # Check if input is available first
-    let hasInput = await hasInputAsync(1)
+    let hasInput = await reader.hasInputAsync(1)
     if not hasInput:
       return none(Event)
 
     # Input is available, read the event
-    let event = await readKeyAsync()
+    let event = await reader.readKeyAsync()
     if event.kind != Unknown:
       return some(event)
     else:
@@ -259,11 +248,13 @@ proc pollKeyAsync*(): Future[Option[Event]] {.async.} =
     raise newException(AsyncEventError, "Async key polling failed: " & e.msg)
 
 # Event polling with timeout
-proc pollEventsAsync*(timeoutMs: int): Future[bool] {.async.} =
+proc pollEventsAsync*(
+    reader: AsyncInputReader, timeoutMs: int
+): Future[bool] {.async.} =
   ## Poll for available events asynchronously with a timeout
   ## Returns true if events are available, false if timeout occurred
   try:
-    return await hasInputAsync(timeoutMs)
+    return await reader.hasInputAsync(timeoutMs)
   except CancelledError as e:
     # Must precede `except CatchableError` so chronos cancellation propagates
     # to the caller instead of being wrapped into AsyncEventError.
@@ -272,11 +263,11 @@ proc pollEventsAsync*(timeoutMs: int): Future[bool] {.async.} =
     raise newException(AsyncEventError, "Async event polling failed: " & e.msg)
 
 # Advanced async event waiting
-proc waitForKeyAsync*(): Future[Event] {.async.} =
+proc waitForKeyAsync*(reader: AsyncInputReader): Future[Event] {.async.} =
   ## Wait for a key press asynchronously (blocking until event)
   while true:
     try:
-      let event = await readKeyAsync()
+      let event = await reader.readKeyAsync()
       if event.kind != Unknown:
         return event
     except CancelledError as e:
@@ -289,20 +280,27 @@ proc waitForKeyAsync*(): Future[Event] {.async.} =
     # Small async sleep to prevent busy waiting
     await sleepMs(10)
 
-proc waitForAnyKeyAsync*(): Future[bool] {.async.} =
+proc waitForAnyKeyAsync*(reader: AsyncInputReader): Future[bool] {.async.} =
   ## Wait for any key press asynchronously, return true if not quit
-  let event = await waitForKeyAsync()
+  let event = await reader.waitForKeyAsync()
   return event.kind != Quit
 
 # Multiple event source handling
 
 # Async event stream
 proc newAsyncEventStream*(
-    callback: proc(event: Event): Future[bool] {.async.}
+    reader: AsyncInputReader, callback: proc(event: Event): Future[bool] {.async.}
 ): AsyncEventStream =
-  ## Create a new async event stream with callback
+  ## Create a new async event stream with callback.
+  ##
+  ## `reader` is borrowed, not owned: the caller is responsible for keeping
+  ## it alive for as long as the stream may be polling (i.e. at least until
+  ## `stream.running` is false) and for closing it afterwards via
+  ## `closeAsyncInputReader`. Closing `reader` while the stream is still
+  ## running will use-after-close the underlying selector fd.
   let termSize = getTerminalSizeOrDefault()
   return AsyncEventStream(
+    reader: reader,
     running: false,
     eventCallback: callback,
     lastWidth: termSize.width,
@@ -326,7 +324,7 @@ proc startAsync*(stream: AsyncEventStream) {.async.} =
         event = some(Event(kind: Resize))
       else:
         # Check for keyboard events
-        let keyEventOpt = await pollKeyAsync()
+        let keyEventOpt = await stream.reader.pollKeyAsync()
         if keyEventOpt.isSome():
           event = keyEventOpt
         else:
