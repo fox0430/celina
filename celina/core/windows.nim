@@ -438,19 +438,18 @@ template bindWidget*(window: Window, widget: untyped) =
   ## Whichever of the following the widget provides will be bound; the
   ## other is skipped, so this template works for both full-input widgets
   ## (e.g. `Button`, `List`) and key-only widgets (e.g. `Input`, `Table`):
-  ## - `handleKeyEvent(widget, KeyEvent): bool`
-  ## - `handleMouseEvent(widget, MouseEvent, Rect): bool`
+  ## - `handleKeyEvent(widget, KeyEvent): EventResult`
+  ## - `handleMouseEvent(widget, MouseEvent, Rect): EventResult`
   ##
-  ## A `true` return from a widget handler is treated as `erConsume`;
-  ## `false` as `erContinue`, so unhandled keys still reach the global
-  ## `app.onEvent`. The mouse area passed to the widget is the window's
-  ## `contentArea`.
+  ## The widget's `EventResult` is forwarded as-is, so `erContinue`
+  ## returns still reach the global `app.onEvent`. The mouse area passed
+  ## to the widget is the window's `contentArea`.
   when compiles(widget.handleKeyEvent(KeyEvent())):
     window.setKeyHandler proc(w: Window, k: KeyEvent): EventResult =
-      if widget.handleKeyEvent(k): erConsume else: erContinue
+      widget.handleKeyEvent(k)
   when compiles(widget.handleMouseEvent(MouseEvent(), Rect())):
     window.setMouseHandler proc(w: Window, m: MouseEvent): EventResult =
-      if widget.handleMouseEvent(m, w.contentArea): erConsume else: erContinue
+      widget.handleMouseEvent(m, w.contentArea)
 
 # Window rendering
 

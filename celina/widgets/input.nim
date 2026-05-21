@@ -46,7 +46,7 @@ type
     onEnter*: proc(text: string) # Called on Enter key
     onFocus*: proc() # Called when input gains focus
     onBlur*: proc() # Called when input loses focus
-    onKeyPress*: proc(key: KeyEvent): bool # Custom key handler
+    onKeyPress*: proc(key: KeyEvent): EventResult # Custom key handler
 
 # Border drawing utilities
 proc getBorderChars(
@@ -81,7 +81,7 @@ proc newInput*(
     onEnter: proc(text: string) = nil,
     onFocus: proc() = nil,
     onBlur: proc() = nil,
-    onKeyPress: proc(key: KeyEvent): bool = nil,
+    onKeyPress: proc(key: KeyEvent): EventResult = nil,
 ): Input =
   ## Create a new Input widget
   Input(
@@ -122,7 +122,7 @@ proc input*(
     onEnter: proc(text: string) = nil,
     onFocus: proc() = nil,
     onBlur: proc() = nil,
-    onKeyPress: proc(key: KeyEvent): bool = nil,
+    onKeyPress: proc(key: KeyEvent): EventResult = nil,
 ): Input =
   ## Convenience constructor for Input widget
   newInput(
@@ -283,16 +283,18 @@ proc selectAll*(widget: Input) =
   widget.state.cursor = textLen
 
 # Input event handling
-proc handleKeyEvent*(widget: Input, event: KeyEvent): bool =
-  ## Handle keyboard input for the input widget
-  ## Returns true if the event was handled
+proc handleKeyEvent*(widget: Input, event: KeyEvent): EventResult =
+  ## Handle keyboard input for the input widget.
+  ## Returns `erConsume` when the widget handled the key, `erContinue`
+  ## otherwise so the global handler can still see it.
   if not widget.state.focused:
-    return false
+    return erContinue
 
   # First try custom key handler
   if widget.onKeyPress != nil:
-    if widget.onKeyPress(event):
-      return true
+    let r = widget.onKeyPress(event)
+    if r != erContinue:
+      return r
 
   # Handle common key combinations
   if Ctrl in event.modifiers:
@@ -301,17 +303,14 @@ proc handleKeyEvent*(widget: Input, event: KeyEvent): bool =
       case event.char
       of "a", "A": # Ctrl+A - Select all
         widget.selectAll()
-        return true
-      of "c", "C": # Ctrl+C - Copy (handled externally)
-        return false
-      of "v", "V": # Ctrl+V - Paste (handled externally)
-        return false
-      of "x", "X": # Ctrl+X - Cut (handled externally)
-        return false
+        return erConsume
+      of "c", "C", "v", "V", "x", "X":
+        # Defer clipboard handling to the application layer.
+        return erContinue
       else:
-        return false
+        return erContinue
     else:
-      return false
+      return erContinue
 
   # Handle regular key events
   case event.code
@@ -321,27 +320,28 @@ proc handleKeyEvent*(widget: Input, event: KeyEvent): bool =
       if widget.hasSelection():
         widget.deleteSelection()
       widget.insertText(event.char)
-      return true
+      return erConsume
     else:
-      return false # Non-printable character
+      # Non-printable character — let the app decide what to do with it.
+      return erContinue
   of Enter:
     if widget.onEnter != nil:
       widget.onEnter(widget.state.text)
-      return true
+      return erConsume
   of Backspace:
     if not widget.readOnly:
       if widget.hasSelection():
         widget.deleteSelection()
       elif widget.state.cursor > 0:
         widget.deleteText(widget.state.cursor - 1, 1)
-      return true
+      return erConsume
   of Delete:
     if not widget.readOnly:
       if widget.hasSelection():
         widget.deleteSelection()
       else:
         widget.deleteText(widget.state.cursor, 1)
-      return true
+      return erConsume
   of ArrowLeft:
     if Shift in event.modifiers:
       # Extend selection
@@ -352,7 +352,7 @@ proc handleKeyEvent*(widget: Input, event: KeyEvent): bool =
     else:
       widget.clearSelection()
       widget.state.cursor = max(0, widget.state.cursor - 1)
-    return true
+    return erConsume
   of ArrowRight:
     let textLen = widget.state.text.runeLen
     if Shift in event.modifiers:
@@ -364,7 +364,7 @@ proc handleKeyEvent*(widget: Input, event: KeyEvent): bool =
     else:
       widget.clearSelection()
       widget.state.cursor = min(textLen, widget.state.cursor + 1)
-    return true
+    return erConsume
   of Home:
     if Shift in event.modifiers:
       if not widget.hasSelection():
@@ -374,7 +374,7 @@ proc handleKeyEvent*(widget: Input, event: KeyEvent): bool =
     else:
       widget.clearSelection()
       widget.state.cursor = 0
-    return true
+    return erConsume
   of End:
     let textLen = widget.state.text.runeLen
     if Shift in event.modifiers:
@@ -385,9 +385,9 @@ proc handleKeyEvent*(widget: Input, event: KeyEvent): bool =
     else:
       widget.clearSelection()
       widget.state.cursor = textLen
-    return true
+    return erConsume
   else:
-    return false
+    return erContinue
 
 # Calculate visible range and cursor position for rendering
 proc calculateVisibleRange(
@@ -730,7 +730,7 @@ proc withEventHandlers*(
     onEnter: proc(text: string) = nil,
     onFocus: proc() = nil,
     onBlur: proc() = nil,
-    onKeyPress: proc(key: KeyEvent): bool = nil,
+    onKeyPress: proc(key: KeyEvent): EventResult = nil,
 ): Input =
   ## Create a copy with different event handlers
   Input(
