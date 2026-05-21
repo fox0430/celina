@@ -103,11 +103,11 @@ proc enableRawMode*(terminal: Terminal) =
       tcsetattr(STDIN_FILENO, TCSAFLUSH, addr raw), "Failed to set raw mode"
     )
     # Capture stdin descriptor flags once and ensure O_NONBLOCK holds for the
-    # lifetime of raw mode. Per-call toggling in pollKey/readKeyInput is a
-    # TOCTOU race against any other code that touches stdin flags, and burns
-    # 3 fcntl(2) calls per tick in pollKey plus another 3 in readKeyInput
-    # when both run. Setting the pin flag here lets event readers short-circuit
-    # to zero fcntl calls per tick on the in-App fast path.
+    # lifetime of raw mode. Per-call toggling in readKeyInput is a TOCTOU race
+    # against any other code that touches stdin flags, and burns up to 3
+    # fcntl(2) calls per tick. Setting the pin flag here lets event readers
+    # short-circuit to zero fcntl calls per tick on the in-App fast path.
+    # `pollKey` delegates to `readKeyInput`, so the same fast path covers it.
     #
     # The pin flag means "event readers may assume stdin is non-blocking for
     # the duration of raw mode" — it does not necessarily mean *this* call

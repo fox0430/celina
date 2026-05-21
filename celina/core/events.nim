@@ -435,34 +435,6 @@ proc readKey*(): Event =
   except IOError:
     return Event(kind: Unknown)
 
-# Polling key reading
-proc pollKey*(): Event =
-  ## Poll for a key event (non-blocking)
-  # When called inside an active raw-mode session, Terminal.enableRawMode has
-  # already pinned stdin to non-blocking and flipped stdinNonBlockingPinned.
-  # We skip every fcntl(2) call on that path. Standalone callers (e.g. tests
-  # outside an App) still get the legacy auto-toggle.
-  if stdinNonBlockingPinned:
-    return readKey()
-
-  let flags = fcntl(STDIN_FILENO, F_GETFL)
-  if flags == -1:
-    # F_GETFL failure means we can't safely flip stdin into non-blocking mode.
-    # Falling through to readKey() here would issue a blocking read and hang
-    # the event loop, so surface the probe failure as Unknown. The caller's
-    # next tick retries; no fd state was mutated.
-    return Event(kind: Unknown)
-  let needToggle = (flags and O_NONBLOCK) == 0
-  if needToggle:
-    discard fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK)
-
-  let event = readKey()
-
-  if needToggle:
-    discard fcntl(STDIN_FILENO, F_SETFL, flags)
-
-  return event
-
 # File descriptor management helpers
 type FdFlags = object ## RAII-style file descriptor flags manager
   fd: cint
@@ -714,6 +686,19 @@ proc readKeyInput*(): Option[Event] =
   else:
     # Invalid UTF-8 start byte — emit U+FFFD (KeyEvent.char invariant).
     return some(Event(kind: Key, key: KeyEvent(code: Char, char: Utf8ReplacementChar)))
+
+proc pollKey*(): Event =
+  ## Poll for a key event (non-blocking).
+  ##
+  ## Thin wrapper over `readKeyInput` that collapses `none(Event)` to
+  ## `Event(kind: Unknown)`. All fcntl management (raw-mode pin fast-path,
+  ## standalone auto-toggle, F_GETFL failure handling) lives in `readKeyInput`
+  ## so the two entry points cannot drift apart in behavior or syscall cost.
+  let opt = readKeyInput()
+  if opt.isSome:
+    opt.get
+  else:
+    Event(kind: Unknown)
 
 # Check if input is available
 proc hasInput*(): bool =
