@@ -246,40 +246,40 @@ suite "List Widget Tests":
 
     # Arrow down
     let downEvent = KeyEvent(code: ArrowDown, char: "", modifiers: {})
-    check listWidget.handleKeyEvent(downEvent) == true
+    check listWidget.handleKeyEvent(downEvent) == erConsume
     check listWidget.highlightedIndex == 1
 
     # Arrow up
     let upEvent = KeyEvent(code: ArrowUp, char: "", modifiers: {})
-    check listWidget.handleKeyEvent(upEvent) == true
+    check listWidget.handleKeyEvent(upEvent) == erConsume
     check listWidget.highlightedIndex == 0
 
     # Vim keys
     let jEvent = KeyEvent(code: Char, char: "j", modifiers: {})
-    check listWidget.handleKeyEvent(jEvent) == true
+    check listWidget.handleKeyEvent(jEvent) == erConsume
     check listWidget.highlightedIndex == 1
 
     let kEvent = KeyEvent(code: Char, char: "k", modifiers: {})
-    check listWidget.handleKeyEvent(kEvent) == true
+    check listWidget.handleKeyEvent(kEvent) == erConsume
     check listWidget.highlightedIndex == 0
 
     # Enter to select
     let enterEvent = KeyEvent(code: Enter, char: "", modifiers: {})
-    check listWidget.handleKeyEvent(enterEvent) == true
+    check listWidget.handleKeyEvent(enterEvent) == erConsume
     check listWidget.selectedIndices == @[0]
 
     # Home/End
     let endEvent = KeyEvent(code: End, char: "", modifiers: {})
-    check listWidget.handleKeyEvent(endEvent) == true
+    check listWidget.handleKeyEvent(endEvent) == erConsume
     check listWidget.highlightedIndex == 2
 
     let homeEvent = KeyEvent(code: Home, char: "", modifiers: {})
-    check listWidget.handleKeyEvent(homeEvent) == true
+    check listWidget.handleKeyEvent(homeEvent) == erConsume
     check listWidget.highlightedIndex == 0
 
     # Disabled list shouldn't respond
     listWidget.setState(Disabled)
-    check listWidget.handleKeyEvent(downEvent) == false
+    check listWidget.handleKeyEvent(downEvent) == erContinue
 
   test "Mouse event handling":
     # Test mouse input
@@ -294,13 +294,13 @@ suite "List Widget Tests":
 
     # Click on first item
     let clickEvent = MouseEvent(kind: Press, button: Left, x: 15, y: 5, modifiers: {})
-    check listWidget.handleMouseEvent(clickEvent, area) == true
+    check listWidget.handleMouseEvent(clickEvent, area) == erConsume
     check listWidget.highlightedIndex == 0
 
     # Release to select
     let releaseEvent =
       MouseEvent(kind: Release, button: Left, x: 15, y: 5, modifiers: {})
-    check listWidget.handleMouseEvent(releaseEvent, area) == true
+    check listWidget.handleMouseEvent(releaseEvent, area) == erConsume
     check listWidget.selectedIndices == @[0]
 
     # Click outside bounds
@@ -311,21 +311,21 @@ suite "List Widget Tests":
       y: 5,
       modifiers: {},
     )
-    check listWidget.handleMouseEvent(outsideEvent, area) == false
+    check listWidget.handleMouseEvent(outsideEvent, area) == erContinue
 
     # Wheel scrolling
     # Reset scroll offset for wheel test
     listWidget.scrollOffset = 5
     let wheelUpEvent =
       MouseEvent(kind: Press, button: WheelUp, x: 15, y: 7, modifiers: {})
-    check listWidget.handleMouseEvent(wheelUpEvent, area) == true
+    check listWidget.handleMouseEvent(wheelUpEvent, area) == erConsume
     check listWidget.scrollOffset == 4
 
     # Reset again for down test
     listWidget.scrollOffset = 4
     let wheelDownEvent =
       MouseEvent(kind: Press, button: WheelDown, x: 15, y: 7, modifiers: {})
-    check listWidget.handleMouseEvent(wheelDownEvent, area) == true
+    check listWidget.handleMouseEvent(wheelDownEvent, area) == erConsume
     check listWidget.scrollOffset == 5
 
   test "Multi-select with Ctrl+Click":

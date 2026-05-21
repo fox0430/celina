@@ -383,73 +383,73 @@ proc fullPageDown*(widget: Table) =
         break
 
 # Event handling for vim-like navigation
-proc handleKeyEvent*(widget: Table, event: KeyEvent): bool =
-  ## Handle keyboard input for the table with vim-like navigation
-  ## Returns true if the event was handled
+proc handleKeyEvent*(widget: Table, event: KeyEvent): EventResult =
+  ## Handle keyboard input for the table with vim-like navigation.
+  ## Returns `erConsume` when the table reacted to the event, `erContinue`
+  ## otherwise.
   if widget.rows.len == 0:
-    return false
+    return erContinue
 
   case event.code
   of ArrowUp:
     widget.highlightPrevious()
-    return true
+    return erConsume
   of ArrowDown:
     widget.highlightNext()
-    return true
+    return erConsume
   of ArrowLeft, ArrowRight:
-    # Could be used for horizontal scrolling in future
-    return false
+    # Reserved for future horizontal scrolling — propagate for now.
+    return erContinue
   of Home:
     widget.highlightFirst()
-    return true
+    return erConsume
   of End:
     widget.highlightLast()
-    return true
+    return erConsume
   of PageUp:
     widget.fullPageUp()
-    return true
+    return erConsume
   of PageDown:
     widget.fullPageDown()
-    return true
+    return erConsume
   of Enter, Space:
     if widget.highlightedIndex >= 0 and widget.selectionMode != None:
       if event.code == Space and widget.selectionMode == Multiple:
         widget.toggleSelection(widget.highlightedIndex)
       else:
         widget.selectRow(widget.highlightedIndex)
-      return true
+      return erConsume
   of Char:
     case event.char
     # Vim-like navigation
     of "j": # Down
       widget.highlightNext()
-      return true
+      return erConsume
     of "k": # Up
       widget.highlightPrevious()
-      return true
+      return erConsume
     of "g": # Go to first (gg in vim, but single g for simplicity)
       widget.highlightFirst()
-      return true
+      return erConsume
     of "G": # Go to last
       widget.highlightLast()
-      return true
-    of "h": # Left (could be used for horizontal scrolling)
-      return false
-    of "l": # Right (could be used for horizontal scrolling)
-      return false
+      return erConsume
+    of "h", "l":
+      # Reserved for future horizontal scrolling — propagate for now.
+      return erContinue
     # Vim-like scrolling
     of "u": # Half page up (Ctrl-U in vim)
       widget.pageUp()
-      return true
+      return erConsume
     of "d": # Half page down (Ctrl-D in vim)
       widget.pageDown()
-      return true
+      return erConsume
     of "b": # Full page up (Ctrl-B in vim)
       widget.fullPageUp()
-      return true
+      return erConsume
     of "f": # Full page down (Ctrl-F in vim)
       widget.fullPageDown()
-      return true
+      return erConsume
     # Selection
     of " ": # Space for selection
       if widget.highlightedIndex >= 0 and widget.selectionMode != None:
@@ -457,21 +457,21 @@ proc handleKeyEvent*(widget: Table, event: KeyEvent): bool =
           widget.toggleSelection(widget.highlightedIndex)
         else:
           widget.selectRow(widget.highlightedIndex)
-        return true
+        return erConsume
     of "v": # Visual mode toggle (for multiple selection)
       if widget.highlightedIndex >= 0 and widget.selectionMode == Multiple:
         widget.toggleSelection(widget.highlightedIndex)
-        return true
+        return erConsume
     else:
-      return false
+      return erContinue
   of Escape:
     # Clear selection on Escape
     if widget.selectedIndices.len > 0:
       widget.clearSelection()
-      return true
-    return false
+      return erConsume
+    return erContinue
   else:
-    return false
+    return erContinue
 
 # Utility functions for table layout
 proc calculateColumnWidths*(widget: Table, availableWidth: int): seq[int] =

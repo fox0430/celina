@@ -135,7 +135,7 @@ proc main() =
         discard
 
       # Let the table handle vim-like navigation and other keys
-      if tableWidget.handleKeyEvent(event.key):
+      if tableWidget.handleKeyEvent(event.key) == erConsume:
         return erContinue
     else:
       discard

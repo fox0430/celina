@@ -34,7 +34,7 @@ type
     onMouseLeave*: proc() # Callback when mouse leaves button
     onFocus*: proc() # Callback when button receives focus
     onBlur*: proc() # Callback when button loses focus
-    onKeyPress*: proc(key: KeyEvent): bool # Callback for key press events
+    onKeyPress*: proc(key: KeyEvent): EventResult # Callback for key press events
 
 # Button widget constructors
 proc newButton*(
@@ -51,7 +51,7 @@ proc newButton*(
     onMouseLeave: proc() = nil,
     onFocus: proc() = nil,
     onBlur: proc() = nil,
-    onKeyPress: proc(key: KeyEvent): bool = nil,
+    onKeyPress: proc(key: KeyEvent): EventResult = nil,
 ): Button =
   ## Create a new Button widget
   Button(
@@ -87,7 +87,7 @@ proc button*(
     onMouseLeave: proc() = nil,
     onFocus: proc() = nil,
     onBlur: proc() = nil,
-    onKeyPress: proc(key: KeyEvent): bool = nil,
+    onKeyPress: proc(key: KeyEvent): EventResult = nil,
 ): Button =
   ## Convenience constructor for Button widget
   newButton(
@@ -143,16 +143,18 @@ proc handleClick*(widget: Button) =
   if widget.enabled and widget.onClick != nil:
     widget.onClick()
 
-proc handleKeyEvent*(widget: Button, event: KeyEvent): bool =
-  ## Handle keyboard input for the button
-  ## Returns true if the event was handled
+proc handleKeyEvent*(widget: Button, event: KeyEvent): EventResult =
+  ## Handle keyboard input for the button.
+  ## Returns `erConsume` when the button reacts to the event, `erContinue`
+  ## otherwise so the global handler can still see it.
   if not widget.enabled:
-    return false
+    return erContinue
 
   # First try custom key handler
   if widget.onKeyPress != nil:
-    if widget.onKeyPress(event):
-      return true
+    let r = widget.onKeyPress(event)
+    if r != erContinue:
+      return r
 
   # Default key handling
   case event.code
@@ -160,15 +162,16 @@ proc handleKeyEvent*(widget: Button, event: KeyEvent): bool =
     widget.setState(Pressed)
     widget.handleClick()
     widget.setState(if widget.state == Focused: Focused else: Normal)
-    return true
+    return erConsume
   else:
-    return false
+    return erContinue
 
-proc handleMouseEvent*(widget: Button, event: MouseEvent, area: Rect): bool =
-  ## Handle mouse input for the button
-  ## Returns true if the event was handled
+proc handleMouseEvent*(widget: Button, event: MouseEvent, area: Rect): EventResult =
+  ## Handle mouse input for the button.
+  ## Returns `erConsume` when the event affected the button, `erContinue`
+  ## otherwise.
   if not widget.enabled:
-    return false
+    return erContinue
 
   # Check if mouse is within button bounds
   let mouseInBounds =
@@ -180,16 +183,16 @@ proc handleMouseEvent*(widget: Button, event: MouseEvent, area: Rect): bool =
     of Press:
       if event.button == Left:
         widget.setState(Pressed)
-        return true
+        return erConsume
     of Release:
       if event.button == Left and widget.state == Pressed:
         widget.setState(Hovered)
         widget.handleClick()
-        return true
+        return erConsume
     of Move:
       if widget.state != Pressed:
         widget.setState(Hovered)
-      return true
+      return erConsume
     else:
       discard
   else:
@@ -197,7 +200,7 @@ proc handleMouseEvent*(widget: Button, event: MouseEvent, area: Rect): bool =
     if widget.state == Hovered:
       widget.setState(Normal)
 
-  return false
+  return erContinue
 
 # Button styling utilities
 proc getCurrentStyle*(widget: Button): Style =
@@ -381,7 +384,7 @@ proc withEventHandlers*(
     onMouseLeave: proc() = nil,
     onFocus: proc() = nil,
     onBlur: proc() = nil,
-    onKeyPress: proc(key: KeyEvent): bool = nil,
+    onKeyPress: proc(key: KeyEvent): EventResult = nil,
 ): Button =
   ## Create a copy with different event handlers
   Button(

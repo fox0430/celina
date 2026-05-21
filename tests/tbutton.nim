@@ -100,7 +100,7 @@ suite "Button Widget Tests":
       let enterEvent = KeyEvent(code: Enter, char: "", modifiers: {})
 
       let handled = btn.handleKeyEvent(enterEvent)
-      check handled == true
+      check handled == erConsume
       check clickCount == 1
 
     test "Keyboard event handling - Space key":
@@ -113,22 +113,22 @@ suite "Button Widget Tests":
       let spaceEvent = KeyEvent(code: Space, char: " ", modifiers: {})
 
       let handled = btn.handleKeyEvent(spaceEvent)
-      check handled == true
+      check handled == erConsume
       check clickCount == 1
 
     test "Custom key press handler":
       var customKeyPressed = false
       var btn = newButton("Test")
-      btn.onKeyPress = proc(key: KeyEvent): bool =
+      btn.onKeyPress = proc(key: KeyEvent): EventResult =
         if key.code == Char and key.char == "x":
           customKeyPressed = true
-          return true
-        return false
+          return erConsume
+        return erContinue
 
       let customEvent = KeyEvent(code: Char, char: "x", modifiers: {})
 
       let handled = btn.handleKeyEvent(customEvent)
-      check handled == true
+      check handled == erConsume
       check customKeyPressed == true
 
   suite "Button Event Callbacks Tests":
@@ -178,7 +178,7 @@ suite "Button Widget Tests":
         MouseEvent(kind: Press, button: Left, x: 15, y: 11, modifiers: {})
 
       let pressHandled = btn.handleMouseEvent(pressEvent, area)
-      check pressHandled == true
+      check pressHandled == erConsume
       check btn.state == Pressed
 
       # Mouse release
@@ -186,7 +186,7 @@ suite "Button Widget Tests":
         MouseEvent(kind: Release, button: Left, x: 15, y: 11, modifiers: {})
 
       let releaseHandled = btn.handleMouseEvent(releaseEvent, area)
-      check releaseHandled == true
+      check releaseHandled == erConsume
       check clickCount == 1
 
     test "Mouse click outside bounds":
@@ -207,7 +207,7 @@ suite "Button Widget Tests":
       )
 
       let handled = btn.handleMouseEvent(pressEvent, area)
-      check handled == false
+      check handled == erContinue
       check clickCount == 0
 
   suite "Button Text and Styling Tests":

@@ -285,58 +285,60 @@ proc pageDown*(widget: List) =
     widget.scrollDown(widget.visibleCount)
 
 # Event handling
-proc handleKeyEvent*(widget: List, event: KeyEvent): bool =
-  ## Handle keyboard input for the list
-  ## Returns true if the event was handled
+proc handleKeyEvent*(widget: List, event: KeyEvent): EventResult =
+  ## Handle keyboard input for the list.
+  ## Returns `erConsume` when the list reacted to the event, `erContinue`
+  ## otherwise.
   if not widget.isEnabled():
-    return false
+    return erContinue
 
   case event.code
   of ArrowUp:
     widget.highlightPrevious()
-    return true
+    return erConsume
   of ArrowDown:
     widget.highlightNext()
-    return true
+    return erConsume
   of Char:
     case event.char
     of "k":
       widget.highlightPrevious()
-      return true
+      return erConsume
     of "j":
       widget.highlightNext()
-      return true
+      return erConsume
     else:
       discard
   of Home:
     widget.highlightFirst()
-    return true
+    return erConsume
   of End:
     widget.highlightLast()
-    return true
+    return erConsume
   of PageUp:
     widget.pageUp()
-    return true
+    return erConsume
   of PageDown:
     widget.pageDown()
-    return true
+    return erConsume
   of Enter, Space:
     if widget.selectionMode != None and widget.highlightedIndex >= 0:
       if widget.selectionMode == Multiple and event.code == Space:
         widget.toggleSelection(widget.highlightedIndex)
       else:
         widget.selectItem(widget.highlightedIndex)
-      return true
+      return erConsume
   else:
     discard
 
-  return false
+  return erContinue
 
-proc handleMouseEvent*(widget: List, event: MouseEvent, area: Rect): bool =
-  ## Handle mouse input for the list
-  ## Returns true if the event was handled
+proc handleMouseEvent*(widget: List, event: MouseEvent, area: Rect): EventResult =
+  ## Handle mouse input for the list.
+  ## Returns `erConsume` when the event affected the list, `erContinue`
+  ## otherwise.
   if not widget.isEnabled():
-    return false
+    return erContinue
 
   # Check if mouse is within list bounds for scrolling
   let inBounds =
@@ -347,14 +349,14 @@ proc handleMouseEvent*(widget: List, event: MouseEvent, area: Rect): bool =
   if event.kind == Press:
     if event.button == WheelUp:
       widget.scrollUp()
-      return true
+      return erConsume
     elif event.button == WheelDown:
       widget.scrollDown()
-      return true
+      return erConsume
 
   # Other events require mouse to be in bounds
   if not inBounds:
-    return false
+    return erContinue
 
   let itemIndex = widget.scrollOffset + (event.y - area.y)
 
@@ -366,7 +368,7 @@ proc handleMouseEvent*(widget: List, event: MouseEvent, area: Rect): bool =
         widget.highlightedIndex = itemIndex
         if widget.onHighlight != nil:
           widget.onHighlight(itemIndex)
-        return true
+        return erConsume
     of Release:
       if event.button == Left:
         if widget.selectionMode != None:
@@ -374,11 +376,11 @@ proc handleMouseEvent*(widget: List, event: MouseEvent, area: Rect): bool =
             widget.toggleSelection(itemIndex)
           else:
             widget.selectItem(itemIndex)
-        return true
+        return erConsume
     else:
       discard
 
-  return false
+  return erContinue
 
 # Rendering utilities
 proc getItemStyle*(widget: List, index: int): Style =

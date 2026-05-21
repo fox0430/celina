@@ -218,7 +218,7 @@ suite "Input Widget Tests":
       var input = newInput()
       input.setFocus(true)
       let event = KeyEvent(code: Char, char: "A", modifiers: {})
-      check input.handleKeyEvent(event) == true
+      check input.handleKeyEvent(event) == erConsume
       check input.getText() == "A"
       check input.state.cursor == 1
 
@@ -228,7 +228,7 @@ suite "Input Widget Tests":
       input.setText("Hello World")
       input.state.selection = (0, 6)
       let event = KeyEvent(code: Char, char: "X", modifiers: {})
-      check input.handleKeyEvent(event) == true
+      check input.handleKeyEvent(event) == erConsume
       check input.getText() == "XWorld"
       check input.state.cursor == 1
 
@@ -238,7 +238,7 @@ suite "Input Widget Tests":
       input.setText("Hello")
       input.setCursor(5)
       let event = KeyEvent(code: Backspace, modifiers: {})
-      check input.handleKeyEvent(event) == true
+      check input.handleKeyEvent(event) == erConsume
       check input.getText() == "Hell"
       check input.state.cursor == 4
 
@@ -248,7 +248,7 @@ suite "Input Widget Tests":
       input.setText("Hello World")
       input.state.selection = (0, 6)
       let event = KeyEvent(code: Backspace, modifiers: {})
-      check input.handleKeyEvent(event) == true
+      check input.handleKeyEvent(event) == erConsume
       check input.getText() == "World"
       check input.state.cursor == 0
 
@@ -258,7 +258,7 @@ suite "Input Widget Tests":
       input.setText("Hello")
       input.setCursor(2)
       let event = KeyEvent(code: Delete, modifiers: {})
-      check input.handleKeyEvent(event) == true
+      check input.handleKeyEvent(event) == erConsume
       check input.getText() == "Helo"
       check input.state.cursor == 2
 
@@ -269,11 +269,11 @@ suite "Input Widget Tests":
       input.setCursor(3)
 
       let leftEvent = KeyEvent(code: ArrowLeft, modifiers: {})
-      check input.handleKeyEvent(leftEvent) == true
+      check input.handleKeyEvent(leftEvent) == erConsume
       check input.state.cursor == 2
 
       let rightEvent = KeyEvent(code: ArrowRight, modifiers: {})
-      check input.handleKeyEvent(rightEvent) == true
+      check input.handleKeyEvent(rightEvent) == erConsume
       check input.state.cursor == 3
 
     test "Home and End keys":
@@ -283,11 +283,11 @@ suite "Input Widget Tests":
       input.setCursor(5)
 
       let homeEvent = KeyEvent(code: Home, modifiers: {})
-      check input.handleKeyEvent(homeEvent) == true
+      check input.handleKeyEvent(homeEvent) == erConsume
       check input.state.cursor == 0
 
       let endEvent = KeyEvent(code: End, modifiers: {})
-      check input.handleKeyEvent(endEvent) == true
+      check input.handleKeyEvent(endEvent) == erConsume
       check input.state.cursor == 11
 
     test "Selection with shift+arrow":
@@ -297,11 +297,11 @@ suite "Input Widget Tests":
       input.setCursor(2)
 
       let rightEvent = KeyEvent(code: ArrowRight, modifiers: {Shift})
-      check input.handleKeyEvent(rightEvent) == true
+      check input.handleKeyEvent(rightEvent) == erConsume
       check input.state.cursor == 3
       check input.state.selection == (2, 3)
 
-      check input.handleKeyEvent(rightEvent) == true
+      check input.handleKeyEvent(rightEvent) == erConsume
       check input.state.cursor == 4
       check input.state.selection == (2, 4)
 
@@ -310,7 +310,7 @@ suite "Input Widget Tests":
       input.setFocus(true)
       input.setText("Hello World")
       let event = KeyEvent(code: Char, char: "a", modifiers: {Ctrl})
-      check input.handleKeyEvent(event) == true
+      check input.handleKeyEvent(event) == erConsume
       check input.getSelection() == (0, 11)
       check input.state.cursor == 11
 
@@ -323,27 +323,27 @@ suite "Input Widget Tests":
       input.setFocus(true)
       input.setText("Hello")
       let event = KeyEvent(code: Enter, modifiers: {})
-      check input.handleKeyEvent(event) == true
+      check input.handleKeyEvent(event) == erConsume
       check enterText == "Hello"
 
     test "Custom key handler":
       var customHandled = false
       var input = newInput(
-        onKeyPress = proc(key: KeyEvent): bool =
+        onKeyPress = proc(key: KeyEvent): EventResult =
           if key.code == Escape:
             customHandled = true
-            return true
-          return false
+            return erConsume
+          return erContinue
       )
       input.setFocus(true)
 
       let escEvent = KeyEvent(code: Escape, modifiers: {})
-      check input.handleKeyEvent(escEvent) == true
+      check input.handleKeyEvent(escEvent) == erConsume
       check customHandled == true
 
       customHandled = false
       let charEvent = KeyEvent(code: Char, char: "A", modifiers: {})
-      check input.handleKeyEvent(charEvent) == true
+      check input.handleKeyEvent(charEvent) == erConsume
       check customHandled == false
       check input.getText() == "A"
 
@@ -351,7 +351,7 @@ suite "Input Widget Tests":
       var input = newInput()
       input.setText("Hello")
       let event = KeyEvent(code: Char, char: "A", modifiers: {})
-      check input.handleKeyEvent(event) == false
+      check input.handleKeyEvent(event) == erContinue
       check input.getText() == "Hello"
 
     test "Read-only input ignores modification":
@@ -360,11 +360,11 @@ suite "Input Widget Tests":
       input.setText("Hello")
 
       let charEvent = KeyEvent(code: Char, char: "A", modifiers: {})
-      check input.handleKeyEvent(charEvent) == false
+      check input.handleKeyEvent(charEvent) == erContinue
       check input.getText() == "Hello"
 
       let backspaceEvent = KeyEvent(code: Backspace, modifiers: {})
-      check input.handleKeyEvent(backspaceEvent) == false
+      check input.handleKeyEvent(backspaceEvent) == erContinue
       check input.getText() == "Hello"
 
   suite "Password Mode Tests":

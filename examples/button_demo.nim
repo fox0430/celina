@@ -57,7 +57,7 @@ proc main() =
       let btnY = (lastBufferHeight - buttonHeight) div 2
       let btnArea = rect(btnX, btnY, buttonWidth, buttonHeight)
 
-      if btn.handleMouseEvent(event.mouse, btnArea):
+      if btn.handleMouseEvent(event.mouse, btnArea) == erConsume:
         # Button handled the event
         discard
     of EventKind.Resize:

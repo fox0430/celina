@@ -764,9 +764,9 @@ suite "Window Event System Tests":
     type KeyOnlyWidget = ref object
       called: bool
 
-    proc handleKeyEvent(w: KeyOnlyWidget, k: KeyEvent): bool =
+    proc handleKeyEvent(w: KeyOnlyWidget, k: KeyEvent): EventResult =
       w.called = true
-      true
+      erConsume
 
     let widget = KeyOnlyWidget()
     let window = newWindow(rect(0, 0, 30, 20), "Key-only")
@@ -783,13 +783,13 @@ suite "Window Event System Tests":
     type FullWidget = ref object
       keyCalled, mouseCalled: bool
 
-    proc handleKeyEvent(w: FullWidget, k: KeyEvent): bool =
+    proc handleKeyEvent(w: FullWidget, k: KeyEvent): EventResult =
       w.keyCalled = true
-      true
+      erConsume
 
-    proc handleMouseEvent(w: FullWidget, m: MouseEvent, area: Rect): bool =
+    proc handleMouseEvent(w: FullWidget, m: MouseEvent, area: Rect): EventResult =
       w.mouseCalled = true
-      true
+      erConsume
 
     let widget = FullWidget()
     let window = newWindow(rect(0, 0, 30, 20), "Full")
