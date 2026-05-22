@@ -10,7 +10,7 @@ from async_io import AsyncInputReader, newAsyncInputReader, closeAsyncInputReade
 import
   ../core/[
     geometry, buffer, events, fps, config, tick_common, cursor, terminal,
-    terminal_common, errors, windows, app,
+    terminal_common, errors, windows, app, app_delegation, app_handlers,
   ]
 
 export config
@@ -58,14 +58,8 @@ type
 
   AsyncAppError* = object of CatchableError
 
-proc `$`*(app: AsyncApp): string =
-  ## String representation of AsyncApp for debugging
-  let windowCount =
-    if app.state.windowMode and not app.windowManager.isNil:
-      app.windowManager.windows.len
-    else:
-      0
-  &"AsyncApp(running: {app.state.running}, fps: {app.fpsMonitor.getCurrentFps():.1f}, frames: {app.timings.frameCounter}, windows: {windowCount}, config: {app.config})"
+# Generated: `$`
+defineShow(AsyncApp)
 
 # AsyncApp Creation and Configuration
 
@@ -148,13 +142,9 @@ proc onEventAsync*(
   ##     return erQuit
   ##   return erContinue
   ## ```
-  app.handlers.event =
-    if handler.isNil:
-      nil
-    else:
-      let captured = handler
-      proc(event: Event, app: AsyncApp): Future[EventResult] {.async.} =
-        return await captured(event)
+  app.handlers.event = wrapHandler(handler):
+    proc(event: Event, app: AsyncApp): Future[EventResult] {.async.} =
+      return await captured(event)
 
 proc onEventAsync*(
     app: AsyncApp,
@@ -170,14 +160,10 @@ proc onEventAsync*(
   ## Legacy `bool`-returning overload. `false` -> `erQuit`,
   ## `true` -> `erContinue`. Prefer the `EventResult`-returning overload;
   ## see its docstring for example usage.
-  app.handlers.event =
-    if handler.isNil:
-      nil
-    else:
-      let captured = handler
-      proc(event: Event, app: AsyncApp): Future[EventResult] {.async.} =
-        let cont = await captured(event)
-        return if cont: erContinue else: erQuit
+  app.handlers.event = wrapHandler(handler):
+    proc(event: Event, app: AsyncApp): Future[EventResult] {.async.} =
+      let cont = await captured(event)
+      return if cont: erContinue else: erQuit
 
 proc onEventAsync*(
     app: AsyncApp, handler: proc(event: Event, app: AsyncApp): Future[bool] {.async.}
@@ -185,14 +171,10 @@ proc onEventAsync*(
   ## Legacy `bool`-returning overload with `AsyncApp` context.
   ## `false` -> `erQuit`, `true` -> `erContinue`. Prefer the
   ## `EventResult`-returning overload in new code.
-  app.handlers.event =
-    if handler.isNil:
-      nil
-    else:
-      let captured = handler
-      proc(event: Event, app: AsyncApp): Future[EventResult] {.async.} =
-        let cont = await captured(event, app)
-        return if cont: erContinue else: erQuit
+  app.handlers.event = wrapHandler(handler):
+    proc(event: Event, app: AsyncApp): Future[EventResult] {.async.} =
+      let cont = await captured(event, app)
+      return if cont: erContinue else: erQuit
 
 proc onRenderAsync*(app: AsyncApp, handler: proc(buffer: var Buffer)) =
   ## Set the render handler for the application
@@ -208,13 +190,9 @@ proc onRenderAsync*(app: AsyncApp, handler: proc(buffer: var Buffer)) =
   ## app.onRenderAsync proc(buffer: var Buffer) =
   ##   buffer.setString(10, 5, "Hello!", defaultStyle())
   ## ```
-  app.handlers.render =
-    if handler.isNil:
-      nil
-    else:
-      let captured = handler
-      proc(buffer: var Buffer, app: AsyncApp) =
-        captured(buffer)
+  app.handlers.render = wrapHandler(handler):
+    proc(buffer: var Buffer, app: AsyncApp) =
+      captured(buffer)
 
 proc onRenderAsync*(app: AsyncApp, handler: proc(buffer: var Buffer, app: AsyncApp)) =
   ## Set the render handler with AsyncApp context for the application
@@ -235,13 +213,9 @@ proc onTickAsync*(app: AsyncApp, handler: proc(): Future[bool] {.async.}) =
   ## Set the async tick handler called each frame between event processing and rendering.
   ##
   ## Return true to continue running, false to quit.
-  app.handlers.tick =
-    if handler.isNil:
-      nil
-    else:
-      let captured = handler
-      proc(app: AsyncApp): Future[bool] {.async.} =
-        return await captured()
+  app.handlers.tick = wrapHandler(handler):
+    proc(app: AsyncApp): Future[bool] {.async.} =
+      return await captured()
 
 proc onTickAsync*(app: AsyncApp, handler: proc(app: AsyncApp): Future[bool] {.async.}) =
   ## Set the async tick handler with AsyncApp context called each frame between event processing and rendering.
@@ -259,13 +233,9 @@ proc onTimeoutAsync*(app: AsyncApp, handler: proc(): Future[bool] {.async.}) =
   ##
   ## For access to the AsyncApp object, use the overload that accepts
   ## `proc(app: AsyncApp): Future[bool]` instead.
-  app.handlers.timeout =
-    if handler.isNil:
-      nil
-    else:
-      let captured = handler
-      proc(app: AsyncApp): Future[bool] {.async.} =
-        return await captured()
+  app.handlers.timeout = wrapHandler(handler):
+    proc(app: AsyncApp): Future[bool] {.async.} =
+      return await captured()
 
 proc onTimeoutAsync*(
     app: AsyncApp, handler: proc(app: AsyncApp): Future[bool] {.async.}
@@ -277,19 +247,8 @@ proc onTimeoutAsync*(
   ## false to quit the application.
   app.handlers.timeout = handler
 
-proc setApplicationTimeout*(app: AsyncApp, timeoutMs: int) =
-  ## Set the application timeout in milliseconds.
-  ##
-  ## When set to a positive value, the timeout handler will be called
-  ## if no input events are received within this duration.
-  ## Set to 0 to disable the application timeout.
-  app.timings.applicationTimeout = timeoutMs
-
-proc getApplicationTimeout*(app: AsyncApp): int =
-  ## Get the current application timeout in milliseconds.
-  ##
-  ## Returns 0 if the timeout is disabled.
-  app.timings.applicationTimeout
+# Generated: application timeout setter/getter
+defineTimeoutAccessors(AsyncApp)
 
 # AsyncApp Lifecycle Management
 
@@ -762,13 +721,8 @@ proc restoreTerminal*(app: AsyncApp) =
   app.terminal.cleanup()
 
 # Mouse control
-proc enableMouse*(app: AsyncApp) =
-  ## Enable mouse reporting at runtime
-  app.terminal.enableMouse()
-
-proc disableMouse*(app: AsyncApp) =
-  ## Disable mouse reporting at runtime
-  app.terminal.disableMouse()
+# Generated: mouse runtime toggles
+defineMouseDelegation(AsyncApp)
 
 # Suspend/Resume for shell command execution
 proc suspendAsync*(app: AsyncApp) {.async.} =
@@ -819,192 +773,18 @@ template withSuspendAsync*(app: AsyncApp, body: untyped) =
     await app.resumeAsync()
 
 # FPS control delegation
-proc setTargetFps*(app: AsyncApp, fps: int) =
-  ## Set the target FPS for the application
-  app.fpsMonitor.setTargetFps(fps)
+# Generated: FPS control delegation
+defineFpsDelegation(AsyncApp)
 
-proc getTargetFps*(app: AsyncApp): int =
-  ## Get the current target FPS
-  app.fpsMonitor.getTargetFps()
+# Cursor control delegation (generated via `defineCursorDelegation`)
+defineCursorDelegation(AsyncApp)
 
-proc getCurrentFps*(app: AsyncApp): float =
-  ## Get the current actual FPS
-  app.fpsMonitor.getCurrentFps()
+# Generated: window management delegation (11 procs)
+defineWindowDelegation(AsyncApp)
 
-# Cursor control delegation
-proc setCursorPosition*(app: AsyncApp, x, y: int) =
-  ## Set cursor position without changing visibility state
-  app.renderer.setCursorPosition(x, y)
-
-proc setCursorPosition*(app: AsyncApp, pos: Position) =
-  ## Set cursor position using Position type without changing visibility
-  app.renderer.setCursorPosition(pos)
-
-proc showCursorAt*(app: AsyncApp, x, y: int) =
-  ## Set cursor position and make it visible
-  app.renderer.showCursorAt(x, y)
-
-proc showCursorAt*(app: AsyncApp, pos: Position) =
-  ## Set cursor position using Position type and make it visible
-  app.renderer.showCursorAt(pos)
-
-proc showCursor*(app: AsyncApp) =
-  ## Show cursor at current position
-  app.renderer.showCursor()
-
-proc hideCursor*(app: AsyncApp) =
-  ## Hide cursor
-  app.renderer.hideCursor()
-
-proc setCursorStyle*(app: AsyncApp, style: CursorStyle) =
-  ## Set cursor style for next render
-  app.renderer.setCursorStyle(style)
-
-proc getCursorPosition*(app: AsyncApp): (int, int) =
-  ## Get current cursor position
-  app.renderer.getCursorPosition()
-
-proc moveCursorBy*(app: AsyncApp, dx, dy: int) =
-  ## Move cursor relatively by dx, dy
-  let (x, y) = app.getCursorPosition()
-  app.setCursorPosition(x + dx, y + dy)
-
-proc isCursorVisible*(app: AsyncApp): bool =
-  ## Check if cursor is visible
-  app.renderer.isCursorVisible()
-
-proc getCursorStyle*(app: AsyncApp): CursorStyle =
-  ## Get current cursor style
-  app.renderer.getCursorManager().getStyle()
-
-proc resetCursor*(app: AsyncApp) =
-  ## Reset cursor to default state
-  app.renderer.getCursorManager().reset()
-
-# Window management
-proc enableWindowMode*(app: AsyncApp) =
-  ## Enable window management mode
-  app.state.windowMode = true
-  if app.windowManager.isNil:
-    app.windowManager = newWindowManager()
-
-proc addWindow*(app: AsyncApp, window: Window, autoFocus: bool = true): WindowId =
-  ## Add a window to the application.
-  ##
-  ## The first window added is always auto-focused, and modal windows are
-  ## always focused regardless of `autoFocus`. The default (`autoFocus = true`)
-  ## takes focus on add; pass `false` to add a non-modal window without
-  ## disturbing the current focus. See `WindowManager.addWindow` for the
-  ## full semantics.
-  if not app.state.windowMode:
-    app.enableWindowMode()
-  return app.windowManager.addWindow(window, autoFocus)
-
-proc removeWindow*(app: AsyncApp, windowId: WindowId): bool =
-  ## Remove a window from the application
-  ## Returns true if the window was found and removed, false otherwise
-  if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.removeWindow(windowId)
-
-proc getWindow*(app: AsyncApp, windowId: WindowId): Option[Window] =
-  ## Get a window by ID
-  if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.getWindow(windowId)
-  return none(Window)
-
-proc focusWindow*(app: AsyncApp, windowId: WindowId): bool =
-  ## Focus a specific window
-  ## Returns true if the window was found and focused, false otherwise
-  if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.focusWindow(windowId)
-
-proc getFocusedWindow*(app: AsyncApp): Option[Window] =
-  ## Get the currently focused window
-  if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.getFocusedWindow()
-  return none(Window)
-
-proc getWindows*(app: AsyncApp): seq[Window] =
-  ## Get all windows in the application
-  if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.windows
-  return @[]
-
-proc getWindowCount*(app: AsyncApp): int =
-  ## Get the total number of windows
-  if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.windows.len
-  return 0
-
-proc getFocusedWindowId*(app: AsyncApp): Option[WindowId] =
-  ## Get the ID of the currently focused window
-  if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.focusedWindow
-  return none(WindowId)
-
-proc getWindowInfo*(app: AsyncApp, windowId: WindowId): Option[WindowInfo] =
-  ## Get window information by ID
-  if app.state.windowMode and not app.windowManager.isNil:
-    let windowOpt = app.windowManager.getWindow(windowId)
-    if windowOpt.isSome():
-      return some(windowOpt.get.toWindowInfo())
-  return none(WindowInfo)
-
-proc handleWindowEvent*(app: AsyncApp, event: Event): EventResult =
-  ## Handle an event through the window manager.
-  ## Returns `erContinue` when window mode is disabled or no manager is set.
-  if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.handleEvent(event)
-  return erContinue
-
-# State and info queries
-
-proc isRunning*(app: AsyncApp): bool =
-  ## Check if app is currently running
-  app.state.running
-
-proc getTerminalSize*(app: AsyncApp): Size =
-  ## Get current terminal size
-  app.terminal.getSize()
-
-proc getConfig*(app: AsyncApp): AppConfig =
-  ## Get the stored configuration
-  app.config
-
-proc getFrameCount*(app: AsyncApp): int =
-  ## Get total frame count
-  app.timings.frameCounter
-
-proc getLastFrameTime*(app: AsyncApp): MonoTime =
-  ## Get timestamp of last frame
-  app.timings.lastFrameTime
-
-# Buffer access for debugging and testing
-
-proc getBuffer*(app: AsyncApp): Buffer =
-  ## Get a snapshot (deep copy) of the current display buffer
-  ##
-  ## Returns a copy of the buffer, safe to inspect without affecting rendering.
-  ## Useful for debugging and testing to verify rendered content.
-  ##
-  ## Example:
-  ## ```nim
-  ## let buf = app.getBuffer()
-  ## echo buf.toStrings()  # Get text content of each row
-  ## echo buf[5, 3]        # Get cell at x=5, y=3
-  ## ```
-  app.renderer.getBuffer().clone()
-
-proc getBufferCell*(app: AsyncApp, x, y: int): Cell =
-  ## Get a specific cell from the current display buffer
-  app.renderer.getBuffer()[x, y]
-
-proc getBufferContent*(app: AsyncApp): seq[string] =
-  ## Get the text content of the current display buffer as a sequence of strings
-  ##
-  ## Each string represents one row of the buffer. Useful for debugging
-  ## and testing to verify what is displayed on screen.
-  app.renderer.getBuffer().toStrings()
+# State queries + buffer access (generated)
+defineStateQueries(AsyncApp)
+defineBufferDelegation(AsyncApp)
 
 # Convenience functions
 
