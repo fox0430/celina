@@ -178,9 +178,9 @@ suite "App Event and Render Handlers":
     let app = newApp()
     var handlerCalled = false
 
-    app.onTick proc(): bool =
+    app.onTick proc(): TickResult =
       handlerCalled = true
-      return true
+      return trContinue
 
     # Handler is set but not called until run
     check handlerCalled == false
@@ -190,10 +190,10 @@ suite "App Event and Render Handlers":
     var handlerCalled = false
     var receivedApp: App
 
-    app.onTick proc(app: App): bool =
+    app.onTick proc(app: App): TickResult =
       handlerCalled = true
       receivedApp = app
-      return true
+      return trContinue
 
     # Handler is set but not called until run
     check handlerCalled == false
@@ -204,9 +204,9 @@ suite "App Event and Render Handlers":
     var appCalled = false
 
     # Set simple handler first
-    app.onTick proc(): bool =
+    app.onTick proc(): TickResult =
       simpleCalled = true
-      return true
+      return trContinue
 
     discard app.dispatchTick()
     check simpleCalled == true
@@ -214,9 +214,9 @@ suite "App Event and Render Handlers":
 
     # Setting App-context handler should clear simple handler
     simpleCalled = false
-    app.onTick proc(app: App): bool =
+    app.onTick proc(app: App): TickResult =
       appCalled = true
-      return true
+      return trContinue
 
     discard app.dispatchTick()
     check simpleCalled == false
@@ -224,9 +224,9 @@ suite "App Event and Render Handlers":
 
     # Setting simple handler again should clear App-context handler
     appCalled = false
-    app.onTick proc(): bool =
+    app.onTick proc(): TickResult =
       simpleCalled = true
-      return true
+      return trContinue
 
     discard app.dispatchTick()
     check simpleCalled == true
@@ -234,25 +234,37 @@ suite "App Event and Render Handlers":
 
   test "onTick(nil) resets handler":
     let app = newApp()
-    app.onTick proc(app: App): bool =
-      return false
+    app.onTick proc(app: App): TickResult =
+      return trQuit
 
-    check app.dispatchTick() == false
+    check app.dispatchTick() == trQuit
 
-    let nilHandler: proc(app: App): bool = nil
+    let nilHandler: proc(app: App): TickResult = nil
     app.onTick(nilHandler)
-    check app.dispatchTick() == true
+    check app.dispatchTick() == trContinue
 
   test "onTick(nil) resets simple-form handler":
     let app = newApp()
+    app.onTick proc(): TickResult =
+      return trQuit
+
+    check app.dispatchTick() == trQuit
+
+    let nilHandler: proc(): TickResult = nil
+    app.onTick(nilHandler)
+    check app.dispatchTick() == trContinue
+
+  test "onTick legacy bool handler maps false -> trQuit":
+    {.push warning[Deprecated]: off.}
+    let app = newApp()
     app.onTick proc(): bool =
       return false
+    check app.dispatchTick() == trQuit
 
-    check app.dispatchTick() == false
-
-    let nilHandler: proc(): bool = nil
-    app.onTick(nilHandler)
-    check app.dispatchTick() == true
+    app.onTick proc(app: App): bool =
+      return true
+    check app.dispatchTick() == trContinue
+    {.pop.}
 
 suite "App FPS Control":
   test "setTargetFps changes target FPS":
@@ -713,9 +725,9 @@ suite "App Application Timeout":
     let app = newApp()
     var handlerCalled = false
 
-    app.onTimeout proc(app: App): bool =
+    app.onTimeout proc(app: App): TickResult =
       handlerCalled = true
-      return true
+      return trContinue
 
     # Handler is set but not called until run
     check handlerCalled == false
@@ -724,9 +736,9 @@ suite "App Application Timeout":
     let app = newApp()
     var handlerCalled = false
 
-    app.onTimeout proc(): bool =
+    app.onTimeout proc(): TickResult =
       handlerCalled = true
-      return true
+      return trContinue
 
     # Handler is set but not called until run
     check handlerCalled == false
@@ -737,9 +749,9 @@ suite "App Application Timeout":
     var appCalled = false
 
     # Set simple handler first
-    app.onTimeout proc(): bool =
+    app.onTimeout proc(): TickResult =
       simpleCalled = true
-      return true
+      return trContinue
 
     discard app.dispatchTimeout()
     check simpleCalled == true
@@ -747,9 +759,9 @@ suite "App Application Timeout":
 
     # Setting App-context handler should clear simple handler
     simpleCalled = false
-    app.onTimeout proc(app: App): bool =
+    app.onTimeout proc(app: App): TickResult =
       appCalled = true
-      return true
+      return trContinue
 
     discard app.dispatchTimeout()
     check simpleCalled == false
@@ -757,9 +769,9 @@ suite "App Application Timeout":
 
     # Setting simple handler again should clear App-context handler
     appCalled = false
-    app.onTimeout proc(): bool =
+    app.onTimeout proc(): TickResult =
       simpleCalled = true
-      return true
+      return trContinue
 
     discard app.dispatchTimeout()
     check simpleCalled == true
@@ -770,13 +782,13 @@ suite "App Application Timeout":
     var firstCalled = false
     var secondCalled = false
 
-    app.onTimeout proc(app: App): bool =
+    app.onTimeout proc(app: App): TickResult =
       firstCalled = true
-      return true
+      return trContinue
 
-    app.onTimeout proc(app: App): bool =
+    app.onTimeout proc(app: App): TickResult =
       secondCalled = true
-      return true
+      return trContinue
 
     # Both are set but neither called; second should have replaced first
     check firstCalled == false
@@ -784,33 +796,33 @@ suite "App Application Timeout":
 
   test "onTimeout(nil) resets handler":
     let app = newApp()
-    app.onTimeout proc(app: App): bool =
-      return false
+    app.onTimeout proc(app: App): TickResult =
+      return trQuit
 
-    check app.dispatchTimeout() == false
+    check app.dispatchTimeout() == trQuit
 
-    let nilHandler: proc(app: App): bool = nil
+    let nilHandler: proc(app: App): TickResult = nil
     app.onTimeout(nilHandler)
-    check app.dispatchTimeout() == true
+    check app.dispatchTimeout() == trContinue
 
   test "onTimeout(nil) resets simple-form handler":
     let app = newApp()
-    app.onTimeout proc(): bool =
-      return false
+    app.onTimeout proc(): TickResult =
+      return trQuit
 
-    check app.dispatchTimeout() == false
+    check app.dispatchTimeout() == trQuit
 
-    let nilHandler: proc(): bool = nil
+    let nilHandler: proc(): TickResult = nil
     app.onTimeout(nilHandler)
-    check app.dispatchTimeout() == true
+    check app.dispatchTimeout() == trContinue
 
   test "onTimeout handler can disable timeout by setting 0":
     let app = newApp()
     app.setApplicationTimeout(100)
 
-    app.onTimeout proc(app: App): bool =
+    app.onTimeout proc(app: App): TickResult =
       app.setApplicationTimeout(0)
-      return true
+      return trContinue
 
     check app.getApplicationTimeout() == 100
 
@@ -818,15 +830,27 @@ suite "App Application Timeout":
     let app = newApp()
     var handlerSet = false
 
-    app.onTimeout proc(app: App): bool =
+    app.onTimeout proc(app: App): TickResult =
       handlerSet = true
-      return true
+      return trContinue
 
     app.setApplicationTimeout(0)
     app.setApplicationTimeout(500)
     # Handler should still be registered regardless of timeout value changes
     check handlerSet == false
     check app.getApplicationTimeout() == 500
+
+  test "onTimeout legacy bool handler maps false -> trQuit":
+    {.push warning[Deprecated]: off.}
+    let app = newApp()
+    app.onTimeout proc(): bool =
+      return false
+    check app.dispatchTimeout() == trQuit
+
+    app.onTimeout proc(app: App): bool =
+      return true
+    check app.dispatchTimeout() == trContinue
+    {.pop.}
 
 suite "App String Representation":
   test "new app string representation":

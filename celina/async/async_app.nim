@@ -14,14 +14,15 @@ import
   ]
 
 export config
+export tick_common.TickResult
 
 type
   AsyncAppHandlers = object
     ## User-supplied callbacks invoked during the async event loop
     event: proc(event: Event, app: AsyncApp): Future[EventResult] {.async.}
     render: proc(buffer: var Buffer, app: AsyncApp)
-    tick: proc(app: AsyncApp): Future[bool] {.async.}
-    timeout: proc(app: AsyncApp): Future[bool] {.async.}
+    tick: proc(app: AsyncApp): Future[TickResult] {.async.}
+    timeout: proc(app: AsyncApp): Future[TickResult] {.async.}
 
   AsyncAppTimings* = AppTimings
     ## Alias of AppTimings; async event loop reuses the same timing fields.
@@ -209,43 +210,81 @@ proc onRenderAsync*(app: AsyncApp, handler: proc(buffer: var Buffer, app: AsyncA
   ## ```
   app.handlers.render = handler
 
-proc onTickAsync*(app: AsyncApp, handler: proc(): Future[bool] {.async.}) =
+proc onTickAsync*(app: AsyncApp, handler: proc(): Future[TickResult] {.async.}) =
   ## Set the async tick handler called each frame between event processing and rendering.
   ##
-  ## Return true to continue running, false to quit.
+  ## Return `trContinue` to keep running, `trQuit` to exit the application loop.
   app.handlers.tick = wrapHandler(handler):
-    proc(app: AsyncApp): Future[bool] {.async.} =
+    proc(app: AsyncApp): Future[TickResult] {.async.} =
       return await captured()
 
-proc onTickAsync*(app: AsyncApp, handler: proc(app: AsyncApp): Future[bool] {.async.}) =
+proc onTickAsync*(
+    app: AsyncApp, handler: proc(app: AsyncApp): Future[TickResult] {.async.}
+) =
   ## Set the async tick handler with AsyncApp context called each frame between event processing and rendering.
   ##
-  ## Return true to continue running, false to quit.
+  ## Return `trContinue` to keep running, `trQuit` to exit the application loop.
   app.handlers.tick = handler
 
+proc onTickAsync*(
+    app: AsyncApp, handler: proc(): Future[bool] {.async.}
+) {.deprecated: "Use a handler returning TickResult instead of bool".} =
+  ## Legacy `bool`-returning overload. `false` -> `trQuit`,
+  ## `true` -> `trContinue`. Prefer the `TickResult`-returning overload.
+  app.handlers.tick = wrapHandler(handler):
+    proc(app: AsyncApp): Future[TickResult] {.async.} =
+      return if (await captured()): trContinue else: trQuit
+
+proc onTickAsync*(
+    app: AsyncApp, handler: proc(app: AsyncApp): Future[bool] {.async.}
+) {.deprecated: "Use a handler returning TickResult instead of bool".} =
+  ## Legacy `bool`-returning overload with AsyncApp context. `false` -> `trQuit`,
+  ## `true` -> `trContinue`. Prefer the `TickResult`-returning overload.
+  app.handlers.tick = wrapHandler(handler):
+    proc(app: AsyncApp): Future[TickResult] {.async.} =
+      return if (await captured(app)): trContinue else: trQuit
+
 # Application timeout
-proc onTimeoutAsync*(app: AsyncApp, handler: proc(): Future[bool] {.async.}) =
+proc onTimeoutAsync*(app: AsyncApp, handler: proc(): Future[TickResult] {.async.}) =
   ## Set the async timeout handler for the application.
   ##
   ## The handler is called when no input events are received within
-  ## the application timeout period. Return true to continue running,
-  ## false to quit the application.
+  ## the application timeout period. Return `trContinue` to keep running,
+  ## `trQuit` to exit the application loop.
   ##
   ## For access to the AsyncApp object, use the overload that accepts
-  ## `proc(app: AsyncApp): Future[bool]` instead.
+  ## `proc(app: AsyncApp): Future[TickResult]` instead.
   app.handlers.timeout = wrapHandler(handler):
-    proc(app: AsyncApp): Future[bool] {.async.} =
+    proc(app: AsyncApp): Future[TickResult] {.async.} =
       return await captured()
 
 proc onTimeoutAsync*(
-    app: AsyncApp, handler: proc(app: AsyncApp): Future[bool] {.async.}
+    app: AsyncApp, handler: proc(app: AsyncApp): Future[TickResult] {.async.}
 ) =
   ## Set the async timeout handler with AsyncApp context for the application.
   ##
   ## The handler is called when no input events are received within
-  ## the application timeout period. Return true to continue running,
-  ## false to quit the application.
+  ## the application timeout period. Return `trContinue` to keep running,
+  ## `trQuit` to exit the application loop.
   app.handlers.timeout = handler
+
+proc onTimeoutAsync*(
+    app: AsyncApp, handler: proc(): Future[bool] {.async.}
+) {.deprecated: "Use a handler returning TickResult instead of bool".} =
+  ## Legacy `bool`-returning overload. `false` -> `trQuit`,
+  ## `true` -> `trContinue`. Prefer the `TickResult`-returning overload.
+  app.handlers.timeout = wrapHandler(handler):
+    proc(app: AsyncApp): Future[TickResult] {.async.} =
+      return if (await captured()): trContinue else: trQuit
+
+proc onTimeoutAsync*(
+    app: AsyncApp, handler: proc(app: AsyncApp): Future[bool] {.async.}
+) {.deprecated: "Use a handler returning TickResult instead of bool".} =
+  ## Legacy `bool`-returning overload with AsyncApp context. `false` -> `trQuit`,
+  ## `true` -> `trContinue`. Prefer the `TickResult`-returning overload.
+  app.handlers.timeout = wrapHandler(handler):
+    proc(app: AsyncApp): Future[TickResult] {.async.} =
+      return if (await captured(app)): trContinue else: trQuit
 
 # Generated: application timeout setter/getter
 defineTimeoutAccessors(AsyncApp)
@@ -316,27 +355,27 @@ proc dispatchRenderAsync*(app: AsyncApp) =
       {.cast(raises: []).}:
         app.handlers.render(app.renderer.getBuffer(), app)
 
-proc dispatchTickAsync*(app: AsyncApp): Future[bool] {.async.} =
+proc dispatchTickAsync*(app: AsyncApp): Future[TickResult] {.async.} =
   ## Invoke the configured async tick handler.
   ##
-  ## Returns `true` when no handler is configured. Primarily used internally
-  ## by `tickAsync`, but exported so tests and callers can trigger the handler
-  ## directly.
+  ## Returns `trContinue` when no handler is configured. Primarily used
+  ## internally by `tickAsync`, but exported so tests and callers can trigger
+  ## the handler directly.
   if app.handlers.tick != nil:
     return await app.handlers.tick(app)
   else:
-    return true
+    return trContinue
 
-proc dispatchTimeoutAsync*(app: AsyncApp): Future[bool] {.async.} =
+proc dispatchTimeoutAsync*(app: AsyncApp): Future[TickResult] {.async.} =
   ## Invoke the configured async timeout handler.
   ##
-  ## Returns `true` when no handler is configured. Primarily used internally
-  ## by `tickAsync`, but exported so tests and callers can trigger the handler
-  ## directly.
+  ## Returns `trContinue` when no handler is configured. Primarily used
+  ## internally by `tickAsync`, but exported so tests and callers can trigger
+  ## the handler directly.
   if app.handlers.timeout != nil:
     return await app.handlers.timeout(app)
   else:
-    return true
+    return trContinue
 
 proc hasTimeoutHandler(app: AsyncApp): bool {.inline.} =
   app.handlers.timeout != nil
@@ -418,7 +457,7 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
       if isTimeoutReached(app.timings.applicationTimeout, elapsedAfterPoll):
         # Reset timer to prevent busy-loop and enable periodic callbacks
         app.timings.lastEventTime = getMonoTime()
-        if not (await app.dispatchTimeoutAsync()):
+        if (await app.dispatchTimeoutAsync()) == trQuit:
           return false
 
     if eventsAvailable:
@@ -460,7 +499,7 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
           break
 
     # Call tick handler between event processing and rendering
-    if not (await app.dispatchTickAsync()):
+    if (await app.dispatchTickAsync()) == trQuit:
       return false
 
     # Render only if enough time has passed for target FPS

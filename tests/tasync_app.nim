@@ -194,9 +194,9 @@ when hasAsyncSupport:
       let app = newAsyncApp()
       var handlerCalled = false
 
-      app.onTickAsync proc(): Future[bool] {.async.} =
+      app.onTickAsync proc(): Future[TickResult] {.async.} =
         handlerCalled = true
-        return true
+        return trContinue
 
       # Handler is set but not called until run
       check handlerCalled == false
@@ -205,9 +205,9 @@ when hasAsyncSupport:
       let app = newAsyncApp()
       var handlerCalled = false
 
-      app.onTickAsync proc(app: AsyncApp): Future[bool] {.async.} =
+      app.onTickAsync proc(app: AsyncApp): Future[TickResult] {.async.} =
         handlerCalled = true
-        return true
+        return trContinue
 
       # Handler is set but not called until run
       check handlerCalled == false
@@ -218,9 +218,9 @@ when hasAsyncSupport:
       var appCalled = false
 
       # Set simple handler first
-      app.onTickAsync proc(): Future[bool] {.async.} =
+      app.onTickAsync proc(): Future[TickResult] {.async.} =
         simpleCalled = true
-        return true
+        return trContinue
 
       discard waitFor app.dispatchTickAsync()
       check simpleCalled == true
@@ -228,9 +228,9 @@ when hasAsyncSupport:
 
       # Setting App-context handler should clear simple handler
       simpleCalled = false
-      app.onTickAsync proc(app: AsyncApp): Future[bool] {.async.} =
+      app.onTickAsync proc(app: AsyncApp): Future[TickResult] {.async.} =
         appCalled = true
-        return true
+        return trContinue
 
       discard waitFor app.dispatchTickAsync()
       check simpleCalled == false
@@ -238,9 +238,9 @@ when hasAsyncSupport:
 
       # Setting simple handler again should clear App-context handler
       appCalled = false
-      app.onTickAsync proc(): Future[bool] {.async.} =
+      app.onTickAsync proc(): Future[TickResult] {.async.} =
         simpleCalled = true
-        return true
+        return trContinue
 
       discard waitFor app.dispatchTickAsync()
       check simpleCalled == true
@@ -248,25 +248,37 @@ when hasAsyncSupport:
 
     test "onTickAsync(nil) resets handler":
       let app = newAsyncApp()
-      app.onTickAsync proc(app: AsyncApp): Future[bool] {.async.} =
-        return false
+      app.onTickAsync proc(app: AsyncApp): Future[TickResult] {.async.} =
+        return trQuit
 
-      check (waitFor app.dispatchTickAsync()) == false
+      check (waitFor app.dispatchTickAsync()) == trQuit
 
-      let nilHandler: proc(app: AsyncApp): Future[bool] {.async.} = nil
+      let nilHandler: proc(app: AsyncApp): Future[TickResult] {.async.} = nil
       app.onTickAsync(nilHandler)
-      check (waitFor app.dispatchTickAsync()) == true
+      check (waitFor app.dispatchTickAsync()) == trContinue
 
     test "onTickAsync(nil) resets simple-form handler":
       let app = newAsyncApp()
+      app.onTickAsync proc(): Future[TickResult] {.async.} =
+        return trQuit
+
+      check (waitFor app.dispatchTickAsync()) == trQuit
+
+      let nilHandler: proc(): Future[TickResult] {.async.} = nil
+      app.onTickAsync(nilHandler)
+      check (waitFor app.dispatchTickAsync()) == trContinue
+
+    test "onTickAsync legacy bool handler maps false -> trQuit":
+      {.push warning[Deprecated]: off.}
+      let app = newAsyncApp()
       app.onTickAsync proc(): Future[bool] {.async.} =
         return false
+      check (waitFor app.dispatchTickAsync()) == trQuit
 
-      check (waitFor app.dispatchTickAsync()) == false
-
-      let nilHandler: proc(): Future[bool] {.async.} = nil
-      app.onTickAsync(nilHandler)
-      check (waitFor app.dispatchTickAsync()) == true
+      app.onTickAsync proc(app: AsyncApp): Future[bool] {.async.} =
+        return true
+      check (waitFor app.dispatchTickAsync()) == trContinue
+      {.pop.}
 
   suite "AsyncApp State Management":
     test "isRunning returns false before run":
@@ -681,9 +693,9 @@ when hasAsyncSupport:
       let app = newAsyncApp()
       var handlerCalled = false
 
-      app.onTimeoutAsync proc(app: AsyncApp): Future[bool] {.async.} =
+      app.onTimeoutAsync proc(app: AsyncApp): Future[TickResult] {.async.} =
         handlerCalled = true
-        return true
+        return trContinue
 
       # Handler is set but not called until run
       check handlerCalled == false
@@ -692,9 +704,9 @@ when hasAsyncSupport:
       let app = newAsyncApp()
       var handlerCalled = false
 
-      app.onTimeoutAsync proc(): Future[bool] {.async.} =
+      app.onTimeoutAsync proc(): Future[TickResult] {.async.} =
         handlerCalled = true
-        return true
+        return trContinue
 
       # Handler is set but not called until run
       check handlerCalled == false
@@ -705,9 +717,9 @@ when hasAsyncSupport:
       var appCalled = false
 
       # Set simple handler first
-      app.onTimeoutAsync proc(): Future[bool] {.async.} =
+      app.onTimeoutAsync proc(): Future[TickResult] {.async.} =
         simpleCalled = true
-        return true
+        return trContinue
 
       discard waitFor app.dispatchTimeoutAsync()
       check simpleCalled == true
@@ -715,9 +727,9 @@ when hasAsyncSupport:
 
       # Setting App-context handler should clear simple handler
       simpleCalled = false
-      app.onTimeoutAsync proc(app: AsyncApp): Future[bool] {.async.} =
+      app.onTimeoutAsync proc(app: AsyncApp): Future[TickResult] {.async.} =
         appCalled = true
-        return true
+        return trContinue
 
       discard waitFor app.dispatchTimeoutAsync()
       check simpleCalled == false
@@ -725,9 +737,9 @@ when hasAsyncSupport:
 
       # Setting simple handler again should clear App-context handler
       appCalled = false
-      app.onTimeoutAsync proc(): Future[bool] {.async.} =
+      app.onTimeoutAsync proc(): Future[TickResult] {.async.} =
         simpleCalled = true
-        return true
+        return trContinue
 
       discard waitFor app.dispatchTimeoutAsync()
       check simpleCalled == true
@@ -738,13 +750,13 @@ when hasAsyncSupport:
       var firstCalled = false
       var secondCalled = false
 
-      app.onTimeoutAsync proc(app: AsyncApp): Future[bool] {.async.} =
+      app.onTimeoutAsync proc(app: AsyncApp): Future[TickResult] {.async.} =
         firstCalled = true
-        return true
+        return trContinue
 
-      app.onTimeoutAsync proc(app: AsyncApp): Future[bool] {.async.} =
+      app.onTimeoutAsync proc(app: AsyncApp): Future[TickResult] {.async.} =
         secondCalled = true
-        return true
+        return trContinue
 
       # Both are set but neither called; second should have replaced first
       check firstCalled == false
@@ -752,33 +764,33 @@ when hasAsyncSupport:
 
     test "onTimeoutAsync(nil) resets handler":
       let app = newAsyncApp()
-      app.onTimeoutAsync proc(app: AsyncApp): Future[bool] {.async.} =
-        return false
+      app.onTimeoutAsync proc(app: AsyncApp): Future[TickResult] {.async.} =
+        return trQuit
 
-      check (waitFor app.dispatchTimeoutAsync()) == false
+      check (waitFor app.dispatchTimeoutAsync()) == trQuit
 
-      let nilHandler: proc(app: AsyncApp): Future[bool] {.async.} = nil
+      let nilHandler: proc(app: AsyncApp): Future[TickResult] {.async.} = nil
       app.onTimeoutAsync(nilHandler)
-      check (waitFor app.dispatchTimeoutAsync()) == true
+      check (waitFor app.dispatchTimeoutAsync()) == trContinue
 
     test "onTimeoutAsync(nil) resets simple-form handler":
       let app = newAsyncApp()
-      app.onTimeoutAsync proc(): Future[bool] {.async.} =
-        return false
+      app.onTimeoutAsync proc(): Future[TickResult] {.async.} =
+        return trQuit
 
-      check (waitFor app.dispatchTimeoutAsync()) == false
+      check (waitFor app.dispatchTimeoutAsync()) == trQuit
 
-      let nilHandler: proc(): Future[bool] {.async.} = nil
+      let nilHandler: proc(): Future[TickResult] {.async.} = nil
       app.onTimeoutAsync(nilHandler)
-      check (waitFor app.dispatchTimeoutAsync()) == true
+      check (waitFor app.dispatchTimeoutAsync()) == trContinue
 
     test "onTimeoutAsync handler can disable timeout by setting 0":
       let app = newAsyncApp()
       app.setApplicationTimeout(100)
 
-      app.onTimeoutAsync proc(app: AsyncApp): Future[bool] {.async.} =
+      app.onTimeoutAsync proc(app: AsyncApp): Future[TickResult] {.async.} =
         app.setApplicationTimeout(0)
-        return true
+        return trContinue
 
       check app.getApplicationTimeout() == 100
 
@@ -786,15 +798,27 @@ when hasAsyncSupport:
       let app = newAsyncApp()
       var handlerSet = false
 
-      app.onTimeoutAsync proc(app: AsyncApp): Future[bool] {.async.} =
+      app.onTimeoutAsync proc(app: AsyncApp): Future[TickResult] {.async.} =
         handlerSet = true
-        return true
+        return trContinue
 
       app.setApplicationTimeout(0)
       app.setApplicationTimeout(500)
       # Handler should still be registered regardless of timeout value changes
       check handlerSet == false
       check app.getApplicationTimeout() == 500
+
+    test "onTimeoutAsync legacy bool handler maps false -> trQuit":
+      {.push warning[Deprecated]: off.}
+      let app = newAsyncApp()
+      app.onTimeoutAsync proc(): Future[bool] {.async.} =
+        return false
+      check (waitFor app.dispatchTimeoutAsync()) == trQuit
+
+      app.onTimeoutAsync proc(app: AsyncApp): Future[bool] {.async.} =
+        return true
+      check (waitFor app.dispatchTimeoutAsync()) == trContinue
+      {.pop.}
 
   suite "AsyncApp handleWindowEvent":
     test "handleWindowEvent with no window mode returns erContinue":
