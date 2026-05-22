@@ -8,7 +8,7 @@ import std/[options, monotimes, times, strformat]
 
 import
   terminal, buffer, events, renderer, fps, cursor, geometry, errors, terminal_common,
-  windows, config, tick_common
+  windows, config, tick_common, app_delegation, app_handlers
 
 export config
 
@@ -54,14 +54,8 @@ type
     timings: AppTimings
     state: AppState
 
-proc `$`*(app: App): string =
-  ## String representation of App for debugging
-  let windowCount =
-    if app.state.windowMode and not app.windowManager.isNil:
-      app.windowManager.windows.len
-    else:
-      0
-  &"App(running: {app.state.running}, fps: {app.fpsMonitor.getCurrentFps():.1f}, frames: {app.timings.frameCounter}, windows: {windowCount}, config: {app.config})"
+# Generated: `$`
+defineShow(App)
 
 proc newApp*(config: AppConfig = DefaultAppConfig): App =
   ## Create a new CLI application with the specified configuration
@@ -130,13 +124,9 @@ proc onEvent*(app: App, handler: proc(event: Event): EventResult) =
   ##     return erQuit
   ##   return erContinue
   ## ```
-  app.handlers.event =
-    if handler.isNil:
-      nil
-    else:
-      let captured = handler
-      proc(event: Event, app: App): EventResult =
-        captured(event)
+  app.handlers.event = wrapHandler(handler):
+    proc(event: Event, app: App): EventResult =
+      captured(event)
 
 proc onEvent*(app: App, handler: proc(event: Event, app: App): EventResult) =
   ## Set the event handler with `App` context for the application.
@@ -150,13 +140,9 @@ proc onEvent*(
   ## Legacy `bool`-returning overload. `false` -> `erQuit`,
   ## `true` -> `erContinue`. Prefer the `EventResult`-returning overload
   ## in new code.
-  app.handlers.event =
-    if handler.isNil:
-      nil
-    else:
-      let captured = handler
-      proc(event: Event, app: App): EventResult =
-        if captured(event): erContinue else: erQuit
+  app.handlers.event = wrapHandler(handler):
+    proc(event: Event, app: App): EventResult =
+      if captured(event): erContinue else: erQuit
 
 proc onEvent*(
     app: App, handler: proc(event: Event, app: App): bool
@@ -165,13 +151,9 @@ proc onEvent*(
   ## `false` -> `erQuit`, `true` -> `erContinue`.
   ## Prefer the `EventResult`-returning overload in new code; see its
   ## docstring for example usage.
-  app.handlers.event =
-    if handler.isNil:
-      nil
-    else:
-      let captured = handler
-      proc(event: Event, app: App): EventResult =
-        if captured(event, app): erContinue else: erQuit
+  app.handlers.event = wrapHandler(handler):
+    proc(event: Event, app: App): EventResult =
+      if captured(event, app): erContinue else: erQuit
 
 proc onRender*(app: App, handler: proc(buffer: var Buffer)) =
   ## Set the render handler for the application
@@ -179,13 +161,9 @@ proc onRender*(app: App, handler: proc(buffer: var Buffer)) =
   ## For access to the App object (e.g., to query FPS, window state,
   ## or terminal size during rendering), use the overload that accepts
   ## `proc(buffer: var Buffer, app: App)` instead.
-  app.handlers.render =
-    if handler.isNil:
-      nil
-    else:
-      let captured = handler
-      proc(buffer: var Buffer, app: App) =
-        captured(buffer)
+  app.handlers.render = wrapHandler(handler):
+    proc(buffer: var Buffer, app: App) =
+      captured(buffer)
 
 proc onRender*(app: App, handler: proc(buffer: var Buffer, app: App)) =
   ## Set the render handler with App context for the application
@@ -206,13 +184,9 @@ proc onTick*(app: App, handler: proc(): bool) =
   ## Set the tick handler called each frame between event processing and rendering.
   ##
   ## Return true to continue running, false to quit.
-  app.handlers.tick =
-    if handler.isNil:
-      nil
-    else:
-      let captured = handler
-      proc(app: App): bool =
-        captured()
+  app.handlers.tick = wrapHandler(handler):
+    proc(app: App): bool =
+      captured()
 
 proc onTick*(app: App, handler: proc(app: App): bool) =
   ## Set the tick handler with App context called each frame between event processing and rendering.
@@ -230,13 +204,9 @@ proc onTimeout*(app: App, handler: proc(): bool) =
   ##
   ## For access to the App object, use the overload that accepts
   ## `proc(app: App): bool` instead.
-  app.handlers.timeout =
-    if handler.isNil:
-      nil
-    else:
-      let captured = handler
-      proc(app: App): bool =
-        captured()
+  app.handlers.timeout = wrapHandler(handler):
+    proc(app: App): bool =
+      captured()
 
 proc onTimeout*(app: App, handler: proc(app: App): bool) =
   ## Set the timeout handler with App context for the application.
@@ -246,19 +216,8 @@ proc onTimeout*(app: App, handler: proc(app: App): bool) =
   ## false to quit the application.
   app.handlers.timeout = handler
 
-proc setApplicationTimeout*(app: App, timeoutMs: int) =
-  ## Set the application timeout in milliseconds.
-  ##
-  ## When set to a positive value, the timeout handler will be called
-  ## if no input events are received within this duration.
-  ## Set to 0 to disable the application timeout.
-  app.timings.applicationTimeout = timeoutMs
-
-proc getApplicationTimeout*(app: App): int =
-  ## Get the current application timeout in milliseconds.
-  ##
-  ## Returns 0 if the timeout is disabled.
-  app.timings.applicationTimeout
+# Generated: application timeout setter/getter
+defineTimeoutAccessors(App)
 
 # Lifecycle management
 proc setup(app: App) =
@@ -584,18 +543,9 @@ proc run*(app: App) =
     app.state.running = false
     app.restoreTerminal()
 
-proc quit*(app: App) =
-  ## Signal the application to quit gracefully
-  app.state.shouldQuit = true
-
-# Mouse control
-proc enableMouse*(app: App) =
-  ## Enable mouse reporting at runtime
-  app.terminal.enableMouse()
-
-proc disableMouse*(app: App) =
-  ## Disable mouse reporting at runtime
-  app.terminal.disableMouse()
+# Generated: quit + mouse runtime toggles
+defineQuit(App)
+defineMouseDelegation(App)
 
 # Suspend/Resume for shell command execution
 proc suspend*(app: App) =
@@ -642,193 +592,18 @@ template withSuspend*(app: App, body: untyped) =
   finally:
     app.resume()
 
-# FPS control delegation
-proc setTargetFps*(app: App, fps: int) =
-  ## Set the target FPS for the application
-  app.fpsMonitor.setTargetFps(fps)
+# Generated: FPS control delegation
+defineFpsDelegation(App)
 
-proc getTargetFps*(app: App): int =
-  ## Get the current target FPS
-  app.fpsMonitor.getTargetFps()
+# Cursor control delegation (generated via `defineCursorDelegation`)
+defineCursorDelegation(App)
 
-proc getCurrentFps*(app: App): float =
-  ## Get the current actual FPS
-  app.fpsMonitor.getCurrentFps()
+# Generated: window management delegation (11 procs)
+defineWindowDelegation(App)
 
-# Cursor control delegation
-proc setCursorPosition*(app: App, x, y: int) =
-  ## Set cursor position without changing visibility state
-  app.renderer.setCursorPosition(x, y)
-
-proc setCursorPosition*(app: App, pos: Position) =
-  ## Set cursor position using Position type without changing visibility
-  app.renderer.setCursorPosition(pos)
-
-proc showCursorAt*(app: App, x, y: int) =
-  ## Set cursor position and make it visible
-  app.renderer.showCursorAt(x, y)
-
-proc showCursorAt*(app: App, pos: Position) =
-  ## Set cursor position using Position type and make it visible
-  app.renderer.showCursorAt(pos)
-
-proc showCursor*(app: App) =
-  ## Show cursor at current position
-  app.renderer.showCursor()
-
-proc hideCursor*(app: App) =
-  ## Hide cursor
-  app.renderer.hideCursor()
-
-proc setCursorStyle*(app: App, style: CursorStyle) =
-  ## Set cursor style for next render
-  app.renderer.setCursorStyle(style)
-
-proc getCursorPosition*(app: App): (int, int) =
-  ## Get current cursor position
-  app.renderer.getCursorPosition()
-
-proc moveCursorBy*(app: App, dx, dy: int) =
-  ## Move cursor relatively by dx, dy
-  let (x, y) = app.getCursorPosition()
-  app.setCursorPosition(x + dx, y + dy)
-
-proc isCursorVisible*(app: App): bool =
-  ## Check if cursor is visible
-  app.renderer.isCursorVisible()
-
-proc getCursorStyle*(app: App): CursorStyle =
-  ## Get current cursor style
-  app.renderer.getCursorManager().getStyle()
-
-proc resetCursor*(app: App) =
-  ## Reset cursor to default state
-  app.renderer.getCursorManager().reset()
-
-# Window management
-proc enableWindowMode*(app: App) =
-  ## Enable window management mode
-  app.state.windowMode = true
-  if app.windowManager.isNil:
-    app.windowManager = newWindowManager()
-
-proc addWindow*(app: App, window: Window, autoFocus: bool = true): WindowId =
-  ## Add a window to the application.
-  ##
-  ## The first window added is always auto-focused, and modal windows are
-  ## always focused regardless of `autoFocus`. The default (`autoFocus = true`)
-  ## takes focus on add; pass `false` to add a non-modal window without
-  ## disturbing the current focus. See `WindowManager.addWindow` for the full
-  ## semantics.
-  if not app.state.windowMode:
-    app.enableWindowMode()
-  return app.windowManager.addWindow(window, autoFocus)
-
-proc removeWindow*(app: App, windowId: WindowId): bool =
-  ## Remove a window from the application
-  ## Returns true if the window was found and removed, false otherwise
-  if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.removeWindow(windowId)
-
-proc getWindow*(app: App, windowId: WindowId): Option[Window] =
-  ## Get a window by ID
-  if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.getWindow(windowId)
-  return none(Window)
-
-proc focusWindow*(app: App, windowId: WindowId): bool =
-  ## Focus a specific window
-  ## Returns true if the window was found and focused, false otherwise
-  if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.focusWindow(windowId)
-
-proc getFocusedWindow*(app: App): Option[Window] =
-  ## Get the currently focused window
-  if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.getFocusedWindow()
-  return none(Window)
-
-proc getWindows*(app: App): seq[Window] =
-  ## Get all windows in the application
-  if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.windows
-  return @[]
-
-proc getWindowCount*(app: App): int =
-  ## Get the total number of windows
-  if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.windows.len
-  return 0
-
-proc getFocusedWindowId*(app: App): Option[WindowId] =
-  ## Get the ID of the currently focused window
-  if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.focusedWindow
-  return none(WindowId)
-
-proc getWindowInfo*(app: App, windowId: WindowId): Option[WindowInfo] =
-  ## Get window information by ID
-  if app.state.windowMode and not app.windowManager.isNil:
-    let windowOpt = app.windowManager.getWindow(windowId)
-    if windowOpt.isSome():
-      return some(windowOpt.get.toWindowInfo())
-  return none(WindowInfo)
-
-proc handleWindowEvent*(app: App, event: Event): EventResult =
-  ## Handle an event through the window manager.
-  ## Returns `erContinue` when window mode is disabled or no manager is set.
-  if app.state.windowMode and not app.windowManager.isNil:
-    return app.windowManager.handleEvent(event)
-  return erContinue
-
-# State and info queries
-
-proc isRunning*(app: App): bool =
-  ## Check if app is currently running
-  app.state.running
-
-proc getTerminalSize*(app: App): Size =
-  ## Get current terminal size
-  app.terminal.getSize()
-
-proc getConfig*(app: App): AppConfig =
-  ## Get the stored configuration
-  app.config
-
-proc getFrameCount*(app: App): int =
-  ## Get total frame count
-  app.timings.frameCounter
-
-proc getLastFrameTime*(app: App): MonoTime =
-  ## Get timestamp of last frame
-  app.timings.lastFrameTime
-
-# Buffer access for debugging and testing
-
-proc getBuffer*(app: App): Buffer =
-  ## Get a snapshot (deep copy) of the current display buffer
-  ##
-  ## Returns a copy of the buffer, safe to inspect without affecting rendering.
-  ## Useful for debugging and testing to verify rendered content.
-  ##
-  ## Example:
-  ## ```nim
-  ## let buf = app.getBuffer()
-  ## echo buf.toStrings()  # Get text content of each row
-  ## echo buf[5, 3]        # Get cell at x=5, y=3
-  ## ```
-  app.renderer.getBuffer().clone()
-
-proc getBufferCell*(app: App, x, y: int): Cell =
-  ## Get a specific cell from the current display buffer
-  app.renderer.getBuffer()[x, y]
-
-proc getBufferContent*(app: App): seq[string] =
-  ## Get the text content of the current display buffer as a sequence of strings
-  ##
-  ## Each string represents one row of the buffer. Useful for debugging
-  ## and testing to verify what is displayed on screen.
-  app.renderer.getBuffer().toStrings()
+# State queries + buffer access (generated)
+defineStateQueries(App)
+defineBufferDelegation(App)
 
 # Convenience functions
 
