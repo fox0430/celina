@@ -17,7 +17,6 @@ type AsyncRenderer* = ref object
   terminal: AsyncTerminal
   asyncBuffer: AsyncBuffer
   cursorManager: CursorManager
-  lastRenderTime: float
 
 proc newAsyncRenderer*(terminal: AsyncTerminal): AsyncRenderer =
   ## Create a new async renderer with the given terminal
@@ -26,7 +25,6 @@ proc newAsyncRenderer*(terminal: AsyncTerminal): AsyncRenderer =
     terminal: terminal,
     asyncBuffer: newAsyncBuffer(termSize.width, termSize.height),
     cursorManager: newCursorManager(),
-    lastRenderTime: 0.0,
   )
 
 proc getAsyncBuffer*(renderer: AsyncRenderer): AsyncBuffer {.inline.} =
