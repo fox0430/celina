@@ -40,10 +40,14 @@ const maxEventsPerTick* = 5
 
 type
   TickResult* = enum
-    ## Result of processing a tick iteration
-    trContinue ## Continue running the application
-    trQuit ## Application should quit
-    trError ## An error occurred
+    ## Outcome of a tick / timeout handler.
+    ##
+    ## Returned by `onTick` and `onTimeout` callbacks to signal whether
+    ## the application loop should keep running:
+    ## - `trContinue`: keep running.
+    ## - `trQuit`: exit the application loop on the next iteration.
+    trContinue
+    trQuit
 
   ResizeState* = object ## State for tracking resize events across ticks
     lastWidth*: int

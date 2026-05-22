@@ -11,13 +11,14 @@ import
   windows, config, tick_common, app_delegation, app_handlers
 
 export config
+export tick_common.TickResult
 
 type
   AppHandlers = object ## User-supplied callbacks invoked during the event loop
     event: proc(event: Event, app: App): EventResult
     render: proc(buffer: var Buffer, app: App)
-    tick: proc(app: App): bool
-    timeout: proc(app: App): bool
+    tick: proc(app: App): TickResult
+    timeout: proc(app: App): TickResult
 
   AppTimings* = object
     ## Frame and event timing/counters used by the event loop.
@@ -180,41 +181,77 @@ proc onRender*(app: App, handler: proc(buffer: var Buffer, app: App)) =
   ## ```
   app.handlers.render = handler
 
-proc onTick*(app: App, handler: proc(): bool) =
+proc onTick*(app: App, handler: proc(): TickResult) =
   ## Set the tick handler called each frame between event processing and rendering.
   ##
-  ## Return true to continue running, false to quit.
+  ## Return `trContinue` to keep running, `trQuit` to exit the application loop.
   app.handlers.tick = wrapHandler(handler):
-    proc(app: App): bool =
+    proc(app: App): TickResult =
       captured()
 
-proc onTick*(app: App, handler: proc(app: App): bool) =
+proc onTick*(app: App, handler: proc(app: App): TickResult) =
   ## Set the tick handler with App context called each frame between event processing and rendering.
   ##
-  ## Return true to continue running, false to quit.
+  ## Return `trContinue` to keep running, `trQuit` to exit the application loop.
   app.handlers.tick = handler
 
+proc onTick*(
+    app: App, handler: proc(): bool
+) {.deprecated: "Use a handler returning TickResult instead of bool".} =
+  ## Legacy `bool`-returning overload. `false` -> `trQuit`,
+  ## `true` -> `trContinue`. Prefer the `TickResult`-returning overload.
+  app.handlers.tick = wrapHandler(handler):
+    proc(app: App): TickResult =
+      if captured(): trContinue else: trQuit
+
+proc onTick*(
+    app: App, handler: proc(app: App): bool
+) {.deprecated: "Use a handler returning TickResult instead of bool".} =
+  ## Legacy `bool`-returning overload with App context. `false` -> `trQuit`,
+  ## `true` -> `trContinue`. Prefer the `TickResult`-returning overload.
+  app.handlers.tick = wrapHandler(handler):
+    proc(app: App): TickResult =
+      if captured(app): trContinue else: trQuit
+
 # Application timeout
-proc onTimeout*(app: App, handler: proc(): bool) =
+proc onTimeout*(app: App, handler: proc(): TickResult) =
   ## Set the timeout handler for the application.
   ##
   ## The handler is called when no input events are received within
-  ## the application timeout period. Return true to continue running,
-  ## false to quit the application.
+  ## the application timeout period. Return `trContinue` to keep running,
+  ## `trQuit` to exit the application loop.
   ##
   ## For access to the App object, use the overload that accepts
-  ## `proc(app: App): bool` instead.
+  ## `proc(app: App): TickResult` instead.
   app.handlers.timeout = wrapHandler(handler):
-    proc(app: App): bool =
+    proc(app: App): TickResult =
       captured()
 
-proc onTimeout*(app: App, handler: proc(app: App): bool) =
+proc onTimeout*(app: App, handler: proc(app: App): TickResult) =
   ## Set the timeout handler with App context for the application.
   ##
   ## The handler is called when no input events are received within
-  ## the application timeout period. Return true to continue running,
-  ## false to quit the application.
+  ## the application timeout period. Return `trContinue` to keep running,
+  ## `trQuit` to exit the application loop.
   app.handlers.timeout = handler
+
+proc onTimeout*(
+    app: App, handler: proc(): bool
+) {.deprecated: "Use a handler returning TickResult instead of bool".} =
+  ## Legacy `bool`-returning overload. `false` -> `trQuit`,
+  ## `true` -> `trContinue`. Prefer the `TickResult`-returning overload.
+  app.handlers.timeout = wrapHandler(handler):
+    proc(app: App): TickResult =
+      if captured(): trContinue else: trQuit
+
+proc onTimeout*(
+    app: App, handler: proc(app: App): bool
+) {.deprecated: "Use a handler returning TickResult instead of bool".} =
+  ## Legacy `bool`-returning overload with App context. `false` -> `trQuit`,
+  ## `true` -> `trContinue`. Prefer the `TickResult`-returning overload.
+  app.handlers.timeout = wrapHandler(handler):
+    proc(app: App): TickResult =
+      if captured(app): trContinue else: trQuit
 
 # Generated: application timeout setter/getter
 defineTimeoutAccessors(App)
@@ -270,27 +307,27 @@ proc dispatchRender*(app: App) =
   if app.handlers.render != nil:
     app.handlers.render(app.renderer.getBuffer(), app)
 
-proc dispatchTick*(app: App): bool =
+proc dispatchTick*(app: App): TickResult =
   ## Invoke the configured tick handler.
   ##
-  ## Returns `true` when no handler is configured. Primarily used internally
-  ## by `tick`, but exported so tests and callers can trigger the handler
-  ## directly.
+  ## Returns `trContinue` when no handler is configured. Primarily used
+  ## internally by `tick`, but exported so tests and callers can trigger
+  ## the handler directly.
   if app.handlers.tick != nil:
     app.handlers.tick(app)
   else:
-    true
+    trContinue
 
-proc dispatchTimeout*(app: App): bool =
+proc dispatchTimeout*(app: App): TickResult =
   ## Invoke the configured timeout handler.
   ##
-  ## Returns `true` when no handler is configured. Primarily used internally
-  ## by `tick`, but exported so tests and callers can trigger the handler
-  ## directly.
+  ## Returns `trContinue` when no handler is configured. Primarily used
+  ## internally by `tick`, but exported so tests and callers can trigger
+  ## the handler directly.
   if app.handlers.timeout != nil:
     app.handlers.timeout(app)
   else:
-    true
+    trContinue
 
 proc hasTimeoutHandler(app: App): bool {.inline.} =
   app.handlers.timeout != nil
@@ -371,7 +408,7 @@ proc tick(app: App): bool =
       if isTimeoutReached(app.timings.applicationTimeout, elapsedAfterPoll):
         # Reset timer to prevent busy-loop and enable periodic callbacks
         app.timings.lastEventTime = getMonoTime()
-        if not app.dispatchTimeout():
+        if app.dispatchTimeout() == trQuit:
           return false
 
     if eventsAvailable:
@@ -401,7 +438,7 @@ proc tick(app: App): bool =
           break
 
     # Call tick handler between event processing and rendering
-    if not app.dispatchTick():
+    if app.dispatchTick() == trQuit:
       return false
 
     # Render only if enough time has passed for target FPS
