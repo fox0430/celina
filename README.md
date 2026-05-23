@@ -39,7 +39,7 @@ Check out the [`examples/`](examples/) directory for sample applications demonst
 - **[`window_demo.nim`](examples/window_demo.nim)**: Window management system with multiple overlapping windows, focus control, and modal dialogs
 - **[`async_file_manager.nim`](examples/async_file_manager.nim)**: Real-world file manager implementation with async I/O, multi-window UI, and vim-style navigation
 
-# Projects using Celina
+## Projects using Celina
 
 - [moe](https://github.com/fox0430/moe) - A command line based editor inspired by Vim.
 
