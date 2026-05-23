@@ -41,7 +41,7 @@ Check out the [`examples/`](examples/) directory for sample applications demonst
 
 # Projects using Celina
 
-- [moe](https://gitihub.com/fox0430/moe) - A command line based editor inspired by Vim.
+- [moe](https://github.com/fox0430/moe) - A command line based editor inspired by Vim.
 
 ## Documentation
 
