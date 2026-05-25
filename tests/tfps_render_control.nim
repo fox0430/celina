@@ -1,5 +1,7 @@
 ## Test to verify shouldRender() works correctly with lastRenderTime
+
 import std/[unittest, os, times, monotimes]
+
 import ../celina/core/fps
 
 suite "FPS Render Control Tests":
