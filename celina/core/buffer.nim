@@ -13,15 +13,36 @@ type
     style*: Style # Visual styling
     hyperlink*: string # OSC 8 hyperlink URL (empty = no link)
 
-  DirtyRegion* = object ## Tracks the rectangular region of changed cells
-    isDirty*: bool # Whether any changes have been made
-    minX*, minY*: int # Top-left corner of dirty region (inclusive)
-    maxX*, maxY*: int # Bottom-right corner of dirty region (inclusive)
+  RowDirty* = object
+    ## Per-row dirty extents.
+    ## When `isDirty` is true, the row has changes spanning columns
+    ## `[minX..maxX]` inclusive. When false, `minX`/`maxX` are meaningless.
+    isDirty*: bool
+    minX*, maxX*: int
+
+  DirtyRegion* = object
+    ## Tracks changed cells as per-row dirty spans (one `(minX, maxX)` per
+    ## row). Sparse vertical updates skip untouched rows during diff.
+    ##
+    ## Invariant (maintained by `newBuffer`/`resize`/`clone`): for the
+    ## owning buffer, `rows.len == buffer.area.height`. `markDirty` and
+    ## `markDirtyRect` rely on this and index `rows` directly after a
+    ## bounds check against `area.height`.
+    ##
+    ## `anyDirty` mirrors "any `rows[*].isDirty` is true" so the common
+    ## clean/dirty probe stays O(1). Set whenever a row is first marked,
+    ## cleared by `clearDirty`.
+    ##
+    ## The legacy bounding-box accessors (`isDirty`/`minX`/`maxX`/`minY`/
+    ## `maxY`) are exposed as computed procs further below. Use
+    ## `boundingBox` when you need more than one of them at once.
+    rows*: seq[RowDirty]
+    anyDirty*: bool
 
   Buffer* = object ## 2D buffer representing terminal screen content
     area*: Rect # The area this buffer covers
     content: seq[seq[Cell]] # 2D grid of cells
-    dirty: DirtyRegion # Tracks changed region for optimized diff
+    dirty: DirtyRegion # Per-row dirty tracker
 
 proc cell*(
     symbol: string = " ", style: Style = defaultStyle(), hyperlink: string = ""
@@ -119,7 +140,7 @@ proc newBuffer*(area: Rect): Buffer =
   Buffer(
     area: area,
     content: newSeqWith(area.height, newSeqWith(area.width, cell())),
-    dirty: DirtyRegion(isDirty: false, minX: 0, minY: 0, maxX: 0, maxY: 0),
+    dirty: DirtyRegion(rows: newSeq[RowDirty](area.height)),
   )
 
 proc newBuffer*(width, height: int): Buffer =
@@ -127,61 +148,115 @@ proc newBuffer*(width, height: int): Buffer =
   newBuffer(rect(0, 0, width, height))
 
 # Dirty region management
-proc markDirty*(buffer: var Buffer, x, y: int) =
-  ## Mark a specific cell as dirty for optimized diff calculation
-  ## This expands the dirty region to include the specified cell
-  if x < 0 or x >= buffer.area.width or y < 0 or y >= buffer.area.height:
-    return # Out of bounds, ignore
+proc isDirty*(d: DirtyRegion): bool {.inline.} =
+  ## True if any row has recorded changes. O(1).
+  d.anyDirty
 
-  if not buffer.dirty.isDirty:
-    # First change - initialize dirty region
-    buffer.dirty = DirtyRegion(isDirty: true, minX: x, minY: y, maxX: x, maxY: y)
+proc boundingBox*(d: DirtyRegion): tuple[isDirty: bool, minX, minY, maxX, maxY: int] =
+  ## Single-pass walk that returns the full dirty bounding box.
+  ## Prefer this over calling `minX`/`minY`/`maxX`/`maxY` individually
+  ## when you need more than one coordinate. Returns zeros when clean —
+  ## callers should gate on `isDirty` before treating values as meaningful.
+  if not d.anyDirty:
+    return (false, 0, 0, 0, 0)
+  var first = true
+  for y in 0 ..< d.rows.len:
+    let row = d.rows[y]
+    if not row.isDirty:
+      continue
+    if first:
+      result = (true, row.minX, y, row.maxX, y)
+      first = false
+    else:
+      if row.minX < result.minX:
+        result.minX = row.minX
+      if row.maxX > result.maxX:
+        result.maxX = row.maxX
+      result.maxY = y
+
+proc minY*(d: DirtyRegion): int {.inline.} =
+  ## Y of the topmost dirty row. Returns 0 when no row is dirty;
+  ## callers should gate on `isDirty` before treating the value as
+  ## meaningful (matches the pre-row-spans behaviour).
+  d.boundingBox.minY
+
+proc maxY*(d: DirtyRegion): int {.inline.} =
+  ## Y of the bottommost dirty row. Returns 0 when no row is dirty.
+  d.boundingBox.maxY
+
+proc minX*(d: DirtyRegion): int {.inline.} =
+  ## Minimum X across all dirty rows (bounding-box left edge).
+  d.boundingBox.minX
+
+proc maxX*(d: DirtyRegion): int {.inline.} =
+  ## Maximum X across all dirty rows (bounding-box right edge).
+  d.boundingBox.maxX
+
+proc isRowDirty*(buffer: Buffer, y: int): bool {.inline.} =
+  ## True when row `y` has any dirty cells.
+  ## Out-of-range rows are treated as clean.
+  y >= 0 and y < buffer.dirty.rows.len and buffer.dirty.rows[y].isDirty
+
+proc markRowDirty(d: var DirtyRegion, y, lo, hi: int) {.inline.} =
+  ## Extend row `y`'s dirty span to cover `[lo..hi]` and set `anyDirty`.
+  ## Caller is responsible for ensuring `y` is in range.
+  if not d.rows[y].isDirty:
+    d.rows[y] = RowDirty(isDirty: true, minX: lo, maxX: hi)
+    d.anyDirty = true
   else:
-    # Expand existing dirty region
-    buffer.dirty.minX = min(buffer.dirty.minX, x)
-    buffer.dirty.minY = min(buffer.dirty.minY, y)
-    buffer.dirty.maxX = max(buffer.dirty.maxX, x)
-    buffer.dirty.maxY = max(buffer.dirty.maxY, y)
+    if lo < d.rows[y].minX:
+      d.rows[y].minX = lo
+    if hi > d.rows[y].maxX:
+      d.rows[y].maxX = hi
+
+proc markDirty*(buffer: var Buffer, x, y: int) =
+  ## Mark a specific cell as dirty. Extends the affected row's span.
+  if x < 0 or x >= buffer.area.width or y < 0 or y >= buffer.area.height:
+    return
+  buffer.dirty.markRowDirty(y, x, x)
 
 proc markDirtyRect*(buffer: var Buffer, rect: Rect) =
-  ## Mark a rectangular area as dirty
-  ## More efficient than marking individual cells when multiple cells change
+  ## Mark a rectangular area as dirty by extending each affected row's span.
   let clipped = buffer.area.intersection(rect)
   if clipped.isEmpty:
     return
 
-  # Convert to buffer-local coordinates
   let localMinX = clipped.x - buffer.area.x
   let localMinY = clipped.y - buffer.area.y
   let localMaxX = clipped.right - 1 - buffer.area.x
   let localMaxY = clipped.bottom - 1 - buffer.area.y
 
-  if not buffer.dirty.isDirty:
-    buffer.dirty = DirtyRegion(
-      isDirty: true, minX: localMinX, minY: localMinY, maxX: localMaxX, maxY: localMaxY
-    )
-  else:
-    buffer.dirty.minX = min(buffer.dirty.minX, localMinX)
-    buffer.dirty.minY = min(buffer.dirty.minY, localMinY)
-    buffer.dirty.maxX = max(buffer.dirty.maxX, localMaxX)
-    buffer.dirty.maxY = max(buffer.dirty.maxY, localMaxY)
+  for y in localMinY .. localMaxY:
+    buffer.dirty.markRowDirty(y, localMinX, localMaxX)
 
-proc clearDirty*(buffer: var Buffer) {.inline.} =
-  ## Clear the dirty region after rendering
-  ## Should be called after buffer has been successfully rendered
-  buffer.dirty = DirtyRegion(isDirty: false, minX: 0, minY: 0, maxX: 0, maxY: 0)
+proc clearDirty*(buffer: var Buffer) =
+  ## Clear the dirty region after rendering.
+  ## Should be called after a buffer has been successfully rendered.
+  ## Early-returns when already clean to keep the no-op frame O(1);
+  ## otherwise resets only the rows actually marked dirty to keep the
+  ## row seq's backing storage and avoid re-touching long stretches of
+  ## already-clean rows on tall buffers with sparse updates.
+  if not buffer.dirty.anyDirty:
+    return
+  for i in 0 ..< buffer.dirty.rows.len:
+    if buffer.dirty.rows[i].isDirty:
+      buffer.dirty.rows[i] = RowDirty()
+  buffer.dirty.anyDirty = false
 
 proc getDirtyRegionSize*(buffer: Buffer): int =
-  ## Get the number of cells in the dirty region
-  ## Returns 0 if no changes have been made
-  if not buffer.dirty.isDirty:
+  ## Total dirty cell count across all dirty rows.
+  ## With per-row tracking this is the exact dirty span sum rather than
+  ## the bounding-box area, so sparse vertical updates yield much smaller
+  ## values than the rectangular tracker did.
+  if not buffer.dirty.anyDirty:
     return 0
-  (buffer.dirty.maxX - buffer.dirty.minX + 1) *
-    (buffer.dirty.maxY - buffer.dirty.minY + 1)
+  for row in buffer.dirty.rows:
+    if row.isDirty:
+      result += row.maxX - row.minX + 1
 
-proc isDirty*(buffer: Buffer): bool =
-  ## Check if changed region for optimized diff
-  buffer.dirty.isDirty
+proc isDirty*(buffer: Buffer): bool {.inline.} =
+  ## True when any cell has been recorded as changed. O(1).
+  buffer.dirty.anyDirty
 
 # Buffer access and manipulation
 proc `[]`*(buffer: Buffer, x, y: int): Cell =
@@ -523,6 +598,12 @@ proc resize*(buffer: var Buffer, newArea: Rect) =
 
   buffer.area = newArea
   buffer.content = newSeqWith(newArea.height, newSeqWith(newArea.width, cell()))
+  # Drop any per-row dirty state from the old size, then re-grow to the new
+  # height with default-initialized RowDirty entries. markDirtyRect below
+  # repopulates the dirty spans for the new area.
+  buffer.dirty.rows.setLen(0)
+  buffer.dirty.rows.setLen(newArea.height)
+  buffer.dirty.anyDirty = false
 
   # Copy old content where it overlaps
   let intersection = oldArea.intersection(newArea)
@@ -555,17 +636,19 @@ proc `==`*(a, b: Buffer): bool =
   return true
 
 proc diff*(old, new: Buffer): seq[tuple[pos: Position, cell: Cell]] =
-  ## Calculate differences between two buffers with dirty region optimization
-  ## Returns a sequence of changes needed to transform old into new
+  ## Calculate differences between two buffers with dirty region optimization.
+  ## Returns a sequence of changes needed to transform `old` into `new`.
   ##
-  ## This optimized implementation uses the dirty region tracking to avoid
-  ## scanning unchanged portions of the buffer, providing significant performance
-  ## improvements for typical use cases (e.g., single character edits, cursor movement).
+  ## Uses per-row dirty tracking: rows untouched in `new` are skipped
+  ## entirely, and within each dirty row only `[minX..maxX]` is scanned.
+  ## When the total dirty cell count is very large, a full scan is used
+  ## instead because it tends to be more cache-friendly than chasing
+  ## many small spans.
   ##
   ## Performance characteristics:
-  ## - No changes: O(1) - immediate return
-  ## - Small changes (1-100 cells): O(dirty region size) - highly optimized
-  ## - Large changes (>2000 cells): O(width × height) - fallback to full scan
+  ## - No changes: O(1) – immediate return
+  ## - Sparse changes: O(sum of dirty spans) – tight per-row loop
+  ## - Large changes (> 2000 dirty cells): O(width × height) full scan
   result = @[]
 
   # Handle area mismatch - full redraw required
@@ -575,26 +658,26 @@ proc diff*(old, new: Buffer): seq[tuple[pos: Position, cell: Cell]] =
         result.add((pos(x, y), new.content[y][x]))
     return
 
-  # Fast path: no changes at all
-  if not new.dirty.isDirty:
+  # Fast path: no changes at all - O(1) via anyDirty.
+  if not new.dirty.anyDirty:
     return
 
-  # Calculate dirty region size
   const MaxDirtyRegionBeforeFullScan = 2000
   let dirtySize = new.getDirtyRegionSize()
 
-  # Adaptive strategy: use dirty region optimization for small/medium changes
-  # but fall back to full scan for very large dirty regions
   if dirtySize > MaxDirtyRegionBeforeFullScan:
-    # Large dirty region - full scan may be more cache-efficient
+    # Large dirty footprint - full scan is more cache-efficient
     for y in 0 ..< new.area.height:
       for x in 0 ..< new.area.width:
         if old.content[y][x] != new.content[y][x]:
           result.add((pos(x, y), new.content[y][x]))
   else:
-    # Small/medium dirty region - scan only the changed area
-    for y in new.dirty.minY .. new.dirty.maxY:
-      for x in new.dirty.minX .. new.dirty.maxX:
+    # Sparse scan: walk only dirty rows, only their column spans
+    for y in 0 ..< new.dirty.rows.len:
+      let row = new.dirty.rows[y]
+      if not row.isDirty:
+        continue
+      for x in row.minX .. row.maxX:
         if old.content[y][x] != new.content[y][x]:
           result.add((pos(x, y), new.content[y][x]))
 
