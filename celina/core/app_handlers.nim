@@ -4,6 +4,25 @@
 ## Shared `untyped` template used by `App` and `AsyncApp` handler-setter
 ## procs. The expansion happens in the caller's scope, so the private
 ## `handlers.*` fields remain accessible.
+##
+## Symbols required at the template-expansion site (the call site must
+## have them in scope; they are not bound from this module):
+## `Event`, `EventKind`, `EventResult` (with `erContinue` / `erQuit`),
+## `Buffer`, `TickResult` (with `trContinue` / `trQuit`), and — for the
+## `*Async` variants — `Future` plus the `.async.` pragma from whichever
+## async backend the app uses.
+
+import events, tick_common
+
+func toEventResult*(b: bool): EventResult =
+  ## Adapter for legacy `bool`-returning event handlers:
+  ## `false` -> `erQuit`, `true` -> `erContinue`.
+  if b: erContinue else: erQuit
+
+func toTickResult*(b: bool): TickResult =
+  ## Adapter for legacy `bool`-returning tick/timeout handlers:
+  ## `false` -> `trQuit`, `true` -> `trContinue`.
+  if b: trContinue else: trQuit
 
 template wrapHandler*(handler, body: untyped): untyped =
   ## Wrap a user-supplied handler with the standard nil-safe pattern
@@ -76,7 +95,7 @@ template defineEventHandlerSetters*(AppT: untyped) =
     ## in new code.
     app.handlers.event = wrapHandler(handler):
       proc(event: Event, app: AppT): EventResult =
-        if captured(event): erContinue else: erQuit
+        toEventResult(captured(event))
 
   proc onEvent*(
       app: AppT, handler: proc(event: Event, app: AppT): bool
@@ -86,7 +105,7 @@ template defineEventHandlerSetters*(AppT: untyped) =
     ## Prefer the `EventResult`-returning overload in new code.
     app.handlers.event = wrapHandler(handler):
       proc(event: Event, app: AppT): EventResult =
-        if captured(event, app): erContinue else: erQuit
+        toEventResult(captured(event, app))
 
 template defineRenderHandlerSetters*(AppT: untyped) =
   ## Generate the sync `onRender` setter family for `AppT`.
@@ -141,7 +160,7 @@ template defineTickHandlerSetters*(AppT: untyped) =
     ## `true` -> `trContinue`. Prefer the `TickResult`-returning overload.
     app.handlers.tick = wrapHandler(handler):
       proc(app: AppT): TickResult =
-        if captured(): trContinue else: trQuit
+        toTickResult(captured())
 
   proc onTick*(
       app: AppT, handler: proc(app: AppT): bool
@@ -150,7 +169,7 @@ template defineTickHandlerSetters*(AppT: untyped) =
     ## `false` -> `trQuit`, `true` -> `trContinue`.
     app.handlers.tick = wrapHandler(handler):
       proc(app: AppT): TickResult =
-        if captured(app): trContinue else: trQuit
+        toTickResult(captured(app))
 
 template defineTimeoutHandlerSetters*(AppT: untyped) =
   ## Generate the sync `onTimeout` setter family for `AppT`.
@@ -179,7 +198,7 @@ template defineTimeoutHandlerSetters*(AppT: untyped) =
     ## `true` -> `trContinue`. Prefer the `TickResult`-returning overload.
     app.handlers.timeout = wrapHandler(handler):
       proc(app: AppT): TickResult =
-        if captured(): trContinue else: trQuit
+        toTickResult(captured())
 
   proc onTimeout*(
       app: AppT, handler: proc(app: AppT): bool
@@ -188,7 +207,7 @@ template defineTimeoutHandlerSetters*(AppT: untyped) =
     ## `false` -> `trQuit`, `true` -> `trContinue`.
     app.handlers.timeout = wrapHandler(handler):
       proc(app: AppT): TickResult =
-        if captured(app): trContinue else: trQuit
+        toTickResult(captured(app))
 
 template defineEventHandlerSettersAsync*(AppT: untyped) =
   ## Generate the async `onEventAsync` setter family for `AppT`.
@@ -204,6 +223,15 @@ template defineEventHandlerSettersAsync*(AppT: untyped) =
     ##
     ## Return `erQuit` to exit the loop. `erConsume`/`erContinue` are
     ## equivalent at the global layer.
+    ##
+    ## Example:
+    ## ```nim
+    ## app.onEventAsync proc(event: Event): Future[EventResult] {.async.} =
+    ##   if event.kind == Key and event.key.code == KeyCode.Char and
+    ##       event.key.char == "q":
+    ##     return erQuit
+    ##   return erContinue
+    ## ```
     app.handlers.event = wrapHandler(handler):
       proc(event: Event, app: AppT): Future[EventResult] {.async.} =
         return await captured(event)
@@ -224,8 +252,7 @@ template defineEventHandlerSettersAsync*(AppT: untyped) =
     ## `true` -> `erContinue`. Prefer the `EventResult`-returning overload.
     app.handlers.event = wrapHandler(handler):
       proc(event: Event, app: AppT): Future[EventResult] {.async.} =
-        let cont = await captured(event)
-        return if cont: erContinue else: erQuit
+        return toEventResult(await captured(event))
 
   proc onEventAsync*(
       app: AppT, handler: proc(event: Event, app: AppT): Future[bool] {.async.}
@@ -236,8 +263,7 @@ template defineEventHandlerSettersAsync*(AppT: untyped) =
     ## `false` -> `erQuit`, `true` -> `erContinue`.
     app.handlers.event = wrapHandler(handler):
       proc(event: Event, app: AppT): Future[EventResult] {.async.} =
-        let cont = await captured(event, app)
-        return if cont: erContinue else: erQuit
+        return toEventResult(await captured(event, app))
 
 template defineRenderHandlerSettersAsync*(AppT: untyped) =
   ## Generate the async `onRenderAsync` setter family for `AppT`.
@@ -283,7 +309,7 @@ template defineTickHandlerSettersAsync*(AppT: untyped) =
     ## `true` -> `trContinue`. Prefer the `TickResult`-returning overload.
     app.handlers.tick = wrapHandler(handler):
       proc(app: AppT): Future[TickResult] {.async.} =
-        return if (await captured()): trContinue else: trQuit
+        return toTickResult(await captured())
 
   proc onTickAsync*(
       app: AppT, handler: proc(app: AppT): Future[bool] {.async.}
@@ -292,7 +318,7 @@ template defineTickHandlerSettersAsync*(AppT: untyped) =
     ## `false` -> `trQuit`, `true` -> `trContinue`.
     app.handlers.tick = wrapHandler(handler):
       proc(app: AppT): Future[TickResult] {.async.} =
-        return if (await captured(app)): trContinue else: trQuit
+        return toTickResult(await captured(app))
 
 template defineTimeoutHandlerSettersAsync*(AppT: untyped) =
   ## Generate the async `onTimeoutAsync` setter family for `AppT`.
@@ -321,7 +347,7 @@ template defineTimeoutHandlerSettersAsync*(AppT: untyped) =
     ## `true` -> `trContinue`. Prefer the `TickResult`-returning overload.
     app.handlers.timeout = wrapHandler(handler):
       proc(app: AppT): Future[TickResult] {.async.} =
-        return if (await captured()): trContinue else: trQuit
+        return toTickResult(await captured())
 
   proc onTimeoutAsync*(
       app: AppT, handler: proc(app: AppT): Future[bool] {.async.}
@@ -330,4 +356,4 @@ template defineTimeoutHandlerSettersAsync*(AppT: untyped) =
     ## `false` -> `trQuit`, `true` -> `trContinue`.
     app.handlers.timeout = wrapHandler(handler):
       proc(app: AppT): Future[TickResult] {.async.} =
-        return if (await captured(app)): trContinue else: trQuit
+        return toTickResult(await captured(app))
