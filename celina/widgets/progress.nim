@@ -324,8 +324,7 @@ method render*(widget: ProgressBar, area: Rect, buf: var Buffer) =
   if area.isEmpty:
     return
 
-  # Clear the area first - force reset to clean terminal state
-  buf.setString(area.x, area.y, resetSequence(), defaultStyle()) # Explicit reset
+  # Clear the area first
   let clearStyle = defaultStyle() # Use plain default style for all progress bar types
   for y in 0 ..< area.height:
     for x in 0 ..< area.width:

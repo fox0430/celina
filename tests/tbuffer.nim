@@ -268,6 +268,167 @@ suite "Buffer Module Tests":
       buffer.setString(10, 1, "Outside")
       # Should not crash, but won't set anything
 
+  suite "Tab and control character handling":
+    test "Tab at x=0 expands to next 8-column stop":
+      var buffer = newBuffer(20, 1)
+      buffer.setString(0, 0, "\tA")
+      for x in 0 ..< 8:
+        check buffer[x, 0].symbol == " "
+      check buffer[8, 0].symbol == "A"
+
+    test "Tab from mid-string aligns to next stop relative to startX":
+      var buffer = newBuffer(20, 1)
+      buffer.setString(0, 0, "abc\tX")
+      # startX=0, after "abc" currentX=3 → stride=5 → fill 3..7, X at col 8
+      check buffer[0, 0].symbol == "a"
+      check buffer[1, 0].symbol == "b"
+      check buffer[2, 0].symbol == "c"
+      for x in 3 ..< 8:
+        check buffer[x, 0].symbol == " "
+      check buffer[8, 0].symbol == "X"
+
+    test "Tab on a tab-stop boundary advances a full stop":
+      var buffer = newBuffer(20, 1)
+      buffer.setString(8, 0, "\tY")
+      # currentX == startX + 8 → mod==0 → stride==8 → fill 8..15, Y at 16
+      for x in 8 ..< 16:
+        check buffer[x, 0].symbol == " "
+      check buffer[16, 0].symbol == "Y"
+
+    test "Consecutive tabs land on consistent stops":
+      var buffer = newBuffer(30, 1)
+      buffer.setString(0, 0, "a\t\tb")
+      check buffer[0, 0].symbol == "a"
+      # first tab fills 1..7, second tab fills 8..15, b lands at 16
+      for x in 1 ..< 16:
+        check buffer[x, 0].symbol == " "
+      check buffer[16, 0].symbol == "b"
+
+    test "Custom tabWidth=4 expands to 4-column stops":
+      var buffer = newBuffer(20, 1)
+      buffer.setString(0, 0, "a\tb", tabWidth = 4)
+      check buffer[0, 0].symbol == "a"
+      for x in 1 ..< 4:
+        check buffer[x, 0].symbol == " "
+      check buffer[4, 0].symbol == "b"
+
+    test "Custom tabWidth=2 expands to 2-column stops":
+      var buffer = newBuffer(20, 1)
+      buffer.setString(0, 0, "a\tb\tc", tabWidth = 2)
+      check buffer[0, 0].symbol == "a"
+      check buffer[1, 0].symbol == " "
+      check buffer[2, 0].symbol == "b"
+      check buffer[3, 0].symbol == " "
+      check buffer[4, 0].symbol == "c"
+
+    test "tabWidth=0 falls back to single-space substitution":
+      var buffer = newBuffer(20, 1)
+      buffer.setString(0, 0, "a\tb", tabWidth = 0)
+      check buffer[0, 0].symbol == "a"
+      check buffer[1, 0].symbol == " "
+      check buffer[2, 0].symbol == "b"
+
+    test "Negative tabWidth falls back to single-space substitution":
+      var buffer = newBuffer(20, 1)
+      buffer.setString(0, 0, "a\tb", tabWidth = -1)
+      check buffer[0, 0].symbol == "a"
+      check buffer[1, 0].symbol == " "
+      check buffer[2, 0].symbol == "b"
+
+    test "Other C0 controls are always single-space, ignoring tabWidth":
+      var buffer = newBuffer(10, 1)
+      buffer.setString(0, 0, "a\x01b\x1Fc\x7Fd", tabWidth = 4)
+      check buffer[0, 0].symbol == "a"
+      check buffer[1, 0].symbol == " "
+      check buffer[2, 0].symbol == "b"
+      check buffer[3, 0].symbol == " "
+      check buffer[4, 0].symbol == "c"
+      check buffer[5, 0].symbol == " "
+      check buffer[6, 0].symbol == "d"
+
+    test "Tab expansion clips at buffer edge":
+      var buffer = newBuffer(10, 1)
+      buffer.setString(8, 0, "\tX")
+      # tab from col 8 wants to fill 8..15 but buffer only has 8,9
+      check buffer[8, 0].symbol == " "
+      check buffer[9, 0].symbol == " "
+      # X is dropped because we've run out of room
+
+    test "Consecutive tabs past the right edge stop early":
+      # Once currentX has run off the right edge, additional tabs must
+      # not iterate their stride writing nothing — they should break
+      # out of the rune loop immediately.
+      var buffer = newBuffer(10, 1)
+      buffer.setString(0, 0, "abcdefgh\t\t\tZ")
+      for x, ch in "abcdefgh":
+        check buffer[x, 0].symbol == $ch
+      # First tab clips into 8..9; further tabs / 'Z' have no room.
+      check buffer[8, 0].symbol == " "
+      check buffer[9, 0].symbol == " "
+
+    test "setRunes honors tabWidth parameter":
+      var buffer = newBuffer(20, 1)
+      let runes = "a\tb".toRunes
+      buffer.setRunes(0, 0, runes, tabWidth = 4)
+      check buffer[0, 0].symbol == "a"
+      for x in 1 ..< 4:
+        check buffer[x, 0].symbol == " "
+      check buffer[4, 0].symbol == "b"
+
+    test "setString Position overload honors tabWidth":
+      var buffer = newBuffer(20, 1)
+      buffer.setString(pos(0, 0), "a\tb", tabWidth = 4)
+      check buffer[0, 0].symbol == "a"
+      check buffer[4, 0].symbol == "b"
+
+    test "DefaultTabWidth is 8":
+      check DefaultTabWidth == 8
+
+    test "Tab-expanded cells inherit hyperlink":
+      var buffer = newBuffer(20, 1)
+      buffer.setString(0, 0, "a\tb", hyperlink = "http://example.com")
+      check buffer[0, 0].symbol == "a"
+      check buffer[0, 0].hyperlink == "http://example.com"
+      # tab expands to spaces filling cols 1..7, b at col 8
+      for x in 1 ..< 8:
+        check buffer[x, 0].symbol == " "
+        check buffer[x, 0].hyperlink == "http://example.com"
+      check buffer[8, 0].symbol == "b"
+      check buffer[8, 0].hyperlink == "http://example.com"
+
+    test "area setString: tab in centered text becomes single space":
+      var buffer = newBuffer(20, 1)
+      # textWidth counts tab as 1 column → 5; x = 0 + (10 - 5) div 2 = 2
+      buffer.setString(rect(0, 0, 10, 1), "ab\tcd", hAlign = hCenter)
+      check buffer[2, 0].symbol == "a"
+      check buffer[3, 0].symbol == "b"
+      check buffer[4, 0].symbol == " "
+      check buffer[5, 0].symbol == "c"
+      check buffer[6, 0].symbol == "d"
+
+    test "area setString: C0 controls inside area are substituted with single space":
+      var buffer = newBuffer(20, 1)
+      buffer.setString(rect(0, 0, 10, 1), "abc\x01\x1Fd")
+      check buffer[0, 0].symbol == "a"
+      check buffer[1, 0].symbol == "b"
+      check buffer[2, 0].symbol == "c"
+      check buffer[3, 0].symbol == " "
+      check buffer[4, 0].symbol == " "
+      check buffer[5, 0].symbol == "d"
+
+    test "area setString: C0 control before area boundary is skipped":
+      var buffer = newBuffer(20, 1)
+      # Pre-fill so we can detect any unwanted writes outside the area.
+      buffer.setString(0, 0, "..........")
+      # area at x=5, width=1; text="\x01ab" with hRight → x=3.
+      # \x01 at currentX=3 (before area) → skipped; 'a' at currentX=4 (still
+      # before area) → skipped; 'b' at currentX=5 → written.
+      buffer.setString(rect(5, 0, 1, 1), "\x01ab", hAlign = hRight)
+      check buffer[3, 0].symbol == "."
+      check buffer[4, 0].symbol == "."
+      check buffer[5, 0].symbol == "b"
+      check buffer[6, 0].symbol == "."
+
   suite "setCell Operations":
     test "setCell with narrow character":
       var buffer = newBuffer(10, 5)
