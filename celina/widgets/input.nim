@@ -162,8 +162,8 @@ proc getCursor*(widget: Input): int =
   ## Get cursor position
   widget.state.cursor
 
-proc setFocus*(widget: Input, focused: bool) =
-  ## Set focus state
+method setFocus*(widget: Input, focused: bool) =
+  ## Set focus state. Fires `onFocus`/`onBlur` callbacks on transition.
   if widget.state.focused != focused:
     widget.state.focused = focused
     if focused and widget.onFocus != nil:
@@ -171,8 +171,11 @@ proc setFocus*(widget: Input, focused: bool) =
     elif not focused and widget.onBlur != nil:
       widget.onBlur()
 
-proc hasFocus*(widget: Input): bool =
-  ## Check if input has focus
+method isFocused*(widget: Input): bool =
+  widget.state.focused
+
+proc hasFocus*(widget: Input): bool {.inline.} =
+  ## Backwards-compatible alias for `isFocused`.
   widget.state.focused
 
 proc hasSelection*(widget: Input): bool =
@@ -388,6 +391,15 @@ proc handleKeyEvent*(widget: Input, event: KeyEvent): EventResult =
     return erConsume
   else:
     return erContinue
+
+method handleEvent*(widget: Input, event: Event, area: Rect): EventResult =
+  ## Unified event dispatch. Input only consumes key events; other event
+  ## kinds (mouse/paste/etc.) are not handled and propagate via `erContinue`.
+  case event.kind
+  of EventKind.Key:
+    widget.handleKeyEvent(event.key)
+  else:
+    erContinue
 
 # Calculate visible range and cursor position for rendering
 proc calculateVisibleRange(

@@ -309,6 +309,28 @@ proc renderBorder(widget: Tabs, area: Rect, tabBarY: int, buf: var Buffer) =
   # Note: We keep the border intact for a cleaner look
   # The active tab is distinguished by its background color only
 
+proc computeContentArea(widget: Tabs, area: Rect, tabBarHeight: int): Rect =
+  ## Shared layout: shrink `area` by `tabBarHeight` on the bar side and,
+  ## when `showBorder` is enabled and the remaining height has room, by
+  ## one cell on each border edge.
+  if area.isEmpty or widget.tabs.len == 0:
+    return Rect(x: area.x, y: area.y, width: 0, height: 0)
+
+  var content = area
+  if widget.position == Top:
+    content.y += tabBarHeight
+    content.height = max(0, content.height - tabBarHeight)
+  else:
+    content.height = max(0, content.height - tabBarHeight)
+
+  if widget.showBorder and content.height > 2:
+    content.x += 1
+    content.y += 1
+    content.width = max(0, content.width - 2)
+    content.height = max(0, content.height - 2)
+
+  content
+
 # Tab widget methods
 method render*(widget: Tabs, area: Rect, buf: var Buffer) =
   ## Render the tabs widget
@@ -318,16 +340,25 @@ method render*(widget: Tabs, area: Rect, buf: var Buffer) =
   # Render tab bar
   let tabBarHeight = renderTabBar(widget, area, buf)
 
-  # Calculate content area
-  var contentArea = area
-  if widget.position == Top:
-    contentArea.y += tabBarHeight
-    contentArea.height = max(0, contentArea.height - tabBarHeight)
-  else:
-    contentArea.height = max(0, contentArea.height - tabBarHeight)
+  # Compute content area (pre-border) to decide if borders fit
+  let preBorderContent =
+    if widget.position == Top:
+      Rect(
+        x: area.x,
+        y: area.y + tabBarHeight,
+        width: area.width,
+        height: max(0, area.height - tabBarHeight),
+      )
+    else:
+      Rect(
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: max(0, area.height - tabBarHeight),
+      )
 
   # Render border if enabled
-  if widget.showBorder and contentArea.height > 2:
+  if widget.showBorder and preBorderContent.height > 2:
     renderBorder(
       widget,
       area,
@@ -338,11 +369,7 @@ method render*(widget: Tabs, area: Rect, buf: var Buffer) =
       buf,
     )
 
-    # Adjust content area for border
-    contentArea.x += 1
-    contentArea.y += 1
-    contentArea.width = max(0, contentArea.width - 2)
-    contentArea.height = max(0, contentArea.height - 2)
+  let contentArea = widget.computeContentArea(area, tabBarHeight)
 
   # Render active tab content
   if widget.activeIndex < widget.tabs.len and not contentArea.isEmpty:
@@ -376,6 +403,91 @@ method getPreferredSize*(widget: Tabs, available: Size): Size =
 method canFocus*(widget: Tabs): bool =
   ## Tabs widget can receive focus for keyboard navigation
   true
+
+func tabBarHeight*(widget: Tabs): int =
+  ## Height of the tab bar row (1 when tabs exist, 0 otherwise).
+  if widget.tabs.len > 0: 1 else: 0
+
+proc contentArea*(widget: Tabs, area: Rect): Rect =
+  ## Compute the rect where the active tab's content is rendered. Shares
+  ## its layout logic with `render` via `computeContentArea`, so event
+  ## dispatch and hit testing stay in sync with what's drawn.
+  widget.computeContentArea(area, widget.tabBarHeight())
+
+proc tabBarRect*(widget: Tabs, area: Rect): Rect =
+  ## The 1-row strip where tab headings are drawn. Empty rect when there
+  ## are no tabs or the area is empty.
+  if area.isEmpty or widget.tabs.len == 0:
+    return rect(area.x, area.y, 0, 0)
+  let y =
+    if widget.position == Top:
+      area.y
+    else:
+      area.y + area.height - 1
+  rect(area.x, y, area.width, 1)
+
+proc tabIndexAt*(widget: Tabs, area: Rect, x, y: int): int =
+  ## Hit-test the tab bar: return the tab index at `(x, y)`, or `-1` if
+  ## the point is outside the bar, on a divider, or beyond the last tab.
+  ## Mirrors the layout produced by `renderTabBar`.
+  let bar = widget.tabBarRect(area)
+  if bar.width <= 0 or bar.height <= 0 or not bar.contains(x, y):
+    return -1
+  let titles = widget.tabs.mapIt(it.title)
+  let widths = calculateTabWidths(titles, area.width)
+  if widths.len != widget.tabs.len:
+    return -1
+  var cur = area.x
+  for i, w in widths:
+    if x >= cur and x < cur + w:
+      return i
+    cur += w
+    # Divider cell between tabs is not part of any tab.
+    if i < widget.tabs.len - 1:
+      if x == cur:
+        return -1
+      cur += 1
+  -1
+
+method handleEvent*(widget: Tabs, event: Event, area: Rect): EventResult =
+  ## Tabs event dispatch:
+  ##
+  ## 1. Tab / Shift+Tab cycles the active tab (consumed).
+  ## 2. Left-button press on the tab bar selects that tab (consumed).
+  ## 3. Other events are forwarded to the active tab's `content` widget,
+  ##    with the computed content area so child mouse hit-testing works.
+  if widget.tabs.len == 0:
+    return erContinue
+
+  if event.kind == EventKind.Key:
+    let key = event.key
+    case key.code
+    of KeyCode.Tab:
+      if Shift in key.modifiers:
+        widget.prevTab()
+      else:
+        widget.nextTab()
+      return erConsume
+    of KeyCode.BackTab:
+      widget.prevTab()
+      return erConsume
+    else:
+      discard
+
+  if event.kind == EventKind.Mouse:
+    let m = event.mouse
+    if m.kind == MouseEventKind.Press and m.button == MouseButton.Left:
+      let idx = widget.tabIndexAt(area, m.x, m.y)
+      if idx >= 0:
+        widget.setActiveTab(idx)
+        return erConsume
+
+  if widget.activeIndex >= 0 and widget.activeIndex < widget.tabs.len:
+    let active = widget.tabs[widget.activeIndex].content
+    if active != nil:
+      return active.handleEvent(event, widget.contentArea(area))
+
+  erContinue
 
 # Builder methods
 proc withStyle*(widget: Tabs, tabStyle: TabStyle): Tabs =
