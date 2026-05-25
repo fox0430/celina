@@ -382,15 +382,8 @@ proc handleMouseEvent*(widget: List, event: MouseEvent, area: Rect): EventResult
 
   return erContinue
 
-method handleEvent*(widget: List, event: Event, area: Rect): EventResult =
-  ## Unified event dispatch: forward Key/Mouse to the existing handlers.
-  case event.kind
-  of EventKind.Key:
-    widget.handleKeyEvent(event.key)
-  of EventKind.Mouse:
-    widget.handleMouseEvent(event.mouse, area)
-  else:
-    erContinue
+# Generated: forwards Key to handleKeyEvent and Mouse to handleMouseEvent.
+defineKeyMouseDispatch(List)
 
 method setFocus*(widget: List, focused: bool) =
   if not widget.isEnabled():

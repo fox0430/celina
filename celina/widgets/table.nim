@@ -473,13 +473,8 @@ proc handleKeyEvent*(widget: Table, event: KeyEvent): EventResult =
   else:
     return erContinue
 
-method handleEvent*(widget: Table, event: Event, area: Rect): EventResult =
-  ## Unified event dispatch. Table currently only handles key events.
-  case event.kind
-  of EventKind.Key:
-    widget.handleKeyEvent(event.key)
-  else:
-    erContinue
+# Generated: Table currently only handles key events.
+defineKeyDispatch(Table)
 
 # Utility functions for table layout
 proc calculateColumnWidths*(widget: Table, availableWidth: int): seq[int] =
