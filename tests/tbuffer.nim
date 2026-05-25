@@ -894,6 +894,147 @@ suite "Buffer Module Tests":
       check(destBuf.dirty.isDirty)
       check(destBuf.getDirtyRegionSize() > 0)
 
+    test "sparse vertical updates yield exact dirty span count":
+      # Per-row tracking: only the touched cells count, not the bounding box.
+      # The previous rectangular tracker reported (22-5+1)*(8-2+1) = 126.
+      var buf = newBuffer(80, 24)
+      buf.setString(5, 2, "abc")
+      buf.setString(20, 8, "xyz")
+      check buf.getDirtyRegionSize() == 6
+
+    test "rows between dirty rows stay clean":
+      var buf = newBuffer(80, 24)
+      buf.setString(5, 2, "abc")
+      buf.setString(20, 8, "xyz")
+      check buf.isRowDirty(2)
+      check buf.isRowDirty(8)
+      for y in 3 .. 7:
+        check(not buf.isRowDirty(y))
+      check(not buf.isRowDirty(0))
+      check(not buf.isRowDirty(23))
+
+    test "isRowDirty rejects out-of-range rows":
+      var buf = newBuffer(80, 24)
+      buf.setString(5, 2, "abc")
+      check(not buf.isRowDirty(-1))
+      check(not buf.isRowDirty(24))
+      check(not buf.isRowDirty(1000))
+
+    test "dirty accessors return 0 on a clean buffer":
+      # Documented contract: when no row is dirty, min/max coordinate
+      # accessors return 0. Callers must gate on `isDirty` before
+      # treating these as meaningful. Guard against silent regressions
+      # if a future refactor changes the sentinel.
+      let buf = newBuffer(80, 24)
+      check(not buf.dirty.isDirty)
+      check(buf.dirty.minX == 0)
+      check(buf.dirty.maxX == 0)
+      check(buf.dirty.minY == 0)
+      check(buf.dirty.maxY == 0)
+
+    test "markDirtyRect clips region extending past buffer edges":
+      var buf = newBuffer(20, 10)
+      buf.markDirtyRect(rect(15, 8, 100, 100))
+      check buf.dirty.isDirty
+      check buf.dirty.minX == 15
+      check buf.dirty.maxX == 19
+      check buf.dirty.minY == 8
+      check buf.dirty.maxY == 9
+      check(not buf.isRowDirty(7))
+
+    test "markDirtyRect ignores rects fully outside buffer":
+      var buf = newBuffer(20, 10)
+      buf.markDirtyRect(rect(100, 100, 5, 5))
+      check(not buf.dirty.isDirty)
+      check buf.getDirtyRegionSize() == 0
+
+    test "diff skips clean rows in sparse updates":
+      var oldBuf = newBuffer(80, 24)
+      var newBuf = newBuffer(80, 24)
+      for y in 0 ..< 24:
+        oldBuf.setString(0, y, ".")
+        newBuf.setString(0, y, ".")
+      oldBuf.clearDirty()
+      newBuf.clearDirty()
+
+      newBuf.setString(5, 2, "abc")
+      newBuf.setString(20, 8, "xyz")
+
+      let changes = oldBuf.diff(newBuf)
+      check changes.len == 6
+      for ch in changes:
+        check(ch.pos.y == 2 or ch.pos.y == 8)
+
+    test "diff falls back to full scan above the dirty-size threshold":
+      # MaxDirtyRegionBeforeFullScan = 2000. A 100x50 fill marks 5000
+      # dirty cells, so the diff path takes the full-scan branch. The
+      # actual character change is isolated to one cell — the test
+      # exercises that the fallback still produces the correct minimal
+      # diff, not a redundant full-buffer dump.
+      var oldBuf = newBuffer(100, 50)
+      var newBuf = newBuffer(100, 50)
+      oldBuf.fill(rect(0, 0, 100, 50), cell("."))
+      newBuf.fill(rect(0, 0, 100, 50), cell("."))
+      oldBuf.clearDirty()
+      newBuf.clearDirty()
+
+      newBuf.fill(rect(0, 0, 100, 50), cell("."))
+      newBuf[50, 25] = cell("X")
+
+      check newBuf.getDirtyRegionSize() > 2000
+      let changes = oldBuf.diff(newBuf)
+      check changes.len == 1
+      check changes[0].pos == pos(50, 25)
+      check changes[0].cell.symbol == "X"
+
+    test "resize wipes old dirty rows and marks the new area dirty":
+      var buf = newBuffer(20, 10)
+      buf[1, 1] = cell("A")
+      check buf.isRowDirty(1)
+
+      buf.resize(rect(0, 0, 30, 5))
+      # Every row in the new area is dirty (resize marks newArea).
+      for y in 0 ..< 5:
+        check buf.isRowDirty(y)
+      check buf.dirty.rows.len == 5
+      check buf.getDirtyRegionSize() == 30 * 5
+
+      # Now grow taller: rows beyond the previous height should start
+      # clean (no stale dirty bits leaking from the prior layout).
+      buf.clearDirty()
+      buf.resize(rect(0, 0, 30, 8))
+      check buf.dirty.rows.len == 8
+      for y in 0 ..< 8:
+        check buf.isRowDirty(y)
+
+      buf.clearDirty()
+      check(not buf.dirty.isDirty)
+      check buf.dirty.rows.len == 8
+      for y in 0 ..< 8:
+        check(not buf.isRowDirty(y))
+
+    test "boundingBox returns single-pass envelope across dirty rows":
+      var buf = newBuffer(80, 24)
+      buf.setString(5, 2, "abc") # x=5..7, y=2
+      buf.setString(20, 8, "xyz") # x=20..22, y=8
+      buf.setString(1, 15, "longer") # x=1..6, y=15
+
+      let bb = buf.dirty.boundingBox
+      check bb.isDirty
+      check bb.minX == 1
+      check bb.maxX == 22
+      check bb.minY == 2
+      check bb.maxY == 15
+
+    test "boundingBox on a clean buffer reports false with zero envelope":
+      let buf = newBuffer(80, 24)
+      let bb = buf.dirty.boundingBox
+      check(not bb.isDirty)
+      check bb.minX == 0
+      check bb.maxX == 0
+      check bb.minY == 0
+      check bb.maxY == 0
+
   suite "Hyperlink (OSC 8) Support":
     test "Cell with hyperlink creation":
       let linkCell = cell("Click", defaultStyle(), "https://example.com")
