@@ -392,14 +392,8 @@ proc handleKeyEvent*(widget: Input, event: KeyEvent): EventResult =
   else:
     return erContinue
 
-method handleEvent*(widget: Input, event: Event, area: Rect): EventResult =
-  ## Unified event dispatch. Input only consumes key events; other event
-  ## kinds (mouse/paste/etc.) are not handled and propagate via `erContinue`.
-  case event.kind
-  of EventKind.Key:
-    widget.handleKeyEvent(event.key)
-  else:
-    erContinue
+# Generated: Input only consumes key events; other kinds propagate.
+defineKeyDispatch(Input)
 
 # Calculate visible range and cursor position for rendering
 proc calculateVisibleRange(

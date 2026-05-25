@@ -53,3 +53,35 @@ method setFocus*(widget: Widget, focused: bool) {.base.} =
 method isFocused*(widget: Widget): bool {.base.} =
   ## Query this widget's focus state. Default implementation returns false.
   false
+
+template defineKeyMouseDispatch*(WidgetT: untyped) =
+  ## Generate the standard `handleEvent` that forwards `EventKind.Key` to
+  ## `handleKeyEvent(event.key)` and `EventKind.Mouse` to
+  ## `handleMouseEvent(event.mouse, area)`. All other event kinds return
+  ## `erContinue`. Use this for widgets that consume both key and mouse
+  ## input via the existing per-kind handlers (e.g. `Button`, `List`).
+  ##
+  ## Widgets with custom dispatch (e.g. forwarding to child widgets) must
+  ## override `handleEvent` themselves and not invoke this template.
+
+  method handleEvent*(widget: WidgetT, event: Event, area: Rect): EventResult =
+    case event.kind
+    of EventKind.Key:
+      widget.handleKeyEvent(event.key)
+    of EventKind.Mouse:
+      widget.handleMouseEvent(event.mouse, area)
+    else:
+      erContinue
+
+template defineKeyDispatch*(WidgetT: untyped) =
+  ## Generate the standard `handleEvent` that forwards `EventKind.Key` to
+  ## `handleKeyEvent(event.key)` only. Other event kinds (mouse, paste,
+  ## focus, resize) return `erContinue`. Use this for widgets that consume
+  ## only key input (e.g. `Input`, `Table`).
+
+  method handleEvent*(widget: WidgetT, event: Event, area: Rect): EventResult =
+    case event.kind
+    of EventKind.Key:
+      widget.handleKeyEvent(event.key)
+    else:
+      erContinue
