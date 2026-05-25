@@ -431,21 +431,35 @@ proc handleWindowEvent*(window: Window, event: Event): EventResult =
 template bindWidget*(window: Window, widget: untyped) =
   ## Forward this window's key and mouse events to `widget`.
   ##
-  ## Whichever of the following the widget provides will be bound; the
-  ## other is skipped, so this template works for both full-input widgets
-  ## (e.g. `Button`, `List`) and key-only widgets (e.g. `Input`, `Table`):
-  ## - `handleKeyEvent(widget, KeyEvent): EventResult`
-  ## - `handleMouseEvent(widget, MouseEvent, Rect): EventResult`
+  ## Two binding shapes are supported, tried in order:
   ##
-  ## The widget's `EventResult` is forwarded as-is, so `erContinue`
-  ## returns still reach the global `app.onEvent`. The mouse area passed
-  ## to the widget is the window's `contentArea`.
-  when compiles(widget.handleKeyEvent(KeyEvent())):
+  ## 1. **Unified dispatch** — when `widget.handleEvent(Event, Rect)`
+  ##    compiles (the case for all built-in `Widget` subclasses, which
+  ##    inherit the base method). Both the key and mouse handlers wrap
+  ##    the kind-specific event into an `Event` and dispatch through the
+  ##    single method. Widgets that don't care about a given kind return
+  ##    `erContinue` and the window falls through to its general
+  ##    `eventHandler`.
+  ## 2. **Legacy duck-typed dispatch** — for widget-shaped types that do
+  ##    not inherit from `Widget` but provide `handleKeyEvent` and/or
+  ##    `handleMouseEvent` procs. Whichever proc the type provides is
+  ##    bound; the other handler is skipped, preserving the original
+  ##    behavior where mouse events on a key-only widget fall through to
+  ##    the window's `eventHandler`.
+  ##
+  ## The mouse area passed to the widget is the window's `contentArea`.
+  when compiles(widget.handleEvent(Event(), Rect())):
     window.setKeyHandler proc(w: Window, k: KeyEvent): EventResult =
-      widget.handleKeyEvent(k)
-  when compiles(widget.handleMouseEvent(MouseEvent(), Rect())):
+      widget.handleEvent(Event(kind: EventKind.Key, key: k), w.contentArea)
     window.setMouseHandler proc(w: Window, m: MouseEvent): EventResult =
-      widget.handleMouseEvent(m, w.contentArea)
+      widget.handleEvent(Event(kind: EventKind.Mouse, mouse: m), w.contentArea)
+  else:
+    when compiles(widget.handleKeyEvent(KeyEvent())):
+      window.setKeyHandler proc(w: Window, k: KeyEvent): EventResult =
+        widget.handleKeyEvent(k)
+    when compiles(widget.handleMouseEvent(MouseEvent(), Rect())):
+      window.setMouseHandler proc(w: Window, m: MouseEvent): EventResult =
+        widget.handleMouseEvent(m, w.contentArea)
 
 # Window rendering
 

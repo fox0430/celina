@@ -382,6 +382,24 @@ proc handleMouseEvent*(widget: List, event: MouseEvent, area: Rect): EventResult
 
   return erContinue
 
+method handleEvent*(widget: List, event: Event, area: Rect): EventResult =
+  ## Unified event dispatch: forward Key/Mouse to the existing handlers.
+  case event.kind
+  of EventKind.Key:
+    widget.handleKeyEvent(event.key)
+  of EventKind.Mouse:
+    widget.handleMouseEvent(event.mouse, area)
+  else:
+    erContinue
+
+method setFocus*(widget: List, focused: bool) =
+  if not widget.isEnabled():
+    return
+  widget.state = if focused: Focused else: Normal
+
+method isFocused*(widget: List): bool =
+  widget.state == Focused
+
 # Rendering utilities
 proc getItemStyle*(widget: List, index: int): Style =
   ## Get the style for a specific item
