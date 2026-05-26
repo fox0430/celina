@@ -44,6 +44,12 @@ type
     content: seq[seq[Cell]] # 2D grid of cells
     dirty: DirtyRegion # Per-row dirty tracker
 
+const DefaultTabWidth* = 8
+  ## Default tab-stop spacing for `\t` expansion in `setString` / `setRunes`.
+  ## Override per call with the `tabWidth` parameter. Values <= 0 disable
+  ## expansion — `\t` is then substituted with a single space, matching
+  ## the fallback behavior for other C0 control characters.
+
 proc cell*(
     symbol: string = " ", style: Style = defaultStyle(), hyperlink: string = ""
 ): Cell {.inline.} =
@@ -84,6 +90,12 @@ proc runeWidth*(r: Rune): int =
     1
   else:
     2
+
+template isC0Control(n: int): bool =
+  ## C0 control character (0x00..0x1F) or DEL (0x7F). Writing these directly
+  ## to a terminal moves the cursor or otherwise disrupts rendering, so they
+  ## must never reach a cell's `symbol`.
+  n < 0x20 or n == 0x7F
 
 proc runesWidth*(runes: seq[Rune]): int =
   ## Calculate total display width of a sequence of runes
@@ -358,49 +370,100 @@ proc fill*(buffer: var Buffer, area: Rect, fillCell: Cell) =
   # Mark filled area as dirty
   buffer.markDirtyRect(clippedArea)
 
+proc setRunes*(
+    buffer: var Buffer,
+    x, y: int,
+    runes: seq[Rune],
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
+    tabWidth: int = DefaultTabWidth,
+) =
+  ## Set a sequence of runes starting at the given coordinates.
+  ## Handles Unicode characters and wide characters properly.
+  ## If hyperlink is provided, the text becomes a clickable link (OSC 8).
+  ##
+  ## `\t` expands to spaces up to the next `tabWidth` boundary measured
+  ## from the starting `x`, so consecutive tabs land on consistent stops.
+  ## When `tabWidth <= 0`, tab expansion is disabled and `\t` is replaced
+  ## with a single space. Other C0 control characters and DEL are always
+  ## replaced with a single space — leaving them in a cell symbol would
+  ## otherwise be re-emitted verbatim by the differential renderer and
+  ## shift subsequent cursor positioning on the real terminal.
+  if runes.len == 0:
+    return
+  if not buffer.isValidPos(x, y):
+    return
+
+  var currentX = x
+  let startX = x
+
+  for rune in runes:
+    let n = int(rune)
+    if n == 0x09 and tabWidth > 0:
+      # Tab: expand to spaces up to next tab stop relative to startX.
+      # Bail out early once we've hit the right edge so that a run of
+      # tabs past the buffer width doesn't spin through their strides
+      # writing nothing.
+      if currentX >= buffer.area.width:
+        break
+      let stride = tabWidth - ((currentX - startX) mod tabWidth)
+      for _ in 0 ..< stride:
+        if currentX >= buffer.area.width:
+          break
+        if buffer.isValidPos(currentX, y):
+          buffer[currentX, y] = cell(" ", style, hyperlink)
+        currentX.inc
+      continue
+    if isC0Control(n):
+      # Other C0 controls / DEL (and `\t` when tabWidth <= 0):
+      # substitute single space.
+      if currentX >= buffer.area.width:
+        break
+      if buffer.isValidPos(currentX, y):
+        buffer[currentX, y] = cell(" ", style, hyperlink)
+      currentX.inc
+      continue
+
+    let width = runeWidth(rune)
+    if currentX + width > buffer.area.width:
+      break
+
+    if buffer.isValidPos(currentX, y):
+      buffer[currentX, y] = cell($rune, style, hyperlink)
+      # For wide characters, mark the next cell as occupied (empty)
+      # Also inherit the hyperlink for proper link region handling
+      if width == 2 and buffer.isValidPos(currentX + 1, y):
+        buffer[currentX + 1, y] = cell("", style, hyperlink)
+
+    currentX += width
+
+proc setRunes*(
+    buffer: var Buffer,
+    pos: Position,
+    runes: seq[Rune],
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
+    tabWidth: int = DefaultTabWidth,
+) {.inline.} =
+  ## Set a sequence of runes starting at the given position
+  buffer.setRunes(pos.x, pos.y, runes, style, hyperlink, tabWidth)
+
 proc setString*(
     buffer: var Buffer,
     x, y: int,
     text: string,
     style: Style = defaultStyle(),
     hyperlink: string = "",
+    tabWidth: int = DefaultTabWidth,
 ) =
-  ## Set a string starting at the given coordinates
-  ## Handles Unicode characters and wide characters properly
-  ## If hyperlink is provided, the text becomes a clickable link (OSC 8)
+  ## Set a string starting at the given coordinates.
+  ## See `setRunes` for tab and C0 control character semantics.
   if text.len == 0:
     return
-
-  # Validate starting position
-  if not buffer.isValidPos(x, y):
-    return
-
-  var currentX = x
-
   try:
-    for rune in text.runes:
-      let width = runeWidth(rune)
-
-      # Check if we have enough space for this character
-      if currentX < 0 or currentX >= buffer.area.width:
-        break
-      if currentX + width > buffer.area.width:
-        break
-
-      if buffer.isValidPos(currentX, y):
-        buffer[currentX, y] = cell($rune, style, hyperlink)
-
-        # For wide characters, mark the next cell as occupied (empty)
-        # Also inherit the hyperlink for proper link region handling
-        if width == 2 and buffer.isValidPos(currentX + 1, y):
-          buffer[currentX + 1, y] = cell("", style, hyperlink)
-
-      currentX += width
-  except ValueError:
-    # Handle malformed Unicode gracefully by stopping
-    return
+    buffer.setRunes(x, y, text.toRunes, style, hyperlink, tabWidth)
   except CatchableError:
-    # Handle other unexpected errors
+    # Malformed UTF-8 or other unexpected error — stop gracefully.
     return
 
 proc setString*(
@@ -409,9 +472,10 @@ proc setString*(
     text: string,
     style: Style = defaultStyle(),
     hyperlink: string = "",
+    tabWidth: int = DefaultTabWidth,
 ) {.inline.} =
   ## Set a string starting at the given position
-  buffer.setString(pos.x, pos.y, text, style, hyperlink)
+  buffer.setString(pos.x, pos.y, text, style, hyperlink, tabWidth)
 
 proc setString*(
     buffer: var Buffer,
@@ -425,13 +489,21 @@ proc setString*(
   ## Set a string within the given area with alignment
   ## Text is clipped to the area boundaries.
   ## Handles Unicode characters and wide characters properly for alignment calculation
+  ##
+  ## C0 control characters (including `\t`) are substituted with a single
+  ## space — tab-stop expansion is intentionally skipped here because the
+  ## alignment math is built around a fixed `textWidth`; the (x, y) overload
+  ## of `setString` is the place to use real tab semantics.
   if text.len == 0 or area.isEmpty:
     return
 
-  # Calculate display width of text
+  # Calculate display width of text (control chars treated as 1 column)
   var textWidth = 0
   for rune in text.runes:
-    textWidth += runeWidth(rune)
+    if isC0Control(int(rune)):
+      textWidth.inc
+    else:
+      textWidth += runeWidth(rune)
 
   # Calculate x position based on horizontal alignment
   let x =
@@ -456,6 +528,18 @@ proc setString*(
   var currentX = x
   try:
     for rune in text.runes:
+      if isC0Control(int(rune)):
+        # Substitute control char with single space.
+        if currentX + 1 <= area.x:
+          currentX.inc
+          continue
+        if currentX >= area.right:
+          break
+        if buffer.isValidPos(currentX, y):
+          buffer[currentX, y] = cell(" ", style, hyperlink)
+        currentX.inc
+        continue
+
       let width = runeWidth(rune)
 
       # Skip characters before the area
@@ -536,50 +620,16 @@ proc setCell*(
   ## Position + Rune overload for setCell.
   buffer.setCell(pos.x, pos.y, $rune, width, style, hyperlink)
 
-proc setRunes*(
-    buffer: var Buffer,
-    x, y: int,
-    runes: seq[Rune],
-    style: Style = defaultStyle(),
-    hyperlink: string = "",
-) =
-  ## Set a sequence of runes starting at the given coordinates
-  ## If hyperlink is provided, the text becomes a clickable link (OSC 8)
-  var currentX = x
-
-  for rune in runes:
-    let width = runeWidth(rune)
-    if currentX + width > buffer.area.width:
-      break
-
-    if buffer.isValidPos(currentX, y):
-      buffer[currentX, y] = cell($rune, style, hyperlink)
-      # For wide characters, mark the next cell as occupied (empty)
-      # Also inherit the hyperlink for proper link region handling
-      if width == 2 and buffer.isValidPos(currentX + 1, y):
-        buffer[currentX + 1, y] = cell("", style, hyperlink)
-
-    currentX += width
-
-proc setRunes*(
-    buffer: var Buffer,
-    pos: Position,
-    runes: seq[Rune],
-    style: Style = defaultStyle(),
-    hyperlink: string = "",
-) {.inline.} =
-  ## Set a sequence of runes starting at the given position
-  buffer.setRunes(pos.x, pos.y, runes, style, hyperlink)
-
 proc setString*(
     buffer: var Buffer,
     x, y: int,
     runes: seq[Rune],
     style: Style = defaultStyle(),
     hyperlink: string = "",
+    tabWidth: int = DefaultTabWidth,
 ) {.inline.} =
   ## Alias for setRunes for convenience
-  buffer.setRunes(x, y, runes, style, hyperlink)
+  buffer.setRunes(x, y, runes, style, hyperlink, tabWidth)
 
 proc setString*(
     buffer: var Buffer,
@@ -587,9 +637,10 @@ proc setString*(
     runes: seq[Rune],
     style: Style = defaultStyle(),
     hyperlink: string = "",
+    tabWidth: int = DefaultTabWidth,
 ) {.inline.} =
   ## Alias for setRunes for convenience
-  buffer.setRunes(pos, runes, style, hyperlink)
+  buffer.setRunes(pos, runes, style, hyperlink, tabWidth)
 
 proc resize*(buffer: var Buffer, newArea: Rect) =
   ## Resize the buffer to a new area
