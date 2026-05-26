@@ -27,11 +27,15 @@ suite "Input Widget Tests":
 
     test "Input with custom styles":
       let input = newInput(
-        normalStyle = style(White, Black),
-        focusedStyle = style(Yellow, Blue),
-        placeholderStyle = style(BrightBlack, Reset),
-        cursorStyle = style(Black, White),
-        selectionStyle = style(White, Blue),
+        style = InputStyle(
+          normal: style(White, Black),
+          focused: style(Yellow, Blue),
+          placeholder: style(BrightBlack, Reset),
+          cursor: style(Black, White),
+          selection: style(White, Blue),
+          borderNormal: style(BrightBlack, Reset),
+          borderFocused: style(Blue, Reset),
+        )
       )
       check input.normalStyle == style(White, Black)
       check input.focusedStyle == style(Yellow, Blue)
@@ -40,8 +44,8 @@ suite "Input Widget Tests":
       check input.selectionStyle == style(White, Blue)
 
     test "Input with border":
-      let input = newInput(borderStyle = SingleBorder)
-      check input.borderStyle == SingleBorder
+      let input = newInput(border = bkSingle)
+      check input.borderStyle == bkSingle
 
     test "Input with max length":
       let input = newInput(maxLength = 10)
@@ -198,10 +202,12 @@ suite "Input Widget Tests":
       var focusCalled = false
       var blurCalled = false
       var input = newInput(
-        onFocus = proc() =
-          focusCalled = true,
-        onBlur = proc() =
-          blurCalled = true,
+        callbacks = InputCallbacks(
+          onFocus: proc() =
+            focusCalled = true,
+          onBlur: proc() =
+            blurCalled = true,
+        )
       )
 
       input.setFocus(true)
@@ -317,8 +323,10 @@ suite "Input Widget Tests":
     test "Enter key callback":
       var enterText = ""
       var input = newInput(
-        onEnter = proc(text: string) =
-          enterText = text
+        callbacks = InputCallbacks(
+          onEnter: proc(text: string) =
+            enterText = text
+        )
       )
       input.setFocus(true)
       input.setText("Hello")
@@ -329,11 +337,13 @@ suite "Input Widget Tests":
     test "Custom key handler":
       var customHandled = false
       var input = newInput(
-        onKeyPress = proc(key: KeyEvent): EventResult =
-          if key.code == Escape:
-            customHandled = true
-            return erConsume
-          return erContinue
+        callbacks = InputCallbacks(
+          onKeyPress: proc(key: KeyEvent): EventResult =
+            if key.code == Escape:
+              customHandled = true
+              return erConsume
+            return erContinue
+        )
       )
       input.setFocus(true)
 
@@ -428,7 +438,7 @@ suite "Input Widget Tests":
       check buf[0, 0] != Cell()
 
     test "Rendering with border":
-      var input = newInput(borderStyle = SingleBorder)
+      var input = newInput(border = bkSingle)
       input.setText("Hi")
       var buf = newBuffer(10, 3)
       input.render(rect(0, 0, 10, 3), buf)
@@ -472,14 +482,14 @@ suite "Input Widget Tests":
       var input = newInput()
       check input.getMinSize() == size(1, 1)
 
-      var borderedInput = newInput(borderStyle = SingleBorder)
+      var borderedInput = newInput(border = bkSingle)
       check borderedInput.getMinSize() == size(3, 3)
 
     test "Get preferred size":
       var input = newInput()
       check input.getPreferredSize(size(20, 10)) == size(20, 1)
 
-      var borderedInput = newInput(borderStyle = SingleBorder)
+      var borderedInput = newInput(border = bkSingle)
       check borderedInput.getPreferredSize(size(20, 10)) == size(20, 3)
 
   suite "Cursor Position Tests":
@@ -502,7 +512,7 @@ suite "Input Widget Tests":
       check y == -1
 
     test "Cursor position with border":
-      var input = newInput(borderStyle = SingleBorder)
+      var input = newInput(border = bkSingle)
       input.setFocus(true)
       input.setText("Hello")
       input.setCursor(2)
@@ -552,8 +562,10 @@ suite "Input Widget Tests":
     test "Text changed on setText":
       var changedText = ""
       var input = newInput(
-        onTextChanged = proc(text: string) =
-          changedText = text
+        callbacks = InputCallbacks(
+          onTextChanged: proc(text: string) =
+            changedText = text
+        )
       )
       input.setText("Hello")
       check changedText == "Hello"
@@ -561,8 +573,10 @@ suite "Input Widget Tests":
     test "Text changed on insert":
       var changedText = ""
       var input = newInput(
-        onTextChanged = proc(text: string) =
-          changedText = text
+        callbacks = InputCallbacks(
+          onTextChanged: proc(text: string) =
+            changedText = text
+        )
       )
       input.insertText("World")
       check changedText == "World"
@@ -570,8 +584,10 @@ suite "Input Widget Tests":
     test "Text changed on delete":
       var changedText = ""
       var input = newInput(
-        onTextChanged = proc(text: string) =
-          changedText = text
+        callbacks = InputCallbacks(
+          onTextChanged: proc(text: string) =
+            changedText = text
+        )
       )
       input.setText("Hello")
       input.deleteText(0, 2)

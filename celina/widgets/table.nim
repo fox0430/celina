@@ -6,7 +6,17 @@
 import std/[sequtils, options, strutils]
 
 import base
-import ../core/[geometry, buffer, colors, events]
+import ../core/[geometry, buffer, colors, events, borders]
+
+export
+  borders.BorderKind, borders.BorderChars, borders.getBorderChars,
+  borders.defaultBorderChars
+
+{.push warning[Deprecated]: off.}
+export
+  borders.BorderStyle, borders.NoBorder, borders.DoubleBorder, borders.RoundedBorder,
+  borders.SimpleBorder
+{.pop.}
 
 type
   ColumnAlignment* = enum
@@ -32,12 +42,17 @@ type
     Single # Single row selection
     Multiple # Multiple row selection
 
-  BorderStyle* = enum
-    ## Table border drawing style
-    NoBorder
-    SimpleBorder # Basic ASCII borders: |-+
-    RoundedBorder # Unicode rounded borders
-    DoubleBorder # Unicode double-line borders
+  TableStyle* = object ## Style aggregate for table colors
+    header*: Style ## Header row style
+    normalRow*: Style ## Normal data row style
+    selectedRow*: Style ## Selected row style
+    highlightedRow*: Style ## Highlighted (focused navigation) row style
+    border*: Style ## Border glyph style
+
+  TableCallbacks* = object ## Callback aggregate for table events
+    onSelect*: proc(index: int)
+    onMultiSelect*: proc(indices: seq[int])
+    onHighlight*: proc(index: int)
 
   Table* = ref object of Widget ## Table widget for structured data
     columns*: seq[Column]
@@ -50,7 +65,7 @@ type
     visibleRowCount*: int # Number of data rows visible
     # Display options
     showHeader*: bool
-    borderStyle*: BorderStyle
+    borderStyle*: BorderKind
     columnSpacing*: int # Space between columns
     showScrollbar*: bool
     # Styling
@@ -58,11 +73,36 @@ type
     normalRowStyle*: Style
     selectedRowStyle*: Style
     highlightedRowStyle*: Style
-    borderStyleOptions*: Style
+    borderColor*: Style
     # Event handlers
     onSelect*: proc(index: int)
     onMultiSelect*: proc(indices: seq[int])
     onHighlight*: proc(index: int)
+
+# Legacy `BorderStyle` type and `NoBorder`/`SimpleBorder`/etc. value aliases
+# now live in `core/borders` and are re-exported above. Centralising them
+# avoids ambiguous-identifier errors when both `widgets/input` and
+# `widgets/table` are imported in the same module.
+
+proc borderStyleOptions*(widget: Table): Style {.deprecated: "Use `borderColor`".} =
+  ## Deprecated accessor – use `borderColor` instead.
+  widget.borderColor
+
+proc `borderStyleOptions=`*(
+    widget: Table, val: Style
+) {.deprecated: "Use `borderColor=`".} =
+  ## Deprecated setter – use `borderColor=` instead.
+  widget.borderColor = val
+
+proc defaultTableStyle*(): TableStyle =
+  ## Default style aggregate matching the historical per-field defaults.
+  TableStyle(
+    header: style(White, BrightBlack),
+    normalRow: defaultStyle(),
+    selectedRow: style(Black, White),
+    highlightedRow: style(White, BrightBlack),
+    border: style(BrightBlack),
+  )
 
 # Column constructors
 proc newColumn*(
@@ -107,19 +147,13 @@ proc newTable*(
     rows: seq[TableRow] = @[],
     selectionMode: SelectionMode = Single,
     showHeader: bool = true,
-    borderStyle: BorderStyle = SimpleBorder,
+    border: BorderKind = bkSimple,
     columnSpacing: int = 1,
     showScrollbar: bool = true,
-    headerStyle: Style = style(White, BrightBlack),
-    normalRowStyle: Style = defaultStyle(),
-    selectedRowStyle: Style = style(Black, White),
-    highlightedRowStyle: Style = style(White, BrightBlack),
-    borderStyleOptions: Style = style(BrightBlack),
-    onSelect: proc(index: int) = nil,
-    onMultiSelect: proc(indices: seq[int]) = nil,
-    onHighlight: proc(index: int) = nil,
+    style: TableStyle = defaultTableStyle(),
+    callbacks: TableCallbacks = TableCallbacks(),
 ): Table =
-  ## Create a new Table widget
+  ## Create a new Table widget using `TableStyle` and `TableCallbacks` aggregates.
   Table(
     columns: columns,
     rows: rows,
@@ -129,17 +163,58 @@ proc newTable*(
     scrollOffset: 0,
     visibleRowCount: 0,
     showHeader: showHeader,
-    borderStyle: borderStyle,
+    borderStyle: border,
     columnSpacing: columnSpacing,
     showScrollbar: showScrollbar,
-    headerStyle: headerStyle,
-    normalRowStyle: normalRowStyle,
-    selectedRowStyle: selectedRowStyle,
-    highlightedRowStyle: highlightedRowStyle,
-    borderStyleOptions: borderStyleOptions,
-    onSelect: onSelect,
-    onMultiSelect: onMultiSelect,
-    onHighlight: onHighlight,
+    headerStyle: style.header,
+    normalRowStyle: style.normalRow,
+    selectedRowStyle: style.selectedRow,
+    highlightedRowStyle: style.highlightedRow,
+    borderColor: style.border,
+    onSelect: callbacks.onSelect,
+    onMultiSelect: callbacks.onMultiSelect,
+    onHighlight: callbacks.onHighlight,
+  )
+
+proc newTable*(
+    columns: seq[Column],
+    rows: seq[TableRow],
+    selectionMode: SelectionMode,
+    showHeader: bool,
+    borderStyle: BorderKind,
+    columnSpacing: int,
+    showScrollbar: bool,
+    headerStyle: Style,
+    normalRowStyle: Style = defaultStyle(),
+    selectedRowStyle: Style = style(Black, White),
+    highlightedRowStyle: Style = style(White, BrightBlack),
+    borderStyleOptions: Style = style(BrightBlack),
+    onSelect: proc(index: int) = nil,
+    onMultiSelect: proc(indices: seq[int]) = nil,
+    onHighlight: proc(index: int) = nil,
+): Table {.deprecated: "Use newTable with TableStyle/TableCallbacks aggregate".} =
+  ## Deprecated: legacy form taking individual style and callback parameters.
+  ##
+  ## The required positional `headerStyle` disambiguates this overload from
+  ## the aggregate-based one.
+  newTable(
+    columns = columns,
+    rows = rows,
+    selectionMode = selectionMode,
+    showHeader = showHeader,
+    border = borderStyle,
+    columnSpacing = columnSpacing,
+    showScrollbar = showScrollbar,
+    style = TableStyle(
+      header: headerStyle,
+      normalRow: normalRowStyle,
+      selectedRow: selectedRowStyle,
+      highlightedRow: highlightedRowStyle,
+      border: borderStyleOptions,
+    ),
+    callbacks = TableCallbacks(
+      onSelect: onSelect, onMultiSelect: onMultiSelect, onHighlight: onHighlight
+    ),
   )
 
 proc table*(columns: seq[string]): Table =
@@ -489,7 +564,7 @@ proc calculateColumnWidths*(widget: Table, availableWidth: int): seq[int] =
 
   # Calculate space needed for borders and spacing
   let verticalBorders =
-    if widget.borderStyle == NoBorder:
+    if widget.borderStyle == bkNone:
       0
     else:
       widget.columns.len + 1
@@ -559,32 +634,6 @@ proc formatCell*(content: string, width: int, alignment: ColumnAlignment): strin
     let rightPad = padding - leftPad
     " ".repeat(leftPad) & content & " ".repeat(rightPad)
 
-proc getBorderChars*(
-    style: BorderStyle
-): tuple[
-  horizontal: string,
-  vertical: string,
-  topLeft: string,
-  topRight: string,
-  bottomLeft: string,
-  bottomRight: string,
-  cross: string,
-  topT: string,
-  bottomT: string,
-  leftT: string,
-  rightT: string,
-] =
-  ## Get border characters for the specified border style
-  case style
-  of NoBorder:
-    ("", "", "", "", "", "", "", "", "", "", "")
-  of SimpleBorder:
-    ("-", "|", "+", "+", "+", "+", "+", "+", "+", "+", "+")
-  of RoundedBorder:
-    ("─", "│", "╭", "╮", "╰", "╯", "┼", "┬", "┴", "├", "┤")
-  of DoubleBorder:
-    ("═", "║", "╔", "╗", "╚", "╝", "╬", "╦", "╩", "╠", "╣")
-
 # Table widget methods
 method render*(widget: Table, area: Rect, buf: var Buffer) =
   ## Render the table widget
@@ -595,14 +644,14 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
   let borderChars = getBorderChars(widget.borderStyle)
 
   # Calculate actual table width
-  let hasBorders = widget.borderStyle != NoBorder
+  let hasBorders = widget.borderStyle != bkNone
   let actualTableWidth =
     calculateTotalLineWidth(columnWidths, widget.columnSpacing, hasBorders)
 
   var currentY = area.y
 
   # Render top border
-  if widget.borderStyle != NoBorder:
+  if widget.borderStyle != bkNone:
     var borderLine = borderChars.topLeft
     for i, width in columnWidths:
       if width > 0:
@@ -611,17 +660,17 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
           borderLine.add(borderChars.horizontal.repeat(widget.columnSpacing))
           borderLine.add(borderChars.topT)
     borderLine.add(borderChars.topRight)
-    buf.setString(area.x, currentY, borderLine, widget.borderStyleOptions)
+    buf.setString(area.x, currentY, borderLine, widget.borderColor)
     currentY += 1
 
   # Render header if enabled
   if widget.showHeader and currentY < area.y + area.height:
-    let hasBorders = widget.borderStyle != NoBorder
+    let hasBorders = widget.borderStyle != bkNone
     var currentX = area.x
 
     # Render left border
     if hasBorders:
-      buf.setString(currentX, currentY, borderChars.vertical, widget.borderStyleOptions)
+      buf.setString(currentX, currentY, borderChars.vertical, widget.borderColor)
       currentX += 1
 
     # Render each header cell with proper styling
@@ -643,19 +692,17 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
           )
           currentX += widget.columnSpacing
           if hasBorders:
-            buf.setString(
-              currentX, currentY, borderChars.vertical, widget.borderStyleOptions
-            )
+            buf.setString(currentX, currentY, borderChars.vertical, widget.borderColor)
             currentX += 1
 
     # Render right border
     if hasBorders:
-      buf.setString(currentX, currentY, borderChars.vertical, widget.borderStyleOptions)
+      buf.setString(currentX, currentY, borderChars.vertical, widget.borderColor)
 
     currentY += 1
 
     # Header separator
-    if widget.borderStyle != NoBorder:
+    if widget.borderStyle != bkNone:
       var separatorLine = borderChars.leftT
       for i, width in columnWidths:
         if width > 0:
@@ -664,12 +711,12 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
             separatorLine.add(borderChars.horizontal.repeat(widget.columnSpacing))
             separatorLine.add(borderChars.cross)
       separatorLine.add(borderChars.rightT)
-      buf.setString(area.x, currentY, separatorLine, widget.borderStyleOptions)
+      buf.setString(area.x, currentY, separatorLine, widget.borderColor)
       currentY += 1
 
   # Calculate visible row area
   let availableRows =
-    area.y + area.height - currentY - (if widget.borderStyle != NoBorder: 1 else: 0)
+    area.y + area.height - currentY - (if widget.borderStyle != bkNone: 1 else: 0)
   widget.visibleRowCount = max(0, availableRows)
 
   # Ensure scroll offset is valid
@@ -680,7 +727,7 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
   let needsScrollbar = widget.showScrollbar and widget.rows.len > widget.visibleRowCount
   # Position scrollbar inside the right border of the actual table
   let scrollbarX =
-    area.x + actualTableWidth - (if widget.borderStyle != NoBorder: 2 else: 1)
+    area.x + actualTableWidth - (if widget.borderStyle != bkNone: 2 else: 1)
   var scrollbarHeight = 0
   var scrollbarPos = 0
   var scrollbarThumbSize = 0
@@ -705,7 +752,7 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
     if rowIndex >= widget.rows.len:
       # Empty row
       var emptyLine = ""
-      let hasBorders = widget.borderStyle != NoBorder
+      let hasBorders = widget.borderStyle != bkNone
       let expectedWidth =
         calculateTotalLineWidth(columnWidths, widget.columnSpacing, hasBorders)
 
@@ -749,12 +796,12 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
       else:
         widget.normalRowStyle
 
-    let hasBorders = widget.borderStyle != NoBorder
+    let hasBorders = widget.borderStyle != bkNone
     var currentX = area.x
 
     # Render left border
     if hasBorders:
-      buf.setString(currentX, currentY, borderChars.vertical, widget.borderStyleOptions)
+      buf.setString(currentX, currentY, borderChars.vertical, widget.borderColor)
       currentX += 1
 
     # Render each data cell with proper styling
@@ -780,9 +827,7 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
           buf.setString(currentX, currentY, " ".repeat(widget.columnSpacing), cellStyle)
           currentX += widget.columnSpacing
           if hasBorders:
-            buf.setString(
-              currentX, currentY, borderChars.vertical, widget.borderStyleOptions
-            )
+            buf.setString(currentX, currentY, borderChars.vertical, widget.borderColor)
             currentX += 1
 
     # Render scrollbar for data rows (before right border so it appears inside)
@@ -795,12 +840,12 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
 
     # Render right border
     if hasBorders:
-      buf.setString(currentX, currentY, borderChars.vertical, widget.borderStyleOptions)
+      buf.setString(currentX, currentY, borderChars.vertical, widget.borderColor)
 
     currentY += 1
 
   # Render bottom border
-  if widget.borderStyle != NoBorder and currentY < area.y + area.height:
+  if widget.borderStyle != bkNone and currentY < area.y + area.height:
     var borderLine = borderChars.bottomLeft
     for i, width in columnWidths:
       if width > 0:
@@ -809,7 +854,7 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
           borderLine.add(borderChars.horizontal.repeat(widget.columnSpacing))
           borderLine.add(borderChars.bottomT)
     borderLine.add(borderChars.bottomRight)
-    buf.setString(area.x, currentY, borderLine, widget.borderStyleOptions)
+    buf.setString(area.x, currentY, borderLine, widget.borderColor)
 
 method getMinSize*(widget: Table): Size =
   ## Get minimum size for table widget
@@ -819,14 +864,12 @@ method getMinSize*(widget: Table): Size =
   # Minimum width: at least 3 characters per column plus spacing and borders
   let minWidth =
     widget.columns.len * 3 + (widget.columns.len - 1) * widget.columnSpacing +
-    (if widget.borderStyle != NoBorder: 2 else: 0) + (
-      if widget.showScrollbar: 1 else: 0
-    )
+    (if widget.borderStyle != bkNone: 2 else: 0) + (if widget.showScrollbar: 1 else: 0)
 
   # Minimum height: header + at least one row + borders
   let minHeight =
     (if widget.showHeader: 1 else: 0) + 1 +
-    (if widget.borderStyle != NoBorder: 2 + (if widget.showHeader: 1 else: 0)
+    (if widget.borderStyle != bkNone: 2 + (if widget.showHeader: 1 else: 0)
     else: 0)
 
   size(minWidth, minHeight)

@@ -65,7 +65,7 @@ import std/unicode
 import
   celina/core/[
     geometry, colors, buffer, events, terminal, layout, errors, terminal_common, app,
-    app_delegation, app_handlers, renderer, cursor, fps, windows,
+    app_delegation, app_handlers, renderer, cursor, fps, windows, borders,
   ]
 
 import celina/async/async_backend
@@ -74,7 +74,7 @@ export unicode
 
 export
   geometry, colors, buffer, events, layout, terminal, errors, terminal_common, app,
-  app_delegation, app_handlers, renderer, cursor, fps, windows
+  app_delegation, app_handlers, renderer, cursor, fps, windows, borders
 
 export async_backend, hasAsyncSupport, hasChronos, hasAsyncDispatch
 

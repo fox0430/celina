@@ -9,21 +9,29 @@ proc main() =
   var inputs = [
     newInput(
       placeholder = "Enter username",
-      borderStyle = SingleBorder,
-      borderNormalStyle = style(BrightBlack, Reset),
-      borderFocusedStyle = style(Blue, Reset),
-      normalStyle = style(White, Reset),
-      focusedStyle = style(White, Blue),
-      placeholderStyle = style(BrightBlack, Reset),
+      style = InputStyle(
+        normal: style(White, Reset),
+        focused: style(White, Blue),
+        placeholder: style(BrightBlack, Reset),
+        cursor: style(Black, White),
+        selection: style(White, BrightBlue),
+        borderNormal: style(BrightBlack, Reset),
+        borderFocused: style(Blue, Reset),
+      ),
+      border = bkSingle,
     ),
     newInput(
       placeholder = "Email address",
-      borderStyle = RoundedBorder,
-      borderNormalStyle = style(BrightBlack, Reset),
-      borderFocusedStyle = style(Green, Reset),
-      normalStyle = style(White, Reset),
-      focusedStyle = style(Black, Green),
-      placeholderStyle = style(BrightBlack, Reset),
+      style = InputStyle(
+        normal: style(White, Reset),
+        focused: style(Black, Green),
+        placeholder: style(BrightBlack, Reset),
+        cursor: style(Black, White),
+        selection: style(White, BrightBlue),
+        borderNormal: style(BrightBlack, Reset),
+        borderFocused: style(Green, Reset),
+      ),
+      border = bkRounded,
     ),
     passwordInput(placeholder = "Enter password").withStyles(
       normal = style(White, Reset),
@@ -88,10 +96,10 @@ proc main() =
       buffer.setString(2, y, labels[i], style(White, Reset, {StyleModifier.Bold}))
 
       # Calculate rect based on border style
-      let inputHeight = if input.borderStyle != NoBorder: 3 else: 1
+      let inputHeight = if input.borderStyle != bkNone: 3 else: 1
       let inputX = 14
       let inputY =
-        if input.borderStyle != NoBorder:
+        if input.borderStyle != bkNone:
           y - 1
         else:
           y

@@ -9,10 +9,10 @@ import pkg/celina/widgets/progress
 
 proc main() =
   # Create various progress bars
-  var blockProgress = newProgressBar(0.0, "Block Style", style = Block)
-  var lineProgress = newProgressBar(0.0, "Line Style", style = Line)
-  var arrowProgress = newProgressBar(0.0, "Arrow Style", style = Arrow)
-  var hashProgress = newProgressBar(0.0, "Hash Style", style = Hash)
+  var blockProgress = newProgressBar(0.0, "Block Style", kind = pkBlock)
+  var lineProgress = newProgressBar(0.0, "Line Style", kind = pkLine)
+  var arrowProgress = newProgressBar(0.0, "Arrow Style", kind = pkArrow)
+  var hashProgress = newProgressBar(0.0, "Hash Style", kind = pkHash)
 
   # Custom styled progress bars using new mutable API
   var coloredProgress = coloredProgressBar(0.0, "Colored Progress", Green)
@@ -21,7 +21,7 @@ proc main() =
 
   # Demonstrate mutable API
   var customProgress = newProgressBar(0.0, "Custom")
-  customProgress.style = Arrow
+  customProgress.kind = pkArrow
   customProgress.barStyle = style(White, Magenta)
   customProgress.minWidth = 25
 

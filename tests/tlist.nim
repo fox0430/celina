@@ -174,8 +174,10 @@ suite "List Widget Tests":
         listItem("Item 4"),
       ].toSeq,
       Single,
-      onHighlight = proc(index: int) =
-        highlightIdx = index,
+      callbacks = ListCallbacks(
+        onHighlight: proc(index: int) =
+          highlightIdx = index
+      ),
     )
 
     check listWidget.highlightedIndex == 0
@@ -360,9 +362,12 @@ suite "List Widget Tests":
         listItem("Normal"), listItem("Custom", style(Red, Yellow)), listItem("Selected")
       ],
       Single,
-      normalStyle = style(White),
-      selectedStyle = style(Black, White),
-      highlightedStyle = style(Yellow, BrightBlack),
+      style = ListStyle(
+        normal: style(White),
+        selected: style(Black, White),
+        highlighted: style(Yellow, BrightBlack),
+        disabled: style(BrightBlack, Reset),
+      ),
     )
 
     # Select and highlight different items

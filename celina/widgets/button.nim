@@ -17,6 +17,22 @@ type
     Focused ## Button has keyboard focus
     Disabled ## Button is disabled
 
+  ButtonStyle* = object ## Style aggregate for button visual states
+    normal*: Style
+    hovered*: Style
+    pressed*: Style
+    focused*: Style
+    disabled*: Style
+
+  ButtonCallbacks* = object ## Callback aggregate for button events
+    onClick*: proc() ## Called when the button is clicked
+    onMouseEnter*: proc() ## Called when the mouse enters the button
+    onMouseLeave*: proc() ## Called when the mouse leaves the button
+    onFocus*: proc() ## Called when the button gains focus
+    onBlur*: proc() ## Called when the button loses focus
+    onKeyPress*: proc(key: KeyEvent): EventResult
+      ## Custom key handler (return erConsume to suppress default handling)
+
   Button* = ref object of Widget ## Interactive button widget
     text*: string
     normalStyle*: Style
@@ -36,46 +52,48 @@ type
     onBlur*: proc() # Callback when button loses focus
     onKeyPress*: proc(key: KeyEvent): EventResult # Callback for key press events
 
+proc defaultButtonStyle*(): ButtonStyle =
+  ## Default style aggregate matching the historical per-field defaults.
+  ButtonStyle(
+    normal: style(White, Blue),
+    hovered: style(White, Cyan),
+    pressed: style(Black, White),
+    focused: style(Yellow, Blue),
+    disabled: style(BrightBlack, Reset),
+  )
+
 # Button widget constructors
 proc newButton*(
     text: string,
-    normalStyle: Style = style(White, Blue),
-    hoveredStyle: Style = style(White, Cyan),
-    pressedStyle: Style = style(Black, White),
-    focusedStyle: Style = style(Yellow, Blue),
-    disabledStyle: Style = style(BrightBlack, Reset),
+    style: ButtonStyle = defaultButtonStyle(),
     minWidth: int = 0,
     padding: int = 1,
-    onClick: proc() = nil,
-    onMouseEnter: proc() = nil,
-    onMouseLeave: proc() = nil,
-    onFocus: proc() = nil,
-    onBlur: proc() = nil,
-    onKeyPress: proc(key: KeyEvent): EventResult = nil,
+    callbacks: ButtonCallbacks = ButtonCallbacks(),
 ): Button =
-  ## Create a new Button widget
+  ## Create a new Button widget using `ButtonStyle` and `ButtonCallbacks`
+  ## aggregates. This is the preferred form going forward.
   Button(
     text: text,
-    normalStyle: normalStyle,
-    hoveredStyle: hoveredStyle,
-    pressedStyle: pressedStyle,
-    focusedStyle: focusedStyle,
-    disabledStyle: disabledStyle,
+    normalStyle: style.normal,
+    hoveredStyle: style.hovered,
+    pressedStyle: style.pressed,
+    focusedStyle: style.focused,
+    disabledStyle: style.disabled,
     state: Normal,
     enabled: true,
     minWidth: minWidth,
     padding: padding,
-    onClick: onClick,
-    onMouseEnter: onMouseEnter,
-    onMouseLeave: onMouseLeave,
-    onFocus: onFocus,
-    onBlur: onBlur,
-    onKeyPress: onKeyPress,
+    onClick: callbacks.onClick,
+    onMouseEnter: callbacks.onMouseEnter,
+    onMouseLeave: callbacks.onMouseLeave,
+    onFocus: callbacks.onFocus,
+    onBlur: callbacks.onBlur,
+    onKeyPress: callbacks.onKeyPress,
   )
 
-proc button*(
+proc newButton*(
     text: string,
-    normalStyle: Style = style(White, Blue),
+    normalStyle: Style,
     hoveredStyle: Style = style(White, Cyan),
     pressedStyle: Style = style(Black, White),
     focusedStyle: Style = style(Yellow, Blue),
@@ -88,11 +106,79 @@ proc button*(
     onFocus: proc() = nil,
     onBlur: proc() = nil,
     onKeyPress: proc(key: KeyEvent): EventResult = nil,
-): Button =
-  ## Convenience constructor for Button widget
+): Button {.deprecated: "Use newButton with ButtonStyle/ButtonCallbacks aggregate".} =
+  ## Deprecated: legacy form taking individual style and callback parameters.
+  ##
+  ## The required positional `normalStyle` disambiguates this overload from
+  ## the aggregate-based one for callers that explicitly supply per-state
+  ## styles. New code should use the aggregate form instead.
   newButton(
-    text, normalStyle, hoveredStyle, pressedStyle, focusedStyle, disabledStyle,
-    minWidth, padding, onClick, onMouseEnter, onMouseLeave, onFocus, onBlur, onKeyPress,
+    text = text,
+    style = ButtonStyle(
+      normal: normalStyle,
+      hovered: hoveredStyle,
+      pressed: pressedStyle,
+      focused: focusedStyle,
+      disabled: disabledStyle,
+    ),
+    minWidth = minWidth,
+    padding = padding,
+    callbacks = ButtonCallbacks(
+      onClick: onClick,
+      onMouseEnter: onMouseEnter,
+      onMouseLeave: onMouseLeave,
+      onFocus: onFocus,
+      onBlur: onBlur,
+      onKeyPress: onKeyPress,
+    ),
+  )
+
+proc button*(
+    text: string,
+    style: ButtonStyle = defaultButtonStyle(),
+    minWidth: int = 0,
+    padding: int = 1,
+    callbacks: ButtonCallbacks = ButtonCallbacks(),
+): Button =
+  ## Convenience constructor for Button widget (aggregate form).
+  newButton(text, style, minWidth, padding, callbacks)
+
+proc button*(
+    text: string,
+    normalStyle: Style,
+    hoveredStyle: Style = style(White, Cyan),
+    pressedStyle: Style = style(Black, White),
+    focusedStyle: Style = style(Yellow, Blue),
+    disabledStyle: Style = style(BrightBlack, Reset),
+    minWidth: int = 0,
+    padding: int = 1,
+    onClick: proc() = nil,
+    onMouseEnter: proc() = nil,
+    onMouseLeave: proc() = nil,
+    onFocus: proc() = nil,
+    onBlur: proc() = nil,
+    onKeyPress: proc(key: KeyEvent): EventResult = nil,
+): Button {.deprecated: "Use button with ButtonStyle/ButtonCallbacks aggregate".} =
+  ## Deprecated: legacy convenience form taking individual style parameters.
+  newButton(
+    text = text,
+    style = ButtonStyle(
+      normal: normalStyle,
+      hovered: hoveredStyle,
+      pressed: pressedStyle,
+      focused: focusedStyle,
+      disabled: disabledStyle,
+    ),
+    minWidth = minWidth,
+    padding = padding,
+    callbacks = ButtonCallbacks(
+      onClick: onClick,
+      onMouseEnter: onMouseEnter,
+      onMouseLeave: onMouseLeave,
+      onFocus: onFocus,
+      onBlur: onBlur,
+      onKeyPress: onKeyPress,
+    ),
   )
 
 # Button state management
@@ -417,47 +503,42 @@ proc withEventHandlers*(
     onKeyPress: if onKeyPress != nil: onKeyPress else: widget.onKeyPress,
   )
 
-# Convenience constructors for common button types
+# Convenience constructors for common button types.
+# Each starts from `defaultButtonStyle()` and overrides only the fields
+# that differ, so changes to the shared defaults (e.g. `disabled`) flow
+# through to every convenience constructor.
 proc primaryButton*(text: string, onClick: proc() = nil): Button =
   ## Create a primary (prominent) button
-  newButton(
-    text,
-    normalStyle = style(White, Blue),
-    hoveredStyle = style(White, Cyan),
-    pressedStyle = style(Blue, White),
-    focusedStyle = style(Yellow, Blue),
-    onClick = onClick,
-  )
+  var s = defaultButtonStyle()
+  s.normal = style(White, Blue)
+  s.hovered = style(White, Cyan)
+  s.pressed = style(Blue, White)
+  s.focused = style(Yellow, Blue)
+  newButton(text, style = s, callbacks = ButtonCallbacks(onClick: onClick))
 
 proc secondaryButton*(text: string, onClick: proc() = nil): Button =
   ## Create a secondary button
-  newButton(
-    text,
-    normalStyle = style(White, BrightBlack),
-    hoveredStyle = style(White, White),
-    pressedStyle = style(BrightBlack, White),
-    focusedStyle = style(Yellow, BrightBlack),
-    onClick = onClick,
-  )
+  var s = defaultButtonStyle()
+  s.normal = style(White, BrightBlack)
+  s.hovered = style(White, White)
+  s.pressed = style(BrightBlack, White)
+  s.focused = style(Yellow, BrightBlack)
+  newButton(text, style = s, callbacks = ButtonCallbacks(onClick: onClick))
 
 proc dangerButton*(text: string, onClick: proc() = nil): Button =
   ## Create a danger (destructive action) button
-  newButton(
-    text,
-    normalStyle = style(White, Red),
-    hoveredStyle = style(White, Magenta),
-    pressedStyle = style(Red, White),
-    focusedStyle = style(Yellow, Red),
-    onClick = onClick,
-  )
+  var s = defaultButtonStyle()
+  s.normal = style(White, Red)
+  s.hovered = style(White, Magenta)
+  s.pressed = style(Red, White)
+  s.focused = style(Yellow, Red)
+  newButton(text, style = s, callbacks = ButtonCallbacks(onClick: onClick))
 
 proc successButton*(text: string, onClick: proc() = nil): Button =
   ## Create a success button
-  newButton(
-    text,
-    normalStyle = style(White, Green),
-    hoveredStyle = style(White, BrightGreen), # Changed from Cyan to avoid conflict
-    pressedStyle = style(Green, White),
-    focusedStyle = style(Yellow, Green),
-    onClick = onClick,
-  )
+  var s = defaultButtonStyle()
+  s.normal = style(White, Green)
+  s.hovered = style(White, BrightGreen) # BrightGreen avoids the Cyan-vs-success conflict
+  s.pressed = style(Green, White)
+  s.focused = style(Yellow, Green)
+  newButton(text, style = s, callbacks = ButtonCallbacks(onClick: onClick))

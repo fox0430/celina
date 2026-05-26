@@ -369,14 +369,14 @@ suite "Table Widget Tests":
     var tableWidget = newTable(columns, rows)
 
     tableWidget.borderStyle = SimpleBorder
-    tableWidget.borderStyleOptions = style(color(Green))
+    tableWidget.borderColor = style(color(Green))
     tableWidget.selectedRowStyle = style(color(White), color(Black))
 
     check:
       rows[0].style.isSome
       rows[0].style.get().fg == color(Red)
       rows[0].style.get().bg == color(Blue)
-      tableWidget.borderStyleOptions.fg == color(Green)
+      tableWidget.borderColor.fg == color(Green)
       tableWidget.selectedRowStyle.fg == color(White)
 
   test "Width calculation edge cases":
@@ -579,7 +579,7 @@ suite "Table Scrollbar Tests":
     var table = newTable(
       columns = @[column("Test", 30)],
       rows = (0 .. 50).mapIt(tableRow(@[$it])),
-      borderStyle = SimpleBorder,
+      border = bkSimple,
       showScrollbar = true,
     )
 
@@ -603,17 +603,17 @@ suite "Table Scrollbar Tests":
 
   test "Scrollbar with different border styles":
     # Test scrollbar positioning with each border style
-    for borderStyle in [NoBorder, SimpleBorder, RoundedBorder, DoubleBorder]:
+    for borderKind in [bkNone, bkSingle, bkSimple, bkRounded, bkDouble]:
       var table = newTable(
         columns = @[column("Test", 20)],
         rows = (0 .. 30).mapIt(tableRow(@[$it])),
-        borderStyle = borderStyle,
+        border = borderKind,
         showScrollbar = true,
       )
       table.visibleRowCount = 10
 
       let columnWidths = table.calculateColumnWidths(40)
-      let hasBorders = borderStyle != NoBorder
+      let hasBorders = borderKind != bkNone
       let actualTableWidth =
         calculateTotalLineWidth(columnWidths, table.columnSpacing, hasBorders)
 

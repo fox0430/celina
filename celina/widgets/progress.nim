@@ -19,20 +19,39 @@ import base
 import ../core/[geometry, buffer, colors]
 
 type
-  ProgressStyle* = enum
-    ## Progress bar visual styles
-    Block ## Block characters: ███░░░
-    Line ## Line characters: ━━━── or [━━━──]
-    Arrow ## Arrow style: ══════> or [═════>]
-    Hash ## Hash characters: ####-- or [####--]
-    Custom ## Custom characters
+  ProgressKind* = enum
+    ## Progress bar visual style kinds.
+    ##
+    ## Previously named `ProgressStyle` (when it was both the enum and the
+    ## object name); the color aggregate is now `ProgressColors`. Use the
+    ## deprecated aliases (`Block`, `Line`, `Arrow`, `Hash`, `Custom`) for
+    ## legacy code.
+    pkBlock ## Block characters: ███░░░
+    pkLine ## Line characters: ━━━── or [━━━──]
+    pkArrow ## Arrow style: ══════> or [═════>]
+    pkHash ## Hash characters: ####-- or [####--]
+    pkCustom ## Custom characters
+
+  ProgressColors* = object ## Style aggregate for progress bar colors
+    bar*: Style ## Style for filled portion
+    background*: Style ## Style for unfilled portion
+    text*: Style ## Style for text/label
+    percentage*: Style ## Style for percentage text
+
+  ProgressChars* = object ## Custom characters (used when kind == pkCustom)
+    filled*: string
+    empty*: string
+    partial*: string
 
   ProgressBar* = ref object of Widget ## Progress bar widget
     value: float ## Current progress value (0.0 to 1.0)
     label: string ## Optional label text
     showPercentage: bool ## Show percentage text
     showBar: bool ## Show progress bar visual
-    style: ProgressStyle ## Visual style
+    kindVal: ProgressKind
+      ## Backing field for the visual kind. External access goes through
+      ## the `kind*`/`kind=*` accessors so the setter can keep the per-kind
+      ## character fields in sync.
     barStyle: Style ## Style for filled portion
     backgroundStyle: Style ## Style for unfilled portion
     textStyle: Style ## Style for text/label
@@ -44,69 +63,157 @@ type
     onUpdate: proc(value: float) ## Called when value changes
     showBrackets: bool ## Show brackets for Hash style [####--]
 
+# Deprecated aliases for the old enum values (template-based so legacy code
+# such as `widget.style = Block` and `newProgressBar(..., kind = Block)`
+# continues to compile with a warning).
+template Block*(): ProgressKind {.deprecated: "Use `pkBlock`".} =
+  pkBlock
+
+template Line*(): ProgressKind {.deprecated: "Use `pkLine`".} =
+  pkLine
+
+template Arrow*(): ProgressKind {.deprecated: "Use `pkArrow`".} =
+  pkArrow
+
+template Hash*(): ProgressKind {.deprecated: "Use `pkHash`".} =
+  pkHash
+
+template Custom*(): ProgressKind {.deprecated: "Use `pkCustom`".} =
+  pkCustom
+
+proc defaultProgressColors*(kind: ProgressKind = pkBlock): ProgressColors =
+  ## Build a default `ProgressColors` whose colors fit the given visual kind.
+  ##
+  ## Block uses a Green background to make the bar visible on a dark
+  ## background; Line/Arrow/Hash omit the background so the line glyphs
+  ## stand on their own; Custom uses a neutral default so callers picking
+  ## arbitrary glyphs don't get a surprise background colour.
+  let bar =
+    case kind
+    of pkHash, pkLine, pkArrow:
+      style(White)
+    of pkCustom:
+      defaultStyle()
+    of pkBlock:
+      style(White, Green)
+  let bg =
+    case kind
+    of pkHash, pkLine, pkArrow, pkCustom:
+      defaultStyle()
+    of pkBlock:
+      style(BrightBlack, Reset)
+  ProgressColors(
+    bar: bar, background: bg, text: defaultStyle(), percentage: style(Cyan, Reset)
+  )
+
+proc defaultProgressChars*(kind: ProgressKind = pkBlock): ProgressChars =
+  ## Build the default characters for a progress kind. `pkCustom` returns
+  ## empty strings (the caller must supply the glyphs).
+  case kind
+  of pkBlock:
+    ProgressChars(filled: "█", empty: "░", partial: "▒")
+  of pkLine:
+    ProgressChars(filled: "=", empty: " ", partial: ">")
+  of pkArrow:
+    ProgressChars(filled: "═", empty: " ", partial: ">")
+  of pkHash:
+    ProgressChars(filled: "#", empty: "-", partial: "=")
+  of pkCustom:
+    ProgressChars()
+
 # Progress bar constructors
 proc newProgressBar*(
     value: float = 0.0,
     label: string = "",
+    kind: ProgressKind = pkBlock,
+    style: ProgressColors = defaultProgressColors(kind),
+    chars: ProgressChars = defaultProgressChars(kind),
     showPercentage: bool = true,
     showBar: bool = true,
-    style: ProgressStyle = Block,
-    barStyle: Style = defaultStyle(), # Will be set based on progress style
-    backgroundStyle: Style = style(BrightBlack, Reset),
-    textStyle: Style = defaultStyle(),
-    percentageStyle: Style = style(Cyan, Reset),
-    filledChar: string = "█",
-    emptyChar: string = "░",
-    fillChar: string = "▒",
+    showBrackets: bool = true,
     minWidth: int = 10,
     onUpdate: proc(value: float) = nil,
-    showBrackets: bool = true, # Default to true for Hash style
 ): ProgressBar =
-  ## Create a new progress bar widget
-  # Determine the actual bar style based on the progress style
-  let actualBarStyle =
-    if barStyle == defaultStyle():
-      # Use default behavior based on style
-      case style
-      of Hash, Line, Arrow:
-        style(White)
-      # White foreground, no background
-      else:
-        style(White, Green) # White on Green for Block and Custom
+  ## Create a new progress bar widget.
+  ##
+  ## The visual style is determined by `kind` (an enum). Colors come from
+  ## the `style` aggregate, and characters from `chars`. For `pkCustom`,
+  ## supply the glyphs via `chars`.
+  let effectiveChars =
+    if kind == pkCustom:
+      # Per-field fallback: only substitute defaults for fields the caller
+      # left empty, so partial customizations (e.g. supplying only `empty`)
+      # are not silently discarded.
+      let defaults = defaultProgressChars(pkBlock)
+      ProgressChars(
+        filled: if chars.filled.len > 0: chars.filled else: defaults.filled,
+        empty: if chars.empty.len > 0: chars.empty else: defaults.empty,
+        partial: if chars.partial.len > 0: chars.partial else: defaults.partial,
+      )
     else:
-      # Use explicitly provided bar style
-      barStyle
-
-  # Determine the actual background style based on the progress style
-  let actualBgStyle =
-    if backgroundStyle == style(BrightBlack, Reset):
-      # Use default behavior based on style
-      case style
-      of Hash, Line, Arrow:
-        defaultStyle()
-      # No background color
-      else:
-        style(BrightBlack, Reset) # Keep background for Block and Custom
-    else:
-      # Use explicitly provided background style
-      backgroundStyle
-
+      chars
   result = ProgressBar(
     value: clamp(value, 0.0, 1.0),
     label: label,
     showPercentage: showPercentage,
     showBar: showBar,
-    style: style,
-    barStyle: actualBarStyle,
-    backgroundStyle: actualBgStyle,
-    textStyle: textStyle,
-    percentageStyle: percentageStyle,
-    filledChar: filledChar,
-    emptyChar: emptyChar,
-    fillChar: fillChar,
+    kindVal: kind,
+    barStyle: style.bar,
+    backgroundStyle: style.background,
+    textStyle: style.text,
+    percentageStyle: style.percentage,
+    filledChar: effectiveChars.filled,
+    emptyChar: effectiveChars.empty,
+    fillChar: effectiveChars.partial,
     minWidth: minWidth,
     onUpdate: onUpdate,
     showBrackets: showBrackets,
+  )
+
+proc newProgressBar*(
+    value: float,
+    label: string = "",
+    showPercentage: bool = true,
+    showBar: bool = true,
+    style: ProgressKind,
+    barStyle: Style = defaultStyle(),
+    backgroundStyle: Style = defaultStyle(),
+    textStyle: Style = defaultStyle(),
+    percentageStyle: Style = defaultStyle(),
+    filledChar: string = "",
+    emptyChar: string = "",
+    fillChar: string = "",
+    minWidth: int = 10,
+    onUpdate: proc(value: float) = nil,
+    showBrackets: bool = true,
+): ProgressBar {.
+    deprecated:
+      "Use the aggregate form: newProgressBar(value, label, kind, style: ProgressColors, chars: ProgressChars, ...)"
+.} =
+  ## Deprecated legacy overload taking the old `style: ProgressKind`
+  ## parameter plus individual color/glyph fields. The required positional
+  ## `style` disambiguates from the new aggregate-form overload.
+  let baseStyle = defaultProgressColors(style)
+  let theme = ProgressColors(
+    bar: if barStyle == defaultStyle(): baseStyle.bar else: barStyle,
+    background:
+      if backgroundStyle == defaultStyle(): baseStyle.background else: backgroundStyle,
+    text: if textStyle == defaultStyle(): baseStyle.text else: textStyle,
+    percentage:
+      if percentageStyle == defaultStyle(): baseStyle.percentage else: percentageStyle,
+  )
+  let chars = ProgressChars(filled: filledChar, empty: emptyChar, partial: fillChar)
+  newProgressBar(
+    value = value,
+    label = label,
+    kind = style,
+    style = theme,
+    chars = chars,
+    showPercentage = showPercentage,
+    showBar = showBar,
+    showBrackets = showBrackets,
+    minWidth = minWidth,
+    onUpdate = onUpdate,
   )
 
 proc progressBar*(
@@ -114,10 +221,16 @@ proc progressBar*(
     label: string = "",
     showPercentage: bool = true,
     showBar: bool = true,
-    style: ProgressStyle = Block,
+    kind: ProgressKind = pkBlock,
 ): ProgressBar =
-  ## Convenience constructor for progress bar with defaults
-  newProgressBar(value, label, showPercentage, showBar, style)
+  ## Convenience constructor for progress bar with defaults.
+  newProgressBar(
+    value = value,
+    label = label,
+    kind = kind,
+    showPercentage = showPercentage,
+    showBar = showBar,
+  )
 
 # Progress value management
 proc setValue*(widget: ProgressBar, value: float) =
@@ -164,16 +277,16 @@ proc isComplete*(widget: ProgressBar): bool =
 # Style character selection
 proc getProgressChars*(widget: ProgressBar): tuple[filled, empty, partial: string] =
   ## Get the characters to use for rendering based on style
-  case widget.style
-  of Block:
+  case widget.kindVal
+  of pkBlock:
     result = ("█", "░", "▒")
-  of Line:
+  of pkLine:
     result = ("=", " ", ">") # Empty is now space instead of dash
-  of Arrow:
+  of pkArrow:
     result = ("═", " ", ">") # Empty is now space instead of ─
-  of Hash:
+  of pkHash:
     result = ("#", "-", "=")
-  of Custom:
+  of pkCustom:
     result = (widget.filledChar, widget.emptyChar, widget.fillChar)
 
 # Rendering utilities
@@ -195,7 +308,7 @@ proc renderWithBrackets(
   # Draw opening bracket
   buf.setString(x, y, "[", defaultStyle())
 
-  if widget.style == Hash:
+  if widget.kindVal == pkHash:
     # Special handling for Hash - spaces in empty portion to avoid color inheritance
     for i in 0 ..< filledWidth:
       buf.setString(x + 1 + i, y, chars.filled, widget.barStyle)
@@ -212,7 +325,7 @@ proc renderWithBrackets(
       buf.setString(x + 1 + i, y, chars.filled, widget.barStyle)
 
     # Draw partial fill for arrow if applicable
-    if hasPartial and filledWidth < innerWidth and widget.style == Arrow:
+    if hasPartial and filledWidth < innerWidth and widget.kindVal == pkArrow:
       buf.setString(x + 1 + filledWidth, y, chars.partial, widget.barStyle)
       # Draw remaining empty portion
       for i in (filledWidth + 1) ..< innerWidth:
@@ -235,7 +348,7 @@ proc renderWithoutBrackets(
   ## Common rendering logic for styles without brackets
   let filledWidth = int(floor(widget.value * float(width)))
 
-  if widget.style == Hash:
+  if widget.kindVal == pkHash:
     # Hash style: simple filled/empty rendering
     for i in 0 ..< filledWidth:
       buf.setString(x + i, y, chars.filled, widget.barStyle)
@@ -257,7 +370,7 @@ proc renderWithoutBrackets(
       buf.setString(x + i, y, chars.filled, widget.barStyle)
 
     # Draw partial fill for arrow if applicable
-    if hasPartial and filledWidth < width and widget.style == Arrow:
+    if hasPartial and filledWidth < width and widget.kindVal == pkArrow:
       buf.setString(x + filledWidth, y, chars.partial, widget.barStyle)
       # Draw remaining empty portion
       for i in (filledWidth + 1) ..< width:
@@ -274,8 +387,8 @@ proc renderProgressBar(widget: ProgressBar, width: int, buf: var Buffer, x, y: i
 
   let chars = widget.getProgressChars()
 
-  case widget.style
-  of Hash, Line, Arrow:
+  case widget.kindVal
+  of pkHash, pkLine, pkArrow:
     # Use the helper functions for bracket-capable styles
     if widget.showBrackets:
       widget.renderWithBrackets(width, buf, x, y, chars)
@@ -293,12 +406,10 @@ proc renderProgressBar(widget: ProgressBar, width: int, buf: var Buffer, x, y: i
     # Draw partial fill if applicable
     if hasPartial and filledWidth < width:
       buf.setString(x + filledWidth, y, chars.partial, widget.barStyle)
-      # Draw empty portion
       if widget.backgroundStyle != defaultStyle():
         for i in (filledWidth + 1) ..< width:
           buf.setString(x + i, y, chars.empty, widget.backgroundStyle)
     else:
-      # Draw empty portion
       if widget.backgroundStyle != defaultStyle():
         for i in filledWidth ..< width:
           buf.setString(x + i, y, chars.empty, widget.backgroundStyle)
@@ -334,7 +445,7 @@ method render*(widget: ProgressBar, area: Rect, buf: var Buffer) =
   let textLen = text.displayWidth
 
   if widget.showBar:
-    if (area.height >= 2 and textLen > 0) or widget.style == Hash:
+    if (area.height >= 2 and textLen > 0) or widget.kindVal == pkHash:
       # Two-line layout: text above, bar below
       let textY = area.y
       let barY = area.y + 1
@@ -380,7 +491,8 @@ method getMinSize*(widget: ProgressBar): Size =
   var minBarWidth = max(widget.minWidth, textLen + 2)
 
   # Hash, Line, Arrow styles need extra space for brackets (if enabled)
-  if widget.style in {Hash, Line, Arrow} and widget.showBar and widget.showBrackets:
+  if widget.kindVal in {pkHash, pkLine, pkArrow} and widget.showBar and
+      widget.showBrackets:
     minBarWidth = max(minBarWidth, 5) # Minimum [###], [━━━], or [══>] format
 
   if widget.showBar and widget.getLabelWithPercentage().len > 0:
@@ -395,6 +507,11 @@ method getPreferredSize*(widget: ProgressBar, available: Size): Size =
     max(minSize.width, min(available.width, 40)), # Prefer up to 40 chars wide
     minSize.height,
   )
+
+# Read accessor for the visual kind
+proc kind*(widget: ProgressBar): ProgressKind {.inline.} =
+  ## Get the visual kind of the progress bar.
+  widget.kindVal
 
 # Setter methods for mutable API
 proc `label=`*(widget: ProgressBar, label: string) =
@@ -413,9 +530,37 @@ proc `showBrackets=`*(widget: ProgressBar, show: bool) =
   ## Set whether to show brackets for Hash style
   widget.showBrackets = show
 
-proc `style=`*(widget: ProgressBar, style: ProgressStyle) =
-  ## Set the visual style
-  widget.style = style
+proc `kind=`*(widget: ProgressBar, kind: ProgressKind) =
+  ## Set the visual kind. Also resets `filledChar`/`emptyChar`/`fillChar`
+  ## to the new kind's defaults so a transition to `pkCustom` does not
+  ## leave the widget rendering the previous kind's glyphs.
+  ##
+  ## When switching to `pkCustom`, if the current chars are empty (as they
+  ## would be after a fresh `defaultProgressChars(pkCustom)`), the block
+  ## defaults are used as fallback so the bar is never silently invisible.
+  widget.kindVal = kind
+  let c = defaultProgressChars(kind)
+  if kind == pkCustom:
+    let defaults = defaultProgressChars(pkBlock)
+    widget.filledChar = if c.filled.len > 0: c.filled else: defaults.filled
+    widget.emptyChar = if c.empty.len > 0: c.empty else: defaults.empty
+    widget.fillChar = if c.partial.len > 0: c.partial else: defaults.partial
+  else:
+    widget.filledChar = c.filled
+    widget.emptyChar = c.empty
+    widget.fillChar = c.partial
+
+proc style*(widget: ProgressBar): ProgressKind {.deprecated: "Use `kind`".} =
+  ## Deprecated accessor for the visual kind (formerly named `style`).
+  widget.kindVal
+
+proc `style=`*(widget: ProgressBar, style: ProgressKind) {.deprecated: "Use `kind=`".} =
+  ## Deprecated setter for the visual kind (formerly named `style`).
+  ## Parameter name is kept as `style` so legacy named-arg callers
+  ## (`widget.style = pkLine` is fine; `obj.style=(style: pkLine)` would
+  ## otherwise break). Delegates to the `kind=` setter to keep char
+  ## state in sync.
+  widget.kind = style
 
 proc `barStyle=`*(widget: ProgressBar, style: Style) =
   ## Set the style for filled portion
@@ -442,11 +587,16 @@ proc `onUpdate=`*(widget: ProgressBar, callback: proc(value: float)) =
   widget.onUpdate = callback
 
 proc setCustomChars*(widget: ProgressBar, filled, empty, partial: string) =
-  ## Set custom characters for the progress bar
-  widget.style = Custom
-  widget.filledChar = filled
-  widget.emptyChar = empty
-  widget.fillChar = partial
+  ## Set custom characters for the progress bar.
+  ##
+  ## Any empty string is replaced with the corresponding `pkBlock` default
+  ## glyph so the bar is never silently invisible. Use ` ` or another
+  ## visible whitespace if you really want a blank glyph.
+  widget.kind = pkCustom # also resets the char fields via the setter
+  let defaults = defaultProgressChars(pkBlock)
+  widget.filledChar = if filled.len > 0: filled else: defaults.filled
+  widget.emptyChar = if empty.len > 0: empty else: defaults.empty
+  widget.fillChar = if partial.len > 0: partial else: defaults.partial
 
 proc setColors*(
     widget: ProgressBar,
@@ -455,7 +605,11 @@ proc setColors*(
     textStyle: Style = defaultStyle(),
     percentageStyle: Style = defaultStyle(),
 ) =
-  ## Set multiple colors at once
+  ## Set multiple colors at once using individual fields.
+  ##
+  ## Only non-`defaultStyle()` values are applied; callers can pick and
+  ## choose which fields to update. Prefer `setColors(widget, colors:
+  ## ProgressColors)` when you want to replace every colour at once.
   if barStyle != defaultStyle():
     widget.barStyle = barStyle
   if backgroundStyle != defaultStyle():
@@ -464,6 +618,13 @@ proc setColors*(
     widget.textStyle = textStyle
   if percentageStyle != defaultStyle():
     widget.percentageStyle = percentageStyle
+
+proc setColors*(widget: ProgressBar, colors: ProgressColors) =
+  ## Replace every colour slot at once from a `ProgressColors` aggregate.
+  widget.barStyle = colors.bar
+  widget.backgroundStyle = colors.background
+  widget.textStyle = colors.text
+  widget.percentageStyle = colors.percentage
 
 # Builder methods for fluent API (returns self for chaining)
 proc withValue*(widget: ProgressBar, value: float): ProgressBar =
@@ -476,9 +637,18 @@ proc withLabel*(widget: ProgressBar, label: string): ProgressBar =
   widget.label = label
   result = widget
 
-proc withStyle*(widget: ProgressBar, style: ProgressStyle): ProgressBar =
-  ## Set style and return self for chaining
-  widget.style = style
+proc withKind*(widget: ProgressBar, kind: ProgressKind): ProgressBar =
+  ## Set visual kind and return self for chaining
+  widget.kind = kind
+  result = widget
+
+proc withStyle*(
+    widget: ProgressBar, style: ProgressKind
+): ProgressBar {.deprecated: "Use `withKind`".} =
+  ## Deprecated builder for setting the visual kind (formerly `withStyle`).
+  ## Parameter is kept as `style` so legacy `widget.withStyle(style = X)`
+  ## named-arg callers keep compiling with just a deprecation warning.
+  widget.kind = style
   result = widget
 
 proc withColors*(
@@ -488,8 +658,13 @@ proc withColors*(
     textStyle: Style = defaultStyle(),
     percentageStyle: Style = defaultStyle(),
 ): ProgressBar =
-  ## Set colors and return self for chaining
+  ## Set colors and return self for chaining (per-field overload).
   widget.setColors(barStyle, backgroundStyle, textStyle, percentageStyle)
+  result = widget
+
+proc withColors*(widget: ProgressBar, colors: ProgressColors): ProgressBar =
+  ## Set colors from a `ProgressColors` aggregate and return self for chaining.
+  widget.setColors(colors)
   result = widget
 
 proc withShowPercentage*(widget: ProgressBar, show: bool): ProgressBar =
@@ -531,47 +706,55 @@ proc simpleProgressBar*(value: float = 0.0, label: string = ""): ProgressBar =
 
 proc minimalProgressBar*(value: float = 0.0): ProgressBar =
   ## Create a minimal progress bar (no label, just bar and percentage)
-  newProgressBar(value, "", true, true)
+  newProgressBar(value, "", showPercentage = true, showBar = true)
 
 proc textOnlyProgressBar*(value: float = 0.0, label: string = ""): ProgressBar =
   ## Create a text-only progress indicator (no bar visual)
-  newProgressBar(value, label, true, false)
+  newProgressBar(value, label, showPercentage = true, showBar = false)
 
 proc indeterminateProgressBar*(label: string = "Loading..."): ProgressBar =
   ## Create an indeterminate progress bar (for unknown duration tasks)
   ## Note: Animation would need to be handled externally by updating the value
-  newProgressBar(0.0, label, false, true, Arrow)
+  newProgressBar(
+    value = 0.0, label = label, kind = pkArrow, showPercentage = false, showBar = true
+  )
 
 proc coloredProgressBar*(
     value: float = 0.0,
     label: string = "",
     color: Color = Green,
-    style: ProgressStyle = Block,
+    kind: ProgressKind = pkBlock,
+    chars: ProgressChars = defaultProgressChars(kind),
 ): ProgressBar =
-  ## Create a progress bar with a specific color theme
+  ## Create a progress bar with a specific color theme.
+  ##
+  ## `chars` is forwarded to `newProgressBar` so callers can build a
+  ## colored custom-glyph bar via `coloredProgressBar(kind = pkCustom,
+  ## chars = ProgressChars(filled: ..., ...))`.
   let defaultBgStyle =
-    case style
-    of Hash, Line, Arrow:
+    case kind
+    of pkHash, pkLine, pkArrow:
       defaultStyle()
-    # No background color
-    else:
-      style(BrightBlack, Reset) # Keep background for Block and Custom
+    of pkCustom:
+      defaultStyle()
+    of pkBlock:
+      style(BrightBlack, Reset)
 
   let defaultBarStyle =
-    case style
-    of Hash, Line, Arrow:
+    case kind
+    of pkHash, pkLine, pkArrow:
       style(color)
-    # Color foreground, no background
-    else:
-      style(color, Reset) # Use the color as foreground for Block and Custom
+    of pkCustom, pkBlock:
+      style(color, Reset)
 
+  let theme = ProgressColors(
+    bar: defaultBarStyle,
+    background: defaultBgStyle,
+    text: defaultStyle(),
+    percentage: style(color, Reset),
+  )
   newProgressBar(
-    value,
-    label,
-    style = style,
-    barStyle = defaultBarStyle,
-    backgroundStyle = defaultBgStyle,
-    percentageStyle = style(color, Reset),
+    value = value, label = label, kind = kind, style = theme, chars = chars
   )
 
 # Utility functions

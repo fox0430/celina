@@ -63,19 +63,21 @@ proc main() =
     rows = data.mapIt(tableRow(it)),
     selectionMode = table.Multiple,
     showHeader = true,
-    borderStyle = table.RoundedBorder,
+    border = bkRounded,
     columnSpacing = 1,
     showScrollbar = true,
-    headerStyle = style(BrightWhite, Blue),
-    normalRowStyle = defaultStyle(),
-    selectedRowStyle = style(Black, BrightGreen),
-    highlightedRowStyle = style(BrightWhite, BrightBlack),
-    borderStyleOptions = style(BrightBlue),
+    style = TableStyle(
+      header: style(BrightWhite, Blue),
+      normalRow: defaultStyle(),
+      selectedRow: style(Black, BrightGreen),
+      highlightedRow: style(BrightWhite, BrightBlack),
+      border: style(BrightBlue),
+    ),
   )
 
   # Variables for UI state
   var showHelp = true
-  var currentBorderStyle = table.RoundedBorder
+  var currentBorderStyle = bkRounded
   var currentSelectionMode = table.Multiple
 
   # Configure the app
@@ -107,10 +109,11 @@ proc main() =
           # Cycle through border styles
           currentBorderStyle =
             case currentBorderStyle
-            of table.NoBorder: table.SimpleBorder
-            of table.SimpleBorder: table.RoundedBorder
-            of table.RoundedBorder: table.DoubleBorder
-            of table.DoubleBorder: table.NoBorder
+            of bkNone: bkSimple
+            of bkSimple: bkRounded
+            of bkRounded: bkDouble
+            of bkDouble: bkSingle
+            of bkSingle: bkNone
           tableWidget.borderStyle = currentBorderStyle
           return erContinue
         of "M":
@@ -165,10 +168,11 @@ proc main() =
     # Status line
     let borderStyleName =
       case currentBorderStyle
-      of table.NoBorder: "table.None"
-      of table.SimpleBorder: "Simple"
-      of table.RoundedBorder: "Rounded"
-      of table.DoubleBorder: "Double"
+      of bkNone: "None"
+      of bkSingle: "Single"
+      of bkSimple: "Simple"
+      of bkRounded: "Rounded"
+      of bkDouble: "Double"
     let selectionModeName =
       case currentSelectionMode
       of table.None: "table.None"
