@@ -19,7 +19,7 @@ suite "Progress Bar Widget Tests":
         label = "Custom",
         showPercentage = false,
         showBar = true,
-        style = Line,
+        kind = pkLine,
         minWidth = 20,
       )
       check bar.getValue() == 0.75
@@ -153,13 +153,13 @@ suite "Progress Bar Widget Tests":
       check bar.getLabelWithPercentage() == ""
 
     test "Progress characters by style":
-      let blockBar = newProgressBar(0.5, style = Block)
+      let blockBar = newProgressBar(0.5, kind = pkBlock)
       let (filled1, empty1, partial1) = blockBar.getProgressChars()
       check filled1 == "█"
       check empty1 == "░"
       check partial1 == "▒"
 
-      let lineBar = newProgressBar(0.5, style = Line)
+      let lineBar = newProgressBar(0.5, kind = pkLine)
       let (filled2, empty2, partial2) = lineBar.getProgressChars()
       check filled2 == "="
       check empty2 == " "
@@ -167,20 +167,22 @@ suite "Progress Bar Widget Tests":
 
       # Dots style has been removed - skipping this test
 
-      let arrowBar = newProgressBar(0.5, style = Arrow)
+      let arrowBar = newProgressBar(0.5, kind = pkArrow)
       let (filled4, empty4, partial4) = arrowBar.getProgressChars()
       check filled4 == "═"
       check empty4 == " "
       check partial4 == ">"
 
-      let hashBar = newProgressBar(0.5, style = Hash)
+      let hashBar = newProgressBar(0.5, kind = pkHash)
       let (filled5, empty5, partial5) = hashBar.getProgressChars()
       check filled5 == "#"
       check empty5 == "-"
       check partial5 == "="
 
       let customBar = newProgressBar(
-        0.5, style = Custom, filledChar = "*", emptyChar = ".", fillChar = "~"
+        0.5,
+        kind = pkCustom,
+        chars = ProgressChars(filled: "*", empty: ".", partial: "~"),
       )
       let (filled6, empty6, partial6) = customBar.getProgressChars()
       check filled6 == "*"
@@ -227,8 +229,8 @@ suite "Progress Bar Widget Tests":
     test "Render different styles":
       var buf = newBuffer(50, 10)
 
-      for style in [Block, Line, Arrow, Hash]:
-        let bar = newProgressBar(0.5, "Style Test", style = style)
+      for kind in [pkBlock, pkLine, pkArrow, pkHash]:
+        let bar = newProgressBar(0.5, "Style Test", kind = kind)
         bar.render(rect(0, 0, 50, 2), buf)
 
     test "Render with and without percentage":
@@ -253,7 +255,7 @@ suite "Progress Bar Widget Tests":
 
     test "Style setters":
       var bar = newProgressBar(0.5)
-      bar.style = Line
+      bar.kind = pkLine
       let (filled, empty, partial) = bar.getProgressChars()
       check filled == "="
       check empty == " "
@@ -268,7 +270,7 @@ suite "Progress Bar Widget Tests":
       check "50%" in bar.getLabelWithPercentage()
 
     test "Brackets setter":
-      var hashBar = newProgressBar(0.5, "Hash", style = Hash)
+      var hashBar = newProgressBar(0.5, "Hash", kind = pkHash)
       hashBar.showBrackets = true
       # Should render with brackets [####----]
       var buf = newBuffer(20, 2)
@@ -278,14 +280,14 @@ suite "Progress Bar Widget Tests":
       # Should render without brackets ####----
       hashBar.render(rect(0, 0, 20, 2), buf)
 
-      var lineBar = newProgressBar(0.5, "Line", style = Line)
+      var lineBar = newProgressBar(0.5, "Line", kind = pkLine)
       lineBar.showBrackets = true
       lineBar.render(rect(0, 0, 20, 2), buf)
 
       lineBar.showBrackets = false
       lineBar.render(rect(0, 0, 20, 2), buf)
 
-      var arrowBar = newProgressBar(0.5, "Arrow", style = Arrow)
+      var arrowBar = newProgressBar(0.5, "Arrow", kind = pkArrow)
       arrowBar.showBrackets = true
       arrowBar.render(rect(0, 0, 20, 2), buf)
 
@@ -328,7 +330,7 @@ suite "Progress Bar Widget Tests":
       let bar = newProgressBar(0.3)
         .withValue(0.7)
         .withLabel("Chained")
-        .withStyle(Line)
+        .withKind(pkLine)
         .withShowPercentage(false)
         .withShowBrackets(true)
 
@@ -346,7 +348,7 @@ suite "Progress Bar Widget Tests":
       var callbackCalled = false
       let bar = newProgressBar(0.0)
         .withLabel("Complex")
-        .withStyle(Arrow)
+        .withKind(pkArrow)
         .withColors(
           barStyle = style(White, Green), percentageStyle = style(Cyan, Reset)
         )

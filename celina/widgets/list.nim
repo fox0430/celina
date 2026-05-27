@@ -26,6 +26,17 @@ type
     style*: Option[Style]
     selectable*: bool
 
+  ListStyle* = object ## Style aggregate for list visual states
+    normal*: Style
+    selected*: Style
+    highlighted*: Style
+    disabled*: Style
+
+  ListCallbacks* = object ## Callback aggregate for list events
+    onSelect*: proc(index: int) ## Single selection callback
+    onMultiSelect*: proc(indices: seq[int]) ## Multiple selection callback
+    onHighlight*: proc(index: int) ## Highlight change callback
+
   List* = ref object of Widget ## List widget for displaying items
     items*: seq[ListItem]
     state*: ListState
@@ -46,6 +57,15 @@ type
     onMultiSelect*: proc(indices: seq[int]) # Multiple selection callback
     onHighlight*: proc(index: int) # Highlight change callback
 
+proc defaultListStyle*(): ListStyle =
+  ## Default style aggregate matching the historical per-field defaults.
+  ListStyle(
+    normal: defaultStyle(),
+    selected: style(Black, White),
+    highlighted: style(White, BrightBlack),
+    disabled: style(BrightBlack, Reset),
+  )
+
 # List item constructors
 proc newListItem*(
     text: string, style: Option[Style] = none(Style), selectable: bool = true
@@ -65,17 +85,12 @@ proc listItem*(text: string, style: Style): ListItem =
 proc newList*(
     items: seq[ListItem] = @[],
     selectionMode: SelectionMode = Single,
-    normalStyle: Style = defaultStyle(),
-    selectedStyle: Style = style(Black, White),
-    highlightedStyle: Style = style(White, BrightBlack),
-    disabledStyle: Style = style(BrightBlack, Reset),
+    style: ListStyle = defaultListStyle(),
     bulletPrefix: string = "",
     showScrollbar: bool = true,
-    onSelect: proc(index: int) = nil,
-    onMultiSelect: proc(indices: seq[int]) = nil,
-    onHighlight: proc(index: int) = nil,
+    callbacks: ListCallbacks = ListCallbacks(),
 ): List =
-  ## Create a new List widget
+  ## Create a new List widget using `ListStyle` and `ListCallbacks` aggregates.
   List(
     items: items,
     state: Normal,
@@ -84,15 +99,48 @@ proc newList*(
     highlightedIndex: if items.len > 0: 0 else: -1,
     scrollOffset: 0,
     visibleCount: 0,
-    normalStyle: normalStyle,
-    selectedStyle: selectedStyle,
-    highlightedStyle: highlightedStyle,
-    disabledStyle: disabledStyle,
+    normalStyle: style.normal,
+    selectedStyle: style.selected,
+    highlightedStyle: style.highlighted,
+    disabledStyle: style.disabled,
     bulletPrefix: bulletPrefix,
     showScrollbar: showScrollbar,
-    onSelect: onSelect,
-    onMultiSelect: onMultiSelect,
-    onHighlight: onHighlight,
+    onSelect: callbacks.onSelect,
+    onMultiSelect: callbacks.onMultiSelect,
+    onHighlight: callbacks.onHighlight,
+  )
+
+proc newList*(
+    items: seq[ListItem],
+    selectionMode: SelectionMode,
+    normalStyle: Style,
+    selectedStyle: Style = style(Black, White),
+    highlightedStyle: Style = style(White, BrightBlack),
+    disabledStyle: Style = style(BrightBlack, Reset),
+    bulletPrefix: string = "",
+    showScrollbar: bool = true,
+    onSelect: proc(index: int) = nil,
+    onMultiSelect: proc(indices: seq[int]) = nil,
+    onHighlight: proc(index: int) = nil,
+): List {.deprecated: "Use newList with ListStyle/ListCallbacks aggregate".} =
+  ## Deprecated: legacy form taking individual style and callback parameters.
+  ##
+  ## The required positional `normalStyle` disambiguates this overload from
+  ## the aggregate-based one.
+  newList(
+    items = items,
+    selectionMode = selectionMode,
+    style = ListStyle(
+      normal: normalStyle,
+      selected: selectedStyle,
+      highlighted: highlightedStyle,
+      disabled: disabledStyle,
+    ),
+    bulletPrefix = bulletPrefix,
+    showScrollbar = showScrollbar,
+    callbacks = ListCallbacks(
+      onSelect: onSelect, onMultiSelect: onMultiSelect, onHighlight: onHighlight
+    ),
   )
 
 proc list*(items: seq[string], selectionMode: SelectionMode = Single): List =
@@ -649,7 +697,9 @@ proc simpleList*(items: seq[string]): List =
 
 proc selectList*(items: seq[string], onSelect: proc(index: int) = nil): List =
   ## Create a single-selection list
-  newList(items.mapIt(listItem(it)), Single, onSelect = onSelect)
+  newList(
+    items.mapIt(listItem(it)), Single, callbacks = ListCallbacks(onSelect: onSelect)
+  )
 
 proc checkList*(
     items: seq[string], onMultiSelect: proc(indices: seq[int]) = nil
@@ -659,7 +709,7 @@ proc checkList*(
     items.mapIt(listItem(it)),
     Multiple,
     bulletPrefix = "[ ] ",
-    onMultiSelect = onMultiSelect,
+    callbacks = ListCallbacks(onMultiSelect: onMultiSelect),
   )
 
 proc bulletList*(items: seq[string], bullet: string = "• "): List =

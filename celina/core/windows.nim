@@ -5,7 +5,9 @@
 
 import std/[algorithm, sequtils, options, strformat]
 
-import ../core/[geometry, buffer, colors, events]
+import ../core/[geometry, buffer, colors, events, borders]
+
+export borders.BorderChars, borders.BorderKind
 
 type
   WindowId* = distinct int ## Unique identifier for windows
@@ -22,14 +24,6 @@ type
     top*, right*, bottom*, left*: bool
     style*: Style
     chars*: BorderChars
-
-  BorderChars* = object ## Characters used for drawing window borders
-    horizontal*: string
-    vertical*: string
-    topLeft*: string
-    topRight*: string
-    bottomLeft*: string
-    bottomRight*: string
 
   # Event handling types
   #
@@ -143,16 +137,7 @@ proc `$`*(info: WindowInfo): string =
 
 # BorderChars defaults
 
-proc defaultBorderChars*(): BorderChars =
-  ## Default border characters using box drawing
-  BorderChars(
-    horizontal: "─",
-    vertical: "│",
-    topLeft: "┌",
-    topRight: "┐",
-    bottomLeft: "└",
-    bottomRight: "┘",
-  )
+export borders.defaultBorderChars
 
 proc defaultBorder*(): WindowBorder =
   ## Default window border configuration

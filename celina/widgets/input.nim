@@ -3,10 +3,20 @@
 ## This module provides text input widgets with cursor support,
 ## selection, and keyboard navigation.
 
-import std/[strutils, unicode]
+import std/unicode
 
 import base
-import ../core/[geometry, buffer, colors, events]
+import ../core/[geometry, buffer, colors, events, borders]
+
+export
+  borders.BorderKind, borders.BorderChars, borders.getBorderChars,
+  borders.defaultBorderChars
+
+{.push warning[Deprecated]: off.}
+export
+  borders.BorderStyle, borders.NoBorder, borders.SingleBorder, borders.DoubleBorder,
+  borders.RoundedBorder
+{.pop.}
 
 type
   ## Text editing APIs (cursor, selection, insert, delete, scroll offset)
@@ -20,12 +30,22 @@ type
     offset*: int # Horizontal scroll offset for long text (in runes)
     focused*: bool # Whether the input has focus
 
-  BorderStyle* = enum
-    ## Border style options
-    NoBorder
-    SingleBorder
-    DoubleBorder
-    RoundedBorder
+  InputStyle* = object ## Style aggregate for input widget colors
+    normal*: Style ## Content style when not focused
+    focused*: Style ## Content style when focused
+    placeholder*: Style ## Placeholder text style
+    cursor*: Style ## Cursor cell style
+    selection*: Style ## Selection highlight style
+    borderNormal*: Style ## Border style when not focused
+    borderFocused*: Style ## Border style when focused
+
+  InputCallbacks* = object ## Callback aggregate for input events
+    onTextChanged*: proc(text: string) ## Called when text changes
+    onEnter*: proc(text: string) ## Called on Enter key
+    onFocus*: proc() ## Called when input gains focus
+    onBlur*: proc() ## Called when input loses focus
+    onKeyPress*: proc(key: KeyEvent): EventResult
+      ## Custom key handler (return erConsume to suppress default handling)
 
   Input* = ref object of Widget ## Text input widget
     state*: InputState
@@ -35,7 +55,7 @@ type
     placeholderStyle*: Style
     cursorStyle*: Style
     selectionStyle*: Style
-    borderStyle*: BorderStyle
+    borderStyle*: BorderKind
     borderNormalStyle*: Style
     borderFocusedStyle*: Style
     maxLength*: int # Maximum input length (0 = unlimited)
@@ -48,30 +68,63 @@ type
     onBlur*: proc() # Called when input loses focus
     onKeyPress*: proc(key: KeyEvent): EventResult # Custom key handler
 
-# Border drawing utilities
-proc getBorderChars(
-    borderStyle: BorderStyle
-): tuple[topLeft, topRight, bottomLeft, bottomRight, horizontal, vertical: string] =
-  ## Get border characters for the specified style
-  case borderStyle
-  of NoBorder:
-    ("", "", "", "", "", "")
-  of SingleBorder:
-    ("┌", "┐", "└", "┘", "─", "│")
-  of DoubleBorder:
-    ("╔", "╗", "╚", "╝", "═", "║")
-  of RoundedBorder:
-    ("╭", "╮", "╰", "╯", "─", "│")
+# The legacy `BorderStyle` type and `NoBorder`/`SingleBorder`/etc. value
+# aliases now live in `core/borders` and are re-exported above so importing
+# both `widgets/input` and `widgets/table` does not produce ambiguous-
+# identifier errors.
+
+proc defaultInputStyle*(): InputStyle =
+  ## Default style aggregate matching the historical per-field defaults.
+  InputStyle(
+    normal: style(White, Reset),
+    focused: style(White, Blue),
+    placeholder: style(BrightBlack, Reset),
+    cursor: style(Black, White),
+    selection: style(White, BrightBlue),
+    borderNormal: style(BrightBlack, Reset),
+    borderFocused: style(Blue, Reset),
+  )
 
 # Input widget constructors
 proc newInput*(
     placeholder: string = "",
-    normalStyle: Style = style(White, Reset),
+    style: InputStyle = defaultInputStyle(),
+    border: BorderKind = bkNone,
+    maxLength: int = 0,
+    readOnly: bool = false,
+    password: bool = false,
+    callbacks: InputCallbacks = InputCallbacks(),
+): Input =
+  ## Create a new Input widget using `InputStyle` and `InputCallbacks` aggregates.
+  Input(
+    state: InputState(text: "", cursor: 0, selection: (0, 0), offset: 0, focused: false),
+    placeholder: placeholder,
+    normalStyle: style.normal,
+    focusedStyle: style.focused,
+    placeholderStyle: style.placeholder,
+    cursorStyle: style.cursor,
+    selectionStyle: style.selection,
+    borderStyle: border,
+    borderNormalStyle: style.borderNormal,
+    borderFocusedStyle: style.borderFocused,
+    maxLength: maxLength,
+    readOnly: readOnly,
+    password: password,
+    onTextChanged: callbacks.onTextChanged,
+    onEnter: callbacks.onEnter,
+    onFocus: callbacks.onFocus,
+    onBlur: callbacks.onBlur,
+    onKeyPress: callbacks.onKeyPress,
+  )
+
+proc newInput*(
+    placeholder: string,
+    normalStyle: Style,
     focusedStyle: Style = style(White, Blue),
     placeholderStyle: Style = style(BrightBlack, Reset),
     cursorStyle: Style = style(Black, White),
     selectionStyle: Style = style(White, BrightBlue),
-    borderStyle: BorderStyle = NoBorder,
+    borderStyle: BorderKind = bkNone,
     borderNormalStyle: Style = style(BrightBlack, Reset),
     borderFocusedStyle: Style = style(Blue, Reset),
     maxLength: int = 0,
@@ -82,37 +135,55 @@ proc newInput*(
     onFocus: proc() = nil,
     onBlur: proc() = nil,
     onKeyPress: proc(key: KeyEvent): EventResult = nil,
-): Input =
-  ## Create a new Input widget
-  Input(
-    state: InputState(text: "", cursor: 0, selection: (0, 0), offset: 0, focused: false),
-    placeholder: placeholder,
-    normalStyle: normalStyle,
-    focusedStyle: focusedStyle,
-    placeholderStyle: placeholderStyle,
-    cursorStyle: cursorStyle,
-    selectionStyle: selectionStyle,
-    borderStyle: borderStyle,
-    borderNormalStyle: borderNormalStyle,
-    borderFocusedStyle: borderFocusedStyle,
-    maxLength: maxLength,
-    readOnly: readOnly,
-    password: password,
-    onTextChanged: onTextChanged,
-    onEnter: onEnter,
-    onFocus: onFocus,
-    onBlur: onBlur,
-    onKeyPress: onKeyPress,
+): Input {.deprecated: "Use newInput with InputStyle/InputCallbacks aggregate".} =
+  ## Deprecated: legacy form taking individual style and callback parameters.
+  ##
+  ## The required positional `normalStyle` disambiguates this overload from
+  ## the aggregate-based one.
+  newInput(
+    placeholder = placeholder,
+    style = InputStyle(
+      normal: normalStyle,
+      focused: focusedStyle,
+      placeholder: placeholderStyle,
+      cursor: cursorStyle,
+      selection: selectionStyle,
+      borderNormal: borderNormalStyle,
+      borderFocused: borderFocusedStyle,
+    ),
+    border = borderStyle,
+    maxLength = maxLength,
+    readOnly = readOnly,
+    password = password,
+    callbacks = InputCallbacks(
+      onTextChanged: onTextChanged,
+      onEnter: onEnter,
+      onFocus: onFocus,
+      onBlur: onBlur,
+      onKeyPress: onKeyPress,
+    ),
   )
 
 proc input*(
     placeholder: string = "",
-    normalStyle: Style = style(White, Reset),
+    style: InputStyle = defaultInputStyle(),
+    border: BorderKind = bkNone,
+    maxLength: int = 0,
+    readOnly: bool = false,
+    password: bool = false,
+    callbacks: InputCallbacks = InputCallbacks(),
+): Input =
+  ## Convenience constructor for Input widget (aggregate form).
+  newInput(placeholder, style, border, maxLength, readOnly, password, callbacks)
+
+proc input*(
+    placeholder: string,
+    normalStyle: Style,
     focusedStyle: Style = style(White, Blue),
     placeholderStyle: Style = style(BrightBlack, Reset),
     cursorStyle: Style = style(Black, White),
     selectionStyle: Style = style(White, BrightBlue),
-    borderStyle: BorderStyle = NoBorder,
+    borderStyle: BorderKind = bkNone,
     borderNormalStyle: Style = style(BrightBlack, Reset),
     borderFocusedStyle: Style = style(Blue, Reset),
     maxLength: int = 0,
@@ -123,12 +194,30 @@ proc input*(
     onFocus: proc() = nil,
     onBlur: proc() = nil,
     onKeyPress: proc(key: KeyEvent): EventResult = nil,
-): Input =
-  ## Convenience constructor for Input widget
+): Input {.deprecated: "Use input with InputStyle/InputCallbacks aggregate".} =
+  ## Deprecated: legacy convenience form taking individual style parameters.
   newInput(
-    placeholder, normalStyle, focusedStyle, placeholderStyle, cursorStyle,
-    selectionStyle, borderStyle, borderNormalStyle, borderFocusedStyle, maxLength,
-    readOnly, password, onTextChanged, onEnter, onFocus, onBlur, onKeyPress,
+    placeholder = placeholder,
+    style = InputStyle(
+      normal: normalStyle,
+      focused: focusedStyle,
+      placeholder: placeholderStyle,
+      cursor: cursorStyle,
+      selection: selectionStyle,
+      borderNormal: borderNormalStyle,
+      borderFocused: borderFocusedStyle,
+    ),
+    border = borderStyle,
+    maxLength = maxLength,
+    readOnly = readOnly,
+    password = password,
+    callbacks = InputCallbacks(
+      onTextChanged: onTextChanged,
+      onEnter: onEnter,
+      onFocus: onFocus,
+      onBlur: onBlur,
+      onKeyPress: onKeyPress,
+    ),
   )
 
 # Input state management
@@ -508,7 +597,7 @@ method render*(widget: Input, area: Rect, buf: var Buffer) =
 
   # Determine content area (inside border if any)
   var contentArea = area
-  if widget.borderStyle != NoBorder:
+  if widget.borderStyle != bkNone:
     # Adjust content area for border
     if area.width <= 2 or area.height <= 2:
       return # Too small for border
@@ -517,32 +606,31 @@ method render*(widget: Input, area: Rect, buf: var Buffer) =
     # Draw border
     let borderStyle =
       if widget.state.focused: widget.borderFocusedStyle else: widget.borderNormalStyle
-    let (topLeft, topRight, bottomLeft, bottomRight, horizontal, vertical) =
-      getBorderChars(widget.borderStyle)
+    let bc = getBorderChars(widget.borderStyle)
 
     # Draw corners
-    if topLeft.len > 0:
-      buf.setString(area.x, area.y, topLeft, borderStyle)
-    if topRight.len > 0:
-      buf.setString(area.x + area.width - 1, area.y, topRight, borderStyle)
-    if bottomLeft.len > 0:
-      buf.setString(area.x, area.y + area.height - 1, bottomLeft, borderStyle)
-    if bottomRight.len > 0:
+    if bc.topLeft.len > 0:
+      buf.setString(area.x, area.y, bc.topLeft, borderStyle)
+    if bc.topRight.len > 0:
+      buf.setString(area.x + area.width - 1, area.y, bc.topRight, borderStyle)
+    if bc.bottomLeft.len > 0:
+      buf.setString(area.x, area.y + area.height - 1, bc.bottomLeft, borderStyle)
+    if bc.bottomRight.len > 0:
       buf.setString(
-        area.x + area.width - 1, area.y + area.height - 1, bottomRight, borderStyle
+        area.x + area.width - 1, area.y + area.height - 1, bc.bottomRight, borderStyle
       )
 
     # Draw horizontal lines
     for x in 1 ..< (area.width - 1):
-      if horizontal.len > 0:
-        buf.setString(area.x + x, area.y, horizontal, borderStyle)
-        buf.setString(area.x + x, area.y + area.height - 1, horizontal, borderStyle)
+      if bc.horizontal.len > 0:
+        buf.setString(area.x + x, area.y, bc.horizontal, borderStyle)
+        buf.setString(area.x + x, area.y + area.height - 1, bc.horizontal, borderStyle)
 
     # Draw vertical lines
     for y in 1 ..< (area.height - 1):
-      if vertical.len > 0:
-        buf.setString(area.x, area.y + y, vertical, borderStyle)
-        buf.setString(area.x + area.width - 1, area.y + y, vertical, borderStyle)
+      if bc.vertical.len > 0:
+        buf.setString(area.x, area.y + y, bc.vertical, borderStyle)
+        buf.setString(area.x + area.width - 1, area.y + y, bc.vertical, borderStyle)
 
   let displayText = widget.getDisplayText()
   let currentStyle =
@@ -609,7 +697,7 @@ proc getCursorPosition*(widget: Input, area: Rect): tuple[x, y: int, visible: bo
 
   # Determine content area (inside border if any)
   var contentArea = area
-  if widget.borderStyle != NoBorder:
+  if widget.borderStyle != bkNone:
     if area.width <= 2 or area.height <= 2:
       return (-1, -1, false) # Too small for border
     contentArea = rect(area.x + 1, area.y + 1, area.width - 2, area.height - 2)
@@ -623,14 +711,14 @@ proc getCursorPosition*(widget: Input, area: Rect): tuple[x, y: int, visible: bo
 
 method getMinSize*(widget: Input): Size =
   ## Get minimum size for input widget
-  if widget.borderStyle != NoBorder:
+  if widget.borderStyle != bkNone:
     size(3, 3) # Border needs at least 3x3
   else:
     size(1, 1)
 
 method getPreferredSize*(widget: Input, available: Size): Size =
   ## Get preferred size for input widget
-  if widget.borderStyle != NoBorder:
+  if widget.borderStyle != bkNone:
     size(available.width, 3) # Border needs height of 3
   else:
     size(available.width, 1)
@@ -769,14 +857,11 @@ proc passwordInput*(
   ## Create a password input widget
   newInput(
     placeholder = placeholder,
-    normalStyle = style(White, Reset),
-    focusedStyle = style(White, Blue),
     maxLength = maxLength,
     password = true,
-    onEnter = onEnter,
-    onFocus = onFocus,
-    onBlur = onBlur,
-    onTextChanged = onTextChanged,
+    callbacks = InputCallbacks(
+      onEnter: onEnter, onFocus: onFocus, onBlur: onBlur, onTextChanged: onTextChanged
+    ),
   )
 
 proc searchInput*(
@@ -787,21 +872,22 @@ proc searchInput*(
     onBlur: proc() = nil,
 ): Input =
   ## Create a search input widget
+  var styleSet = defaultInputStyle()
+  styleSet.focused = style(White, BrightBlue)
   newInput(
     placeholder = placeholder,
-    normalStyle = style(White, Reset),
-    focusedStyle = style(White, BrightBlue),
-    placeholderStyle = style(BrightBlack, Reset),
-    onTextChanged = onTextChanged,
-    onEnter = onEnter,
-    onFocus = onFocus,
-    onBlur = onBlur,
+    style = styleSet,
+    callbacks = InputCallbacks(
+      onTextChanged: onTextChanged, onEnter: onEnter, onFocus: onFocus, onBlur: onBlur
+    ),
   )
 
 proc readOnlyInput*(
     text: string, normalStyle: Style = style(BrightBlack, Reset)
 ): Input =
   ## Create a read-only input widget
-  result =
-    newInput(normalStyle = normalStyle, focusedStyle = normalStyle, readOnly = true)
+  var styleSet = defaultInputStyle()
+  styleSet.normal = normalStyle
+  styleSet.focused = normalStyle
+  result = newInput(style = styleSet, readOnly = true)
   result.setText(text)
