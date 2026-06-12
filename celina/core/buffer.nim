@@ -600,8 +600,11 @@ proc setString*(
           buffer.markDirty(lastBaseX, y)
         continue
 
-      # Skip characters before the area
-      if currentX + width <= area.x:
+      # Skip characters whose base cell starts before the area. A wide rune
+      # straddling the left edge (currentX == area.x - 1) is dropped whole —
+      # the right half cannot be drawn without an orphaned lead outside the
+      # area, mirroring how the right edge drops a rune overflowing it below.
+      if currentX < area.x:
         currentX += width
         continue
 
