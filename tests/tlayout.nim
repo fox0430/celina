@@ -232,14 +232,68 @@ suite "Layout System Tests":
       check areas[1].width == 40 # Limited by remaining space
 
     test "Min/Max constraints":
-      # This is a simplified test since Min/Max are complex
       let l = horizontal(@[min(10), max(30), fill()])
       let area = rect(0, 0, 100, 50)
       let areas = l.split(area)
 
       check areas.len == 3
-      # Min constraint should get at least its minimum if space allows
-      check areas[0].width >= 0 # May be 0 if no space, but not negative
+      check areas[0].width == 10 # Min reserves its minimum
+      check areas[1].width == 30 # Max grows up to its cap
+      check areas[2].width == 60 # Fill takes the rest
+
+    test "Max grows up to its cap":
+      let l = horizontal(@[max(10), fill()])
+      let area = rect(0, 0, 100, 50)
+      let areas = l.split(area)
+
+      check areas.len == 2
+      check areas[0].width == 10 # Max takes space before Fill, capped at 10
+      check areas[1].width == 90
+
+    test "Max larger than available space":
+      let l = horizontal(@[length(30), max(100)])
+      let area = rect(0, 0, 50, 50)
+      let areas = l.split(area)
+
+      check areas.len == 2
+      check areas[0].width == 30
+      check areas[1].width == 20 # Max takes all remaining space
+
+    test "Multiple Max constraints share space":
+      let l = horizontal(@[max(10), max(100)])
+      let area = rect(0, 0, 50, 50)
+      let areas = l.split(area)
+
+      check areas.len == 2
+      check areas[0].width == 10 # Saturated at its cap
+      check areas[1].width == 40 # Gets the space the small cap left over
+
+    test "Min absorbs excess space":
+      let l = horizontal(@[length(10), min(5)])
+      let area = rect(0, 0, 50, 50)
+      let areas = l.split(area)
+
+      check areas.len == 2
+      check areas[0].width == 10
+      check areas[1].width == 40 # Min expands into excess space
+
+    test "Fill takes excess before Min grows":
+      let l = horizontal(@[min(10), fill()])
+      let area = rect(0, 0, 50, 50)
+      let areas = l.split(area)
+
+      check areas.len == 2
+      check areas[0].width == 10 # Min stays at its minimum
+      check areas[1].width == 40 # Fill wins the excess
+
+    test "Min clamped to remaining space":
+      let l = horizontal(@[min(80), min(50)])
+      let area = rect(0, 0, 100, 50)
+      let areas = l.split(area)
+
+      check areas.len == 2
+      check areas[0].width == 80
+      check areas[1].width == 20 # Gets what is left, not 0
 
   suite "Nested Layout Tests":
     test "Horizontal inside vertical":
@@ -295,7 +349,9 @@ suite "Layout System Tests":
       let areas = l.split(area)
 
       check areas.len == 3
-      check areas[0].width >= 20 or areas[0].width == 0 # Min respected when possible
+      check areas[0].width == 20 # Min reserves its minimum
+      check areas[1].width == 54 # 80 * 2/3 + rounding leftover
+      check areas[2].width == 26 # 80 * 1/3
 
     test "Max with Length":
       let l = horizontal(@[max(30), length(40)])
@@ -303,6 +359,7 @@ suite "Layout System Tests":
       let areas = l.split(area)
 
       check areas.len == 2
+      check areas[0].width == 30 # Max grows to its cap
       check areas[1].width == 40 # Length takes precedence
 
     test "Multiple Fill with different priorities":
