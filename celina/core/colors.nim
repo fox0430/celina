@@ -138,29 +138,31 @@ proc rgb*(r, g, b: int): ColorValue {.inline.} =
   ColorValue(kind: Rgb, rgb: RgbColor(r: r.uint8, g: g.uint8, b: b.uint8))
 
 proc rgb*(hex: string): ColorValue =
-  ## Create a ColorValue from hex string (e.g., "#FF0000" or "FF0000")
+  ## Create a ColorValue from a hex string (e.g., "#FF0000" or "FF0000")
   ##
   ## Parameters:
   ## - hex: Hex color string, with or without '#' prefix
   ##
   ## Returns:
-  ## - ColorValue with parsed RGB color, or black (0,0,0) if parsing fails
+  ## - ColorValue with the parsed RGB color
   ##
-  ## Note: This function handles errors gracefully by returning black instead of raising exceptions
+  ## Raises:
+  ## - ValueError: if `hex` is not exactly 6 hex digits (an optional '#'
+  ##   prefix is allowed)
+  var hexStr = hex
+  if hexStr.startsWith("#"):
+    hexStr = hexStr[1 ..^ 1]
+
+  if hexStr.len != 6:
+    raise newException(ValueError, "Invalid hex color: " & hex)
+
   try:
-    var hexStr = hex
-    if hexStr.startsWith("#"):
-      hexStr = hexStr[1 ..^ 1]
-
-    if hexStr.len != 6:
-      return ColorValue(kind: Rgb, rgb: RgbColor(r: 0, g: 0, b: 0))
-
     let r = parseHexInt(hexStr[0 .. 1]).uint8
     let g = parseHexInt(hexStr[2 .. 3]).uint8
     let b = parseHexInt(hexStr[4 .. 5]).uint8
     ColorValue(kind: Rgb, rgb: RgbColor(r: r, g: g, b: b))
-  except CatchableError as e:
-    raise newException(ValueError, "Invalid hex color: " & e.msg)
+  except ValueError:
+    raise newException(ValueError, "Invalid hex color: " & hex)
 
 proc color256*(index: uint8): ColorValue {.inline.} =
   ## Create a ColorValue from 256-color palette index (0-255)
