@@ -110,6 +110,7 @@ proc readUtf8CharAsync(
     return Utf8AssemblyResult(text: $char(firstByte), leftover: none(byte))
 
   var continuationBytes: seq[byte] = @[]
+  let (secondLo, secondHi) = utf8SecondByteRange(firstByte)
   for i in 1 ..< byteLen:
     let nextByte = await reader.readCharAsync()
 
@@ -117,13 +118,16 @@ proc readUtf8CharAsync(
       # Truncated: nothing to push back.
       return Utf8AssemblyResult(text: Utf8ReplacementChar, leftover: none(byte))
 
-    if not isUtf8ContinuationByte(nextByte.byte):
+    let b = nextByte.byte
+    # As in `assembleUtf8Char`, the second byte must also stay inside the
+    # lead-byte-specific range so overlong encodings and surrogates are
+    # rejected; an out-of-range byte is surfaced as leftover for re-injection.
+    if not isUtf8ContinuationByte(b) or (i == 1 and (b < secondLo or b > secondHi)):
       # Invalid continuation: surface the byte so readKeyAsync can re-inject
       # it as the first byte of the next event.
-      return
-        Utf8AssemblyResult(text: Utf8ReplacementChar, leftover: some(nextByte.byte))
+      return Utf8AssemblyResult(text: Utf8ReplacementChar, leftover: some(b))
 
-    continuationBytes.add(nextByte.byte)
+    continuationBytes.add(b)
 
   return Utf8AssemblyResult(
     text: buildUtf8String(firstByte, continuationBytes), leftover: none(byte)

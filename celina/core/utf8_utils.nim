@@ -29,12 +29,18 @@ proc utf8ByteLength*(firstByte: byte): int =
   ## assert utf8ByteLength(0xC3) == 2  # Start of 2-byte UTF-8
   ## assert utf8ByteLength(0xE0) == 3  # Start of 3-byte UTF-8
   ## assert utf8ByteLength(0xF0) == 4  # Start of 4-byte UTF-8
+  ## assert utf8ByteLength(0xC0) == 0  # Invalid (always overlong)
   ## assert utf8ByteLength(0xFF) == 0  # Invalid
   ## ```
   if (firstByte and 0x80) == 0:
     return 1 # ASCII: 0xxxxxxx
   elif (firstByte and 0xE0) == 0xC0:
-    return 2 # 110xxxxx
+    # 110xxxxx, but 0xC0/0xC1 can only ever lead an overlong encoding of an
+    # ASCII code point (U+0000..U+007F), so they are never a valid start byte.
+    if firstByte >= 0xC2:
+      return 2
+    else:
+      return 0 # 0xC0/0xC1: always overlong
   elif (firstByte and 0xF0) == 0xE0:
     return 3 # 1110xxxx
   elif (firstByte and 0xF8) == 0xF0:
@@ -46,7 +52,7 @@ proc utf8ByteLength*(firstByte: byte): int =
   else:
     return 0 # Invalid UTF-8 start byte
 
-proc isUtf8ContinuationByte*(b: byte): bool {.inline.} =
+proc isUtf8ContinuationByte*(b: byte): bool =
   ## Check if a byte is a valid UTF-8 continuation byte (10xxxxxx)
   ##
   ## Example:
@@ -56,6 +62,36 @@ proc isUtf8ContinuationByte*(b: byte): bool {.inline.} =
   ## assert not isUtf8ContinuationByte(0xC0)  # false
   ## ```
   (b and 0xC0) == 0x80
+
+proc utf8SecondByteRange*(firstByte: byte): tuple[lo: byte, hi: byte] =
+  ## Valid inclusive range for the *second* byte of a multi-byte sequence,
+  ## given its lead byte (Unicode Standard Table 3-7).
+  ##
+  ## A plain `10xxxxxx` continuation check (`isUtf8ContinuationByte`) accepts
+  ## the full 0x80..0xBF range, which lets overlong encodings and UTF-16
+  ## surrogates through. The narrowed ranges below are exactly what reject
+  ## them; every continuation byte *after* the second uses the full range.
+  ##
+  ## Example:
+  ## ```nim
+  ## assert utf8SecondByteRange(0xE0) == (0xA0.byte, 0xBF.byte)
+  ## assert utf8SecondByteRange(0xC3) == (0x80.byte, 0xBF.byte)
+  ## ```
+  case firstByte
+  of 0xE0:
+    (0xA0.byte, 0xBF.byte)
+  # exclude overlong U+0000..U+07FF
+  of 0xED:
+    (0x80.byte, 0x9F.byte)
+  # exclude surrogates U+D800..U+DFFF
+  of 0xF0:
+    (0x90.byte, 0xBF.byte)
+  # exclude overlong U+0000..U+FFFF
+  of 0xF4:
+    (0x80.byte, 0x8F.byte)
+  # exclude code points > U+10FFFF
+  else:
+    (0x80.byte, 0xBF.byte)
 
 proc validateUtf8Sequence*(bytes: openArray[byte]): Utf8ValidationResult =
   ## Validate a UTF-8 byte sequence
@@ -79,13 +115,22 @@ proc validateUtf8Sequence*(bytes: openArray[byte]): Utf8ValidationResult =
       errorMessage: "Incomplete UTF-8 sequence",
     )
 
-  # Validate continuation bytes
+  # Validate continuation bytes. The second byte (index 1) additionally has to
+  # fall inside the lead-byte-specific range that rejects overlong encodings
+  # and UTF-16 surrogates; later bytes use the full 0x80..0xBF range.
+  let (secondLo, secondHi) = utf8SecondByteRange(bytes[0])
   for i in 1 ..< expectedLen:
     if i >= bytes.len or not isUtf8ContinuationByte(bytes[i]):
       return Utf8ValidationResult(
         isValid: false,
         expectedBytes: expectedLen,
         errorMessage: "Invalid UTF-8 continuation byte",
+      )
+    if i == 1 and (bytes[1] < secondLo or bytes[1] > secondHi):
+      return Utf8ValidationResult(
+        isValid: false,
+        expectedBytes: expectedLen,
+        errorMessage: "Overlong or surrogate encoding",
       )
 
   return
@@ -152,12 +197,19 @@ proc assembleUtf8Char*(firstByte: byte, next: Utf8ByteSource): Utf8AssemblyResul
     return Utf8AssemblyResult(text: $char(firstByte), leftover: none(byte))
 
   var continuationBytes: seq[byte] = @[]
+  let (secondLo, secondHi) = utf8SecondByteRange(firstByte)
   for i in 1 ..< byteLen:
     let r = next()
     if not r.ok:
       # Truncated: source already reports EOF/EAGAIN, nothing to push back.
       return Utf8AssemblyResult(text: Utf8ReplacementChar, leftover: none(byte))
-    if not isUtf8ContinuationByte(r.b):
+    # The second byte must also stay inside the lead-byte-specific range so
+    # overlong encodings and surrogates are rejected, not just non-continuation
+    # bytes. An out-of-range second byte is the maximal subpart's end, so it is
+    # surfaced as `leftover` for re-injection exactly like an invalid one.
+    if not isUtf8ContinuationByte(r.b) or (
+      i == 1 and (r.b < secondLo or r.b > secondHi)
+    ):
       # Invalid continuation: surface the offending byte so the caller can
       # process it as the next sequence's first byte.
       return Utf8AssemblyResult(text: Utf8ReplacementChar, leftover: some(r.b))
