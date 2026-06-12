@@ -429,6 +429,17 @@ suite "Buffer Module Tests":
       check buffer[5, 0].symbol == "b"
       check buffer[6, 0].symbol == "."
 
+    test "area setString: wide rune straddling left edge is dropped whole":
+      var buffer = newBuffer(20, 1)
+      # Pre-fill so we can detect any unwanted writes outside the area.
+      buffer.setString(0, 0, "..........")
+      # area at x=5, width=1; "語" (display width 2) with hRight → x = 5+1-2 = 4.
+      # The base cell would land at currentX=4 (before area) with its right half
+      # at x=5: it must be dropped, not written one column left of the area.
+      buffer.setString(rect(5, 0, 1, 1), "語", hAlign = hRight)
+      check buffer[4, 0].symbol == "."
+      check buffer[5, 0].symbol == "."
+
   suite "setCell Operations":
     test "setCell with narrow character":
       var buffer = newBuffer(10, 5)
