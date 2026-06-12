@@ -4,7 +4,9 @@
 ## terminal screen content and efficient rendering.
 
 import std/[strformat, unicode, sequtils, strutils]
-import unicodedb/widths
+
+import pkg/unicodedb/[widths, properties]
+
 import geometry, colors
 
 type
@@ -44,11 +46,19 @@ type
     content: seq[seq[Cell]] # 2D grid of cells
     dirty: DirtyRegion # Per-row dirty tracker
 
-const DefaultTabWidth* = 8
-  ## Default tab-stop spacing for `\t` expansion in `setString` / `setRunes`.
-  ## Override per call with the `tabWidth` parameter. Values <= 0 disable
-  ## expansion — `\t` is then substituted with a single space, matching
-  ## the fallback behavior for other C0 control characters.
+const
+  DefaultTabWidth* = 8
+    ## Default tab-stop spacing for `\t` expansion in `setString` / `setRunes`.
+    ## Override per call with the `tabWidth` parameter. Values <= 0 disable
+    ## expansion — `\t` is then substituted with a single space, matching
+    ## the fallback behavior for other C0 control characters.
+
+  ZeroWidthCategories = ctgMn + ctgMe + ctgCf
+    ## Unicode general categories whose code points advance the terminal
+    ## cursor by zero columns: nonspacing marks (Mn — e.g. U+0301 COMBINING
+    ## ACUTE ACCENT and the variation selectors U+FE00..U+FE0F), enclosing
+    ## marks (Me), and format controls (Cf — e.g. U+200D ZERO WIDTH JOINER,
+    ## U+200C ZWNJ, U+200B ZERO WIDTH SPACE).
 
 proc cell*(
     symbol: string = " ", style: Style = defaultStyle(), hyperlink: string = ""
@@ -81,9 +91,25 @@ proc isShadow*(cell: Cell): bool {.inline.} =
   cell.isEmpty
 
 proc runeWidth*(r: Rune): int =
-  ## Get the display width of a rune using Unicode standard width detection
-  if int(r) > 0x10FFFF:
+  ## Get the display width of a rune in terminal columns: 0 for combining
+  ## marks and zero-width joiners/format controls, 2 for wide East Asian
+  ## and emoji code points, 1 for everything else.
+  ##
+  ## Reporting 0 for these zero-width runes is essential to terminal
+  ## correctness: they render merged onto the preceding base character
+  ## without moving the cursor, so counting one as a column would shift
+  ## every following glyph. `setRunes` folds them into the base cell and the
+  ## differential renderer assumes one written cell == one cursor advance.
+  let n = int(r)
+  if n < 0x80:
+    # Fast path: every ASCII code point occupies one column. C0 controls
+    # are substituted with a space before reaching a cell; callers that
+    # still pass one here expect width 1, matching historical behavior.
     return 1
+  if n > 0x10FFFF:
+    return 1
+  if r.unicodeCategory in ZeroWidthCategories:
+    return 0
   case r.unicodeWidth
   of UnicodeWidth.uwdtNarrow, UnicodeWidth.uwdtHalf, UnicodeWidth.uwdtAmbiguous,
       UnicodeWidth.uwdtNeutral:
@@ -396,6 +422,11 @@ proc setRunes*(
 
   var currentX = x
   let startX = x
+  var lastBaseX = -1
+    ## Column of the most recently written base cell in this call. Trailing
+    ## zero-width runes (combining marks, ZWJ, variation selectors) are
+    ## folded into it. `-1` means no base cell yet, so a zero-width rune
+    ## leading the run has nothing to attach to and is dropped.
 
   for rune in runes:
     let n = int(rune)
@@ -412,6 +443,7 @@ proc setRunes*(
           break
         if buffer.isValidPos(currentX, y):
           buffer[currentX, y] = cell(" ", style, hyperlink)
+          lastBaseX = currentX
         currentX.inc
       continue
     if isC0Control(n):
@@ -421,10 +453,24 @@ proc setRunes*(
         break
       if buffer.isValidPos(currentX, y):
         buffer[currentX, y] = cell(" ", style, hyperlink)
+        lastBaseX = currentX
       currentX.inc
       continue
 
     let width = runeWidth(rune)
+    if width == 0:
+      # Combining mark / joiner / variation selector: fold it into the base
+      # cell so the grapheme cluster stays in one cell and the cursor still
+      # advances one column per visible glyph. Writing it to its own cell
+      # would desync the differential renderer's cursor tracking, which
+      # assumes one written cell == one column. Direct symbol mutation
+      # bypasses the wide-char cleanup in `[]=` so the base's shadow cell
+      # (for a wide base) is preserved.
+      if lastBaseX >= 0 and buffer.isValidPos(lastBaseX, y):
+        buffer.content[y][lastBaseX].symbol.add($rune)
+        buffer.markDirty(lastBaseX, y)
+      continue
+
     if currentX + width > buffer.area.width:
       break
 
@@ -434,6 +480,7 @@ proc setRunes*(
       # Also inherit the hyperlink for proper link region handling
       if width == 2 and buffer.isValidPos(currentX + 1, y):
         buffer[currentX + 1, y] = cell("", style, hyperlink)
+      lastBaseX = currentX
 
     currentX += width
 
@@ -526,6 +573,7 @@ proc setString*(
       area.y + area.height - 1
 
   var currentX = x
+  var lastBaseX = -1 # Last base cell written within the area; see `setRunes`.
   try:
     for rune in text.runes:
       if isC0Control(int(rune)):
@@ -537,10 +585,20 @@ proc setString*(
           break
         if buffer.isValidPos(currentX, y):
           buffer[currentX, y] = cell(" ", style, hyperlink)
+          lastBaseX = currentX
         currentX.inc
         continue
 
       let width = runeWidth(rune)
+
+      # Zero-width rune: fold into the base cell rather than giving it a
+      # column of its own (see `setRunes`). A leading mark with no base
+      # cell in the area is dropped.
+      if width == 0:
+        if lastBaseX >= 0 and buffer.isValidPos(lastBaseX, y):
+          buffer.content[y][lastBaseX].symbol.add($rune)
+          buffer.markDirty(lastBaseX, y)
+        continue
 
       # Skip characters before the area
       if currentX + width <= area.x:
@@ -557,6 +615,7 @@ proc setString*(
         buffer[currentX, y] = cell($rune, style, hyperlink)
         if width == 2 and buffer.isValidPos(currentX + 1, y):
           buffer[currentX + 1, y] = cell("", style, hyperlink)
+        lastBaseX = currentX
 
       currentX += width
   except ValueError:
@@ -571,7 +630,7 @@ proc setCell*(
     width: int,
     style: Style = defaultStyle(),
     hyperlink: string = "",
-) {.inline.} =
+) =
   ## Set a single character cell at (x, y) with a known display width.
   ## Unlike setString, this skips UTF-8 parsing and width calculation.
   ## For wide characters (width=2), the next cell is automatically marked empty.
@@ -594,7 +653,7 @@ proc setCell*(
     width: int,
     style: Style = defaultStyle(),
     hyperlink: string = "",
-) {.inline.} =
+) =
   ## Rune overload — converts to string once, then delegates.
   buffer.setCell(x, y, $rune, width, style, hyperlink)
 
@@ -605,7 +664,7 @@ proc setCell*(
     width: int,
     style: Style = defaultStyle(),
     hyperlink: string = "",
-) {.inline.} =
+) =
   ## Position overload for setCell.
   buffer.setCell(pos.x, pos.y, symbol, width, style, hyperlink)
 
@@ -616,7 +675,7 @@ proc setCell*(
     width: int,
     style: Style = defaultStyle(),
     hyperlink: string = "",
-) {.inline.} =
+) =
   ## Position + Rune overload for setCell.
   buffer.setCell(pos.x, pos.y, $rune, width, style, hyperlink)
 
@@ -627,7 +686,7 @@ proc setString*(
     style: Style = defaultStyle(),
     hyperlink: string = "",
     tabWidth: int = DefaultTabWidth,
-) {.inline.} =
+) =
   ## Alias for setRunes for convenience
   buffer.setRunes(x, y, runes, style, hyperlink, tabWidth)
 
@@ -638,7 +697,7 @@ proc setString*(
     style: Style = defaultStyle(),
     hyperlink: string = "",
     tabWidth: int = DefaultTabWidth,
-) {.inline.} =
+) =
   ## Alias for setRunes for convenience
   buffer.setRunes(pos, runes, style, hyperlink, tabWidth)
 

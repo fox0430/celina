@@ -3,6 +3,7 @@
 import std/[unittest, unicode, strutils]
 
 import ../celina/core/buffer
+import ../celina/core/geometry
 import ../celina/core/colors
 
 suite "Unicode Support Tests":
@@ -19,17 +20,23 @@ suite "Unicode Support Tests":
       check runeWidth("漢".toRunes[0]) == 2 # Kanji
       check runeWidth("本".toRunes[0]) == 2 # Kanji
 
-    test "Combining characters have width 0":
-      # Note: Some combining marks may be detected as width 1 by unicodedb
-      # This depends on the specific Unicode implementation
-      let combiningGrave = runeWidth(Rune(0x0300))
-      let combiningAcute = runeWidth(Rune(0x0301))
-      let combiningDiaeresis = runeWidth(Rune(0x0308))
+    test "Combining marks have width 0":
+      # Nonspacing marks (category Mn) render on top of the preceding base
+      # glyph and must not advance the cursor.
+      check runeWidth(Rune(0x0300)) == 0 # Combining grave accent
+      check runeWidth(Rune(0x0301)) == 0 # Combining acute accent
+      check runeWidth(Rune(0x0308)) == 0 # Combining diaeresis
+      check runeWidth(Rune(0x0327)) == 0 # Combining cedilla
 
-      # These should be 0 or 1, but not 2 (not wide characters)
-      check combiningGrave <= 1
-      check combiningAcute <= 1
-      check combiningDiaeresis <= 1
+    test "Zero-width joiners and format controls have width 0":
+      check runeWidth(Rune(0x200B)) == 0 # ZERO WIDTH SPACE
+      check runeWidth(Rune(0x200C)) == 0 # ZERO WIDTH NON-JOINER
+      check runeWidth(Rune(0x200D)) == 0 # ZERO WIDTH JOINER
+      check runeWidth(Rune(0xFEFF)) == 0 # ZERO WIDTH NO-BREAK SPACE (BOM)
+
+    test "Variation selectors have width 0":
+      check runeWidth(Rune(0xFE0E)) == 0 # VARIATION SELECTOR-15 (text)
+      check runeWidth(Rune(0xFE0F)) == 0 # VARIATION SELECTOR-16 (emoji)
 
     test "Emoji have appropriate width":
       check runeWidth("😀".toRunes[0]) == 2 # Grinning face
@@ -55,6 +62,24 @@ suite "Unicode Support Tests":
     test "Empty sequence":
       let empty: seq[Rune] = @[]
       check runesWidth(empty) == 0
+
+    test "Decomposed grapheme counts base width only":
+      # "é" as base "e" + U+0301 must measure 1 column, same as precomposed.
+      let decomposed = @[Rune('e'), Rune(0x0301)]
+      check runesWidth(decomposed) == 1
+      check runesWidth("é".toRunes) == 1 # precomposed U+00E9
+
+    test "ZWJ emoji sequence measures by visible glyphs":
+      # Family "👨‍👩‍👧": 3 wide emoji joined by two ZWJ (U+200D). The joiners
+      # are zero-width, so the run measures 3 * 2 = 6 columns.
+      let family = "👨‍👩‍👧".toRunes
+      check runesWidth(family) == 6
+
+    test "displayWidth ignores combining marks and joiners":
+      check displayWidth("é") == 1
+      check displayWidth("café") == 4
+      let joined = "a" & $Rune(0x200D) & "b" # a + ZWJ + b
+      check displayWidth(joined) == 2
 
   suite "Buffer Unicode Rendering":
     test "setString with Japanese characters":
@@ -137,3 +162,81 @@ suite "Unicode Support Tests":
       # Should render correctly (combining chars have 0 width)
       let result = buffer.toStrings()
       check result[0].contains("café")
+
+  suite "Zero-width grapheme folding":
+    # A zero-width rune (combining mark, ZWJ, variation selector) must be
+    # folded into the preceding base cell rather than occupying a cell of its
+    # own. Otherwise the differential renderer — which advances the cursor one
+    # column per written cell — desyncs from the terminal, shifting every
+    # following glyph.
+    test "setRunes folds a combining mark into the base cell":
+      var buffer = newBuffer(8, 1)
+      # "é" decomposed: e + U+0301, then "f".
+      buffer.setRunes(0, 0, @[Rune('e'), Rune(0x0301), Rune('f')])
+
+      check buffer[0, 0].symbol == "e" & $Rune(0x0301)
+      check buffer[0, 0].width() == 1
+      check buffer[1, 0].symbol == "f" # follows at column 1, not 2
+      check buffer[2, 0].symbol == " " # untouched blank
+
+    test "multiple combining marks all fold into the same base cell":
+      var buffer = newBuffer(8, 1)
+      # Vietnamese "ệ" decomposed: e + U+0302 (circumflex) + U+0323 (dot
+      # below). Both marks are zero-width and stack onto the single base.
+      buffer.setRunes(0, 0, @[Rune('e'), Rune(0x0302), Rune(0x0323), Rune('f')])
+
+      check buffer[0, 0].symbol == "e" & $Rune(0x0302) & $Rune(0x0323)
+      check buffer[0, 0].width() == 1
+      check buffer[1, 0].symbol == "f" # still column 1, not shifted by the marks
+      check buffer[2, 0].symbol == " " # untouched blank
+
+    test "combining mark folds onto a wide base, shadow preserved":
+      var buffer = newBuffer(8, 1)
+      # Wide kanji + combining mark + ASCII.
+      buffer.setRunes(0, 0, @["漢".toRunes[0], Rune(0x0301), Rune('X')])
+
+      check buffer[0, 0].symbol == "漢" & $Rune(0x0301)
+      check buffer[0, 0].width() == 2
+      check buffer[1, 0].symbol == "" # shadow cell preserved
+      check buffer[2, 0].symbol == "X" # lands at column 2, not shifted
+
+    test "ZWJ folds into the preceding emoji, not its own cell":
+      var buffer = newBuffer(10, 1)
+      # "👨‍👩": man + ZWJ + woman. We fold zero-width runes (the ZWJ) into the
+      # base, but do not collapse the whole cluster — each visible emoji keeps
+      # its own wide cell, matching wcwidth/unicode-width conventions.
+      let zwj = "👨‍👩".toRunes
+      buffer.setRunes(0, 0, zwj & @[Rune('!')])
+
+      check buffer[0, 0].symbol == "👨" & $Rune(0x200D) # man + ZWJ
+      check buffer[0, 0].width() == 2
+      check buffer[1, 0].symbol == "" # shadow of man's wide cell
+      check buffer[2, 0].symbol == "👩" # woman is a separate base cell
+      check buffer[3, 0].symbol == "" # shadow of woman's wide cell
+      check buffer[4, 0].symbol == "!" # next glyph at column 4
+
+    test "emoji + variation selector stays in one cell":
+      var buffer = newBuffer(8, 1)
+      # U+2764 HEAVY BLACK HEART + U+FE0F emoji presentation selector. The
+      # selector is zero-width, so the next glyph lands right after the heart
+      # (whose own column count is environment-defined — derive it).
+      let heartWidth = runeWidth(Rune(0x2764))
+      buffer.setRunes(0, 0, @[Rune(0x2764), Rune(0xFE0F), Rune('A')])
+
+      check buffer[0, 0].symbol == $Rune(0x2764) & $Rune(0xFE0F)
+      check buffer[heartWidth, 0].symbol == "A"
+
+    test "leading combining mark with no base is dropped":
+      var buffer = newBuffer(6, 1)
+      buffer.setRunes(0, 0, @[Rune(0x0301), Rune('a')])
+
+      check buffer[0, 0].symbol == "a" # base lands at column 0
+      check buffer[1, 0].symbol == " "
+
+    test "area setString folds combining marks":
+      var buffer = newBuffer(10, 1)
+      let text = "e" & $Rune(0x0301) & "f" # e + combining acute + f
+      buffer.setString(rect(0, 0, 10, 1), text)
+
+      check buffer[0, 0].symbol == "e" & $Rune(0x0301)
+      check buffer[1, 0].symbol == "f"
