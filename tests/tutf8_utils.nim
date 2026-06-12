@@ -27,7 +27,10 @@ suite "UTF-8 Byte Length Detection":
 
   test "Invalid UTF-8 start bytes":
     check utf8ByteLength(0x80) == 0 # Continuation byte
-    # Note: 0xC0 and 0xC1 are technically invalid but detected as 2-byte for compatibility
+    # 0xC0 and 0xC1 can only ever lead an overlong ASCII encoding, so they are
+    # rejected as start bytes rather than reported as 2-byte leads.
+    check utf8ByteLength(0xC0) == 0
+    check utf8ByteLength(0xC1) == 0
     check utf8ByteLength(0xF5) == 0 # Beyond valid 4-byte range
     check utf8ByteLength(0xFF) == 0 # Invalid
 
@@ -91,6 +94,59 @@ suite "UTF-8 Sequence Validation":
     let result = validateUtf8Sequence(bytes)
     check not result.isValid
     check result.errorMessage == "Empty byte sequence"
+
+  test "Overlong 2-byte encoding (C0 80) is rejected at the start byte":
+    # 0xC0/0xC1 can only encode an ASCII code point overlong, so they fail as
+    # invalid start bytes before continuation validation even begins.
+    for lead in [byte(0xC0), byte(0xC1)]:
+      let result = validateUtf8Sequence([lead, byte(0x80)])
+      check not result.isValid
+      check result.errorMessage == "Invalid UTF-8 start byte"
+
+  test "Overlong 3-byte encoding (E0 80 80) is rejected":
+    # E0 requires a second byte in A0..BF; 0x80 would encode U+0000..U+07FF.
+    let result = validateUtf8Sequence([byte(0xE0), byte(0x80), byte(0x80)])
+    check not result.isValid
+    check result.errorMessage == "Overlong or surrogate encoding"
+
+  test "UTF-16 surrogate (ED A0 80) is rejected":
+    # ED requires a second byte in 80..9F; 0xA0 lands in U+D800..U+DFFF.
+    let result = validateUtf8Sequence([byte(0xED), byte(0xA0), byte(0x80)])
+    check not result.isValid
+    check result.errorMessage == "Overlong or surrogate encoding"
+
+  test "Valid boundary 3-byte sequences around the surrogate gap":
+    # ED 9F BF = U+D7FF (last before the gap) and EE 80 80 = U+E000 (first
+    # after) must both stay valid.
+    check validateUtf8Sequence([byte(0xED), byte(0x9F), byte(0xBF)]).isValid
+    check validateUtf8Sequence([byte(0xEE), byte(0x80), byte(0x80)]).isValid
+
+  test "Overlong 4-byte encoding (F0 80 80 80) is rejected":
+    # F0 requires a second byte in 90..BF; 0x80 would encode below U+10000.
+    let result = validateUtf8Sequence([byte(0xF0), byte(0x80), byte(0x80), byte(0x80)])
+    check not result.isValid
+    check result.errorMessage == "Overlong or surrogate encoding"
+
+  test "4-byte code point beyond U+10FFFF (F4 90 80 80) is rejected":
+    # F4 requires a second byte in 80..8F; 0x90 would encode > U+10FFFF.
+    let result = validateUtf8Sequence([byte(0xF4), byte(0x90), byte(0x80), byte(0x80)])
+    check not result.isValid
+    check result.errorMessage == "Overlong or surrogate encoding"
+
+  test "Valid maximum code point (F4 8F BF BF = U+10FFFF) stays valid":
+    check validateUtf8Sequence([byte(0xF4), byte(0x8F), byte(0xBF), byte(0xBF)]).isValid
+
+suite "UTF-8 Second Byte Range (Table 3-7)":
+  test "Narrowed ranges for E0/ED/F0/F4":
+    check utf8SecondByteRange(0xE0) == (0xA0.byte, 0xBF.byte)
+    check utf8SecondByteRange(0xED) == (0x80.byte, 0x9F.byte)
+    check utf8SecondByteRange(0xF0) == (0x90.byte, 0xBF.byte)
+    check utf8SecondByteRange(0xF4) == (0x80.byte, 0x8F.byte)
+
+  test "Unrestricted lead bytes use the full continuation range":
+    check utf8SecondByteRange(0xC3) == (0x80.byte, 0xBF.byte)
+    check utf8SecondByteRange(0xE3) == (0x80.byte, 0xBF.byte)
+    check utf8SecondByteRange(0xF1) == (0x80.byte, 0xBF.byte)
 
 suite "UTF-8 String Building":
   test "Build ASCII character":
@@ -292,6 +348,64 @@ suite "assembleUtf8Char (U+FFFD substitution)":
     check r.text == Utf8ReplacementChar
     check r.leftover.isSome
     check r.leftover.get == 0x1B.byte
+
+  test "Overlong 3-byte second byte yields U+FFFD AND surfaces leftover":
+    # E0 80 ...: 0x80 is a valid continuation pattern but out of E0's A0..BF
+    # range, so the maximal subpart ends at E0 and 0x80 must be re-injected.
+    let r = assembleUtf8Char(0xE0.byte, fixedSource([byte(0x80), byte(0x80)]))
+    check r.text == Utf8ReplacementChar
+    check r.leftover.isSome
+    check r.leftover.get == 0x80.byte
+
+  test "UTF-16 surrogate second byte yields U+FFFD AND surfaces leftover":
+    # ED A0 ...: 0xA0 falls in the surrogate range (out of ED's 80..9F).
+    let r = assembleUtf8Char(0xED.byte, fixedSource([byte(0xA0), byte(0x80)]))
+    check r.text == Utf8ReplacementChar
+    check r.leftover.isSome
+    check r.leftover.get == 0xA0.byte
+
+  test "Overlong 4-byte second byte yields U+FFFD AND surfaces leftover":
+    let r =
+      assembleUtf8Char(0xF0.byte, fixedSource([byte(0x80), byte(0x80), byte(0x80)]))
+    check r.text == Utf8ReplacementChar
+    check r.leftover.isSome
+    check r.leftover.get == 0x80.byte
+
+  test "4-byte beyond U+10FFFF second byte yields U+FFFD AND surfaces leftover":
+    let r =
+      assembleUtf8Char(0xF4.byte, fixedSource([byte(0x90), byte(0x80), byte(0x80)]))
+    check r.text == Utf8ReplacementChar
+    check r.leftover.isSome
+    check r.leftover.get == 0x90.byte
+
+  test "Valid boundary sequences still assemble (U+D7FF, U+E000, U+10FFFF)":
+    # U+D7FF (last before the surrogate gap) and U+E000 (first after) must pass
+    # through unchanged rather than collapsing to U+FFFD.
+    let d7ff = assembleUtf8Char(0xED.byte, fixedSource([byte(0x9F), byte(0xBF)]))
+    check d7ff.text == buildUtf8String(0xED.byte, [byte(0x9F), byte(0xBF)])
+    check d7ff.text.len == 3
+    check d7ff.leftover.isNone
+    let e000 = assembleUtf8Char(0xEE.byte, fixedSource([byte(0x80), byte(0x80)]))
+    check e000.text == buildUtf8String(0xEE.byte, [byte(0x80), byte(0x80)])
+    check e000.leftover.isNone
+    # U+10FFFF, the maximum valid code point.
+    let maxCp =
+      assembleUtf8Char(0xF4.byte, fixedSource([byte(0x8F), byte(0xBF), byte(0xBF)]))
+    check maxCp.text.len == 4
+    check maxCp.leftover.isNone
+
+  test "Overlong second byte does not over-consume the source":
+    # The out-of-range second byte ends the subpart, so the remaining bytes of
+    # the would-be sequence must NOT be read.
+    var consumed = 0
+    let buf = @[byte(0x80), byte(0x80)]
+    proc src(): tuple[ok: bool, b: byte] =
+      let b = buf[consumed]
+      consumed.inc
+      return (true, b)
+
+    discard assembleUtf8Char(0xE0.byte, src)
+    check consumed == 1
 
   test "Output of error path equals the U+FFFD constant exactly":
     # Belt-and-suspenders: catch any future drift where an error branch

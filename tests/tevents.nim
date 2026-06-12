@@ -1429,7 +1429,8 @@ suite "Events Module Tests":
       # Test boundary values
       check utf8ByteLength(0x00) == 1 # Min 1-byte
       check utf8ByteLength(0x7F) == 1 # Max 1-byte
-      check utf8ByteLength(0xC0) == 2 # Min 2-byte
+      check utf8ByteLength(0xC0) == 0 # 0xC0: always overlong, invalid start byte
+      check utf8ByteLength(0xC2) == 2 # Min valid 2-byte
       check utf8ByteLength(0xDF) == 2 # Max 2-byte
       check utf8ByteLength(0xE0) == 3 # Min 3-byte
       check utf8ByteLength(0xEF) == 3 # Max 3-byte
