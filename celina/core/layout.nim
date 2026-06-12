@@ -3,7 +3,7 @@
 ## This module provides a flexible constraint-based layout system similar to
 ## Ratatui's layout capabilities, allowing for responsive UI design.
 
-import std/strformat
+import std/[strformat, algorithm]
 
 import geometry
 
@@ -144,24 +144,37 @@ proc solveConstraints(solver: var LayoutSolver, constraints: seq[Constraint]) =
     else:
       unsolved_indices.add(i)
 
-  # Phase 2: Apply Min constraints
-  var solved_min_indices: seq[int] = @[]
+  # Phase 2: Reserve minimum sizes for Min constraints
+  var min_indices: seq[int] = @[]
   for i in unsolved_indices:
-    let constraint = constraints[i]
-    if constraint.kind == Min:
-      let needed = constraint.min
-      if needed <= remaining_space:
-        solver.results[i] = needed
-        remaining_space -= needed
-        solved_min_indices.add(i)
+    if constraints[i].kind == Min:
+      min_indices.add(i)
+      solver.results[i] = min(constraints[i].min, remaining_space)
+      remaining_space -= solver.results[i]
 
-  # Remove solved min constraints from unsolved list
-  for solved in solved_min_indices:
-    let idx = unsolved_indices.find(solved)
-    if idx >= 0:
-      unsolved_indices.delete(idx)
+  # Phase 3: Grow Max constraints up to their caps
+  # Like Ratatui's Max(n), each grows to fill available space up to n,
+  # taking precedence over Fill growth
+  var max_indices: seq[int] = @[]
+  for i in unsolved_indices:
+    if constraints[i].kind == Max:
+      max_indices.add(i)
 
-  # Phase 3: Distribute remaining space to Fill constraints
+  if max_indices.len > 0 and remaining_space > 0:
+    # Water-filling: smaller caps first, so space a small cap cannot use
+    # stays available to the larger ones
+    max_indices.sort(
+      proc(a, b: int): int =
+        cmp(constraints[a].max, constraints[b].max)
+    )
+    var left = max_indices.len
+    for i in max_indices:
+      let share = remaining_space div left
+      solver.results[i] = min(constraints[i].max, share)
+      remaining_space -= solver.results[i]
+      dec left
+
+  # Phase 4: Distribute remaining space to Fill constraints
   var fill_indices: seq[int] = @[]
   var total_priority = 0
 
@@ -184,14 +197,18 @@ proc solveConstraints(solver: var LayoutSolver, constraints: seq[Constraint]) =
       if leftover > 0:
         solver.results[i] += 1
         leftover -= 1
+    remaining_space = 0
 
-  # Phase 4: Apply Max constraints as post-processing
-  for i, constraint in constraints:
-    if constraint.kind == Max:
-      if solver.results[i] > constraint.max:
-        let excess = solver.results[i] - constraint.max
-        solver.results[i] = constraint.max
-        remaining_space += excess
+  # Phase 5: Min constraints absorb any space still left
+  # Like Ratatui's Min(n), they expand into excess space, but with
+  # weaker priority than Fill
+  if remaining_space > 0 and min_indices.len > 0:
+    var left = min_indices.len
+    for i in min_indices:
+      let extra = remaining_space div left
+      solver.results[i] += extra
+      remaining_space -= extra
+      dec left
 
 proc split*(layout: Layout, area: Rect): seq[Rect] =
   ## Split an area according to the layout constraints
