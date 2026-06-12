@@ -185,17 +185,17 @@ suite "Colors Module Tests":
       check colorVal2.rgb.b == 128
 
     test "hex color parsing error handling":
-      # Test that invalid hex strings return black instead of throwing
-      let colorVal1 = rgb("FF00") # Too short -> should return black
-      let colorVal2 = rgb("FF0080CC") # Too long -> should return black
-      let colorVal3 = rgb("INVALID") # Invalid hex -> should return black
-
-      check colorVal1.kind == Rgb
-      check colorVal1.rgb == RgbColor(r: 0, g: 0, b: 0)
-      check colorVal2.kind == Rgb
-      check colorVal2.rgb == RgbColor(r: 0, g: 0, b: 0)
-      check colorVal3.kind == Rgb
-      check colorVal3.rgb == RgbColor(r: 0, g: 0, b: 0)
+      # Invalid hex strings raise ValueError instead of silently parsing
+      expect ValueError:
+        discard rgb("FF00") # Too short
+      expect ValueError:
+        discard rgb("FF0080CC") # Too long
+      expect ValueError:
+        discard rgb("INVALID") # Wrong length (7)
+      expect ValueError:
+        discard rgb("GGGGGG") # Valid length, non-hex
+      expect ValueError:
+        discard rgb("#ZZ00FF") # '#' + non-hex chars
 
     test "defaultColor() function":
       let colorVal = defaultColor()
