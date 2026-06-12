@@ -11,7 +11,7 @@ type
   TerminalError* = object of CatchableError
     ## Terminal operation failures (ANSI codes, raw mode, etc.)
 
-  BufferError* = object of IndexDefect ## Buffer access or manipulation errors
+  BufferError* = object of CatchableError ## Buffer access or manipulation errors
 
   LayoutError* = object of ValueError ## Layout constraint resolution errors
 
