@@ -130,6 +130,78 @@ suite "Basic Key Mapping":
     check result0.code == Char
     check result0.char == "0"
 
+suite "Alt Key Mapping":
+  test "Alt+letter (ESC a)":
+    let result = mapAltKey('a')
+    check result.code == Char
+    check result.char == "a"
+    check result.modifiers == {Alt}
+
+  test "Alt+uppercase letter (ESC F)":
+    let result = mapAltKey('F')
+    check result.code == Char
+    check result.char == "F"
+    check result.modifiers == {Alt}
+
+  test "Alt+digit (ESC 1)":
+    let result = mapAltKey('1')
+    check result.code == Char
+    check result.char == "1"
+    check result.modifiers == {Alt}
+
+  test "Ctrl+Alt+letter (ESC \\x01)":
+    let result = mapAltKey('\x01')
+    check result.code == Char
+    check result.char == "a"
+    check result.modifiers == {Ctrl, Alt}
+
+  test "Ctrl+Alt+C (ESC \\x03)":
+    let result = mapAltKey('\x03')
+    check result.code == Char
+    check result.char == "c"
+    check result.modifiers == {Ctrl, Alt}
+
+  test "Ctrl+Alt+Space (ESC \\x00)":
+    let result = mapAltKey('\x00')
+    check result.code == Space
+    check result.modifiers == {Ctrl, Alt}
+
+  test "Ctrl+Alt+number (ESC \\x1c)":
+    let result = mapAltKey('\x1c')
+    check result.code == Char
+    check result.char == "4"
+    check result.modifiers == {Ctrl, Alt}
+
+  test "Alt+Enter (ESC \\r)":
+    let result = mapAltKey('\r')
+    check result.code == Enter
+    check result.modifiers == {Alt}
+
+  test "Alt+Tab (ESC \\t)":
+    let result = mapAltKey('\t')
+    check result.code == Tab
+    check result.modifiers == {Alt}
+
+  test "Alt+Backspace (ESC \\x7f and ESC \\x08)":
+    let resultDEL = mapAltKey('\x7f')
+    check resultDEL.code == Backspace
+    check resultDEL.modifiers == {Alt}
+
+    let resultBS = mapAltKey('\x08')
+    check resultBS.code == Backspace
+    check resultBS.modifiers == {Alt}
+
+  test "Alt+Space (ESC space)":
+    let result = mapAltKey(' ')
+    check result.code == Space
+    check result.modifiers == {Alt}
+
+  test "Alt+Escape (ESC ESC)":
+    let result = mapAltKey('\x1b')
+    check result.code == Escape
+    check result.char == "\x1b"
+    check result.modifiers == {Alt}
+
 suite "Arrow Key Mapping":
   test "Arrow keys":
     check mapArrowKey('A').code == ArrowUp

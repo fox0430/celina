@@ -137,6 +137,41 @@ proc mapBasicKey*(ch: char): KeyEvent =
   else:
     KeyEvent(code: Char, char: $ch)
 
+proc mapAltKey*(ch: char): KeyEvent =
+  ## Map the byte following a standalone ESC to an Alt-modified key event.
+  ##
+  ## Terminals encode Alt+key by prefixing the key's usual byte with ESC
+  ## (e.g. ESC 'a' = Alt+a). The base mappings are reused, so control bytes
+  ## keep their meaning and simply gain Alt: ESC \x01 = Ctrl+Alt+A,
+  ## ESC \r = Alt+Enter, ESC \x7f = Alt+Backspace, ESC ESC = Alt+Escape.
+  ##
+  ## Only single-byte (ASCII) input is handled here; assembling multi-byte
+  ## UTF-8 characters for Alt+non-ASCII keys is the caller's responsibility
+  ## (see `parseEscapeSequenceUnified`).
+  ##
+  ## Example:
+  ## ```nim
+  ## assert mapAltKey('a').char == "a"
+  ## assert mapAltKey('a').modifiers == {Alt}
+  ## assert mapAltKey('\x01').modifiers == {Ctrl, Alt}
+  ## ```
+  let ctrlLetter = mapCtrlLetterKey(ch)
+  if ctrlLetter.isCtrlKey:
+    result = ctrlLetter.keyEvent
+  else:
+    let ctrlNumber = mapCtrlNumberKey(ch)
+    if ctrlNumber.isCtrlKey:
+      result = ctrlNumber.keyEvent
+    elif ch == '\x03':
+      # Bare \x03 is the Quit signal so mapCtrlLetterKey excludes it, but
+      # with an ESC prefix it is an ordinary Ctrl+Alt+C key combination.
+      result = KeyEvent(code: Char, char: "c", modifiers: {Ctrl})
+    elif ch == '\x1b':
+      result = KeyEvent(code: Escape, char: "\x1b")
+    else:
+      result = mapBasicKey(ch)
+  result.modifiers.incl(Alt)
+
 proc mapArrowKey*(ch: char): KeyEvent =
   ## Map escape sequence final character to arrow key
   ##

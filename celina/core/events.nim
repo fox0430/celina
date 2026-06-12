@@ -339,7 +339,33 @@ template parseEscapeSequenceUnified*(
         let p = processVT100FunctionKey(vt.ch, vt.success)
         Event(kind: Key, key: p.keyEvent)
       else:
-        Event(kind: Key, key: KeyEvent(code: KeyCode.Escape, char: "\x1b"))
+        # Alt+key: terminals encode Alt by prefixing the key's usual bytes
+        # with ESC (e.g. ESC 'a' = Alt+a). ASCII bytes map directly; a
+        # high-bit byte starts a UTF-8 character that is assembled inline
+        # because the closure-based `assembleUtf8Char` cannot be used here —
+        # async callers must `await` each byte read.
+        if first.ch.byte < 0x80:
+          Event(kind: Key, key: mapAltKey(first.ch))
+        else:
+          let expectedLen = utf8ByteLength(first.ch.byte)
+          var contBytes: seq[byte] = @[]
+          var wellFormed = expectedLen > 0
+          while wellFormed and contBytes.len < expectedLen - 1:
+            let cont = readByte
+            if cont.success and isUtf8ContinuationByte(cont.ch.byte):
+              contBytes.add(cont.ch.byte)
+            else:
+              # Truncated or ill-formed sequence. Unlike the plain-key UTF-8
+              # path there is no pushback channel shared by sync and async
+              # callers, so an invalid continuation byte is dropped rather
+              # than re-injected as the next event's first byte.
+              wellFormed = false
+          let text =
+            if wellFormed:
+              buildUtf8String(first.ch.byte, contBytes)
+            else:
+              Utf8ReplacementChar
+          Event(kind: Key, key: KeyEvent(code: Char, char: text, modifiers: {Alt}))
 
 # UTF-8 helper functions (using shared logic from utf8_utils module)
 proc readUtf8Char(firstByte: byte): Utf8AssemblyResult =
