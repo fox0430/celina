@@ -672,7 +672,7 @@ proc handleEvent*(wm: WindowManager, event: Event): EventResult =
   ## outcome.
   ##
   ## Routing order:
-  ## 1. If a modal is active (top of `modalStack`), it receives the event
+  ## 1. The highest *visible* modal on `modalStack` receives the event
   ##    exclusively. Mouse clicks outside the modal's bounds are dropped
   ##    here (`erConsume`) so they neither reach lower windows nor the
   ##    global handler — this preserves modal semantics even when the
@@ -686,11 +686,11 @@ proc handleEvent*(wm: WindowManager, event: Event): EventResult =
   ## `erContinue` otherwise (no window, no handler, or handler returned
   ## `erContinue`).
 
-  # If there's a modal window, only it can handle events
-  let modalOpt = wm.currentModal()
-  if modalOpt.isSome():
-    let modalWindow = wm.getWindow(modalOpt.get())
-    if modalWindow.isSome():
+  # Route to the highest *visible* modal: a minimized/hidden one stays on
+  # `modalStack` to be restored later, but must not capture events.
+  for i in countdown(wm.modalStack.high, 0):
+    let modalWindow = wm.getWindow(wm.modalStack[i])
+    if modalWindow.isSome() and modalWindow.get().visible:
       let modal = modalWindow.get()
       # Drop mouse clicks outside the modal's area so a general
       # eventHandler on the modal doesn't observe out-of-bounds clicks.
