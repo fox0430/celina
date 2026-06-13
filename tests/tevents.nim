@@ -1,9 +1,48 @@
 # Test suite for events module
 
-import std/[unittest, posix, strutils]
+import std/[unittest, posix, strutils, options]
 
 import ../celina/core/events {.all.}
 import ../celina/core/mouse_logic
+
+# --- Test helpers: drive the non-blocking byte readers from a controlled pipe.
+# dup2 a pipe's read end onto STDIN_FILENO so the readers consume bytes we write
+# instead of the real terminal. `saved == -1` means the redirection was refused
+# (e.g. fd 0 closed), letting callers skip gracefully like the other tests here.
+type StdinPipe = tuple[saved: cint, rfd: cint, wfd: cint]
+
+proc redirectStdinFromPipe(): StdinPipe =
+  let saved = dup(STDIN_FILENO)
+  if saved == -1:
+    return (cint(-1), cint(-1), cint(-1))
+  var fds: array[2, cint]
+  if pipe(fds) != 0:
+    discard close(saved)
+    return (cint(-1), cint(-1), cint(-1))
+  if dup2(fds[0], STDIN_FILENO) == -1:
+    discard close(saved)
+    discard close(fds[0])
+    discard close(fds[1])
+    return (cint(-1), cint(-1), cint(-1))
+  (saved, fds[0], fds[1])
+
+proc restoreStdin(p: StdinPipe) =
+  discard dup2(p.saved, STDIN_FILENO)
+  discard close(p.saved)
+  discard close(p.rfd)
+  discard close(p.wfd)
+
+proc feedPipe(p: StdinPipe, data: string) =
+  if data.len > 0:
+    discard posix.write(p.wfd, addr data[0], data.len.cint)
+
+# Thread body: write a split sequence's trailing byte after a short delay (well
+# under the 50ms per-byte wait), so it lands in a later "packet" than the fed
+# `ESC[` prefix. {.thread.} procs can't capture, so the fd is passed in.
+proc delayedArrowWriter(wfd: cint) {.thread.} =
+  discard usleep(Useconds(10_000)) # 10ms
+  var b = "A"
+  discard posix.write(wfd, addr b[0], b.len.cint)
 
 suite "Events Module Tests":
   suite "EventKind Tests":
@@ -1659,3 +1698,104 @@ suite "Events Module Tests":
           finally:
             discard fcntl(STDIN_FILENO, F_SETFL, originalFlags)
             setStdinNonBlockingPinned(originalPin)
+
+  suite "Split Escape Sequence Reading":
+    ## Regression coverage for the per-byte wait in non-blocking escape parsing
+    ## (REVIEW #8): CSI continuation bytes must be awaited like the mouse/paste
+    ## ones, so a split sequence (slow SSH/tmux) is assembled rather than decaying
+    ## into a phantom Escape + stray Char.
+
+    test "readByteWithTimeoutNonBlocking reads a byte that is ready":
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          feedPipe(p, "X")
+          let r = readByteWithTimeoutNonBlocking()
+          check r.success
+          check r.ch == 'X'
+          check not r.isTimeout
+        finally:
+          restoreStdin(p)
+
+    test "readByteWithTimeoutNonBlocking times out when no byte arrives":
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          # 5ms keeps it fast; it must report a timeout, not a bogus byte.
+          let r = readByteWithTimeoutNonBlocking(5000)
+          check not r.success
+          check r.isTimeout
+        finally:
+          restoreStdin(p)
+
+    test "readByteWithTimeoutNonBlocking drains pendingByte without waiting":
+      # Empty pipe: a buffered pendingByte must short-circuit the select() wait.
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          pendingByte = some('Z'.byte)
+          let r = readByteWithTimeoutNonBlocking(5000)
+          check r.success
+          check r.ch == 'Z'
+        finally:
+          clearPendingByte()
+          restoreStdin(p)
+
+    test "readKeyInput assembles a CSI arrow key from stdin":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b[A")
+          let ev = readKeyInput()
+          check ev.isSome
+          check ev.get.kind == Key
+          check ev.get.key.code == ArrowUp
+        finally:
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "readKeyInput assembles a CSI arrow key split across packets":
+      # The genuine REVIEW #8 regression: `ESC[` is buffered but the arrow byte
+      # arrives in a later packet (written by a thread after a delay). Unlike the
+      # all-at-once test above, this fails without the per-byte wait.
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b[")
+          var writer: Thread[cint]
+          createThread(writer, delayedArrowWriter, p.wfd)
+          let ev = readKeyInput()
+          joinThread(writer)
+          check ev.isSome
+          check ev.get.kind == Key
+          check ev.get.key.code == ArrowUp
+        finally:
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "readKeyInput assembles an SGR mouse press from stdin":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b[<0;11;6M")
+          let ev = readKeyInput()
+          check ev.isSome
+          check ev.get.kind == Mouse
+          check ev.get.mouse.kind == Press
+          check ev.get.mouse.button == Left
+          check ev.get.mouse.x == 10
+          check ev.get.mouse.y == 5
+        finally:
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)

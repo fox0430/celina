@@ -485,29 +485,41 @@ proc readByteNonBlocking(fd: cint): tuple[success: bool, ch: char, isTimeout: bo
   else:
     return (false, '\0', false)
 
+proc readByteWithTimeoutNonBlocking(
+    timeoutUs: int = 50000
+): tuple[success: bool, ch: char, isTimeout: bool] =
+  ## Wait up to `timeoutUs` for stdin to become readable, then read one byte.
+  ## All non-blocking sub-parsers (escape, mouse, paste) read continuation bytes
+  ## through this, so a byte split across packets (slow SSH/tmux) is still picked
+  ## up rather than misread as a timeout. A buffered `pendingByte` skips the wait.
+  if pendingByte.isSome:
+    return readByteNonBlocking(STDIN_FILENO)
+
+  var readSet: TFdSet
+  FD_ZERO(readSet)
+  FD_SET(STDIN_FILENO, readSet)
+  # select(2) rejects tv_usec >= 1_000_000 with EINVAL, so carry whole seconds.
+  var timeout = Timeval(
+    tv_sec: Time(timeoutUs div 1_000_000), tv_usec: Suseconds(timeoutUs mod 1_000_000)
+  )
+  if select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout) <= 0:
+    # Timeout or error - no further byte of the sequence has arrived.
+    return (false, '\0', true)
+
+  readByteNonBlocking(STDIN_FILENO)
+
 # Non-blocking mouse event parsing
 
 proc parseMouseEventX10NonBlocking(): Event =
   ## Parse X10 mouse format: ESC[Mbxy (non-blocking mode)
-  ## where b is button byte, x,y are coordinate bytes
-  ##
-  ## Uses non-blocking I/O with select() to wait for complete sequence
+  ## where b is button byte, x,y are coordinate bytes.
+  ## Each byte is awaited per-byte so a split sequence is still assembled.
   var data: array[3, char]
 
   for i in 0 .. 2:
-    # Use select with timeout to wait for data
-    var readSet: TFdSet
-    FD_ZERO(readSet)
-    FD_SET(STDIN_FILENO, readSet)
-    var timeout = Timeval(tv_sec: Time(0), tv_usec: Suseconds(50000)) # 50ms per byte
-
-    let selectResult = select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout)
-    if selectResult <= 0:
-      # Timeout or error - incomplete sequence
-      return Event(kind: Unknown)
-
-    let readResult = readByteNonBlocking(STDIN_FILENO)
+    let readResult = readByteWithTimeoutNonBlocking()
     if not readResult.success:
+      # Timeout or error - incomplete sequence
       return Event(kind: Unknown)
 
     data[i] = readResult.ch
@@ -517,28 +529,17 @@ proc parseMouseEventX10NonBlocking(): Event =
 
 proc parseMouseEventSGRNonBlocking(): Event =
   ## Parse SGR mouse format: ESC[<button;x;y;M/m (non-blocking mode)
-  ## M for press, m for release
-  ##
-  ## Uses non-blocking I/O with select() to wait for complete sequence
+  ## M for press, m for release.
+  ## Each byte is awaited per-byte so a split sequence is still assembled.
   var buffer: string
   var ch: char
   var readCount = 0
 
   # Read until we get M or m, with safety limits
   while readCount < MaxSGRMouseReadBytes:
-    # Use select with timeout to wait for data
-    var readSet: TFdSet
-    FD_ZERO(readSet)
-    FD_SET(STDIN_FILENO, readSet)
-    var timeout = Timeval(tv_sec: Time(0), tv_usec: Suseconds(50000)) # 50ms per byte
-
-    let selectResult = select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout)
-    if selectResult <= 0:
-      # Timeout or error - incomplete sequence
-      return Event(kind: Unknown)
-
-    let readResult = readByteNonBlocking(STDIN_FILENO)
+    let readResult = readByteWithTimeoutNonBlocking()
     if not readResult.success:
+      # Timeout or error - incomplete sequence
       return Event(kind: Unknown)
 
     ch = readResult.ch
@@ -569,32 +570,20 @@ proc parseMouseEventSGRNonBlocking(): Event =
   return Event(kind: Unknown)
 
 # Bracketed paste content reader (non-blocking mode)
-# Uses the shared paste-end state machine; differs from the blocking version
-# only in how each byte is acquired (select() + non-blocking read with 1s
-# timeout per byte vs unconditional blocking read).
+# Shares the paste-end state machine with the blocking version; differs only in
+# the byte source (readByteWithTimeoutNonBlocking, 1s per byte).
 
 proc readPasteContentNonBlocking(): string =
-  ## Read paste content in non-blocking mode until ESC[201~.
-  ## Uses select() with a 1-second timeout per byte; returns whatever has been
-  ## buffered if the timeout fires.
+  ## Read paste content until ESC[201~, awaiting each byte with a 1s timeout.
+  ## Returns whatever has been buffered if the timeout fires.
   result = ""
   var state = PesNone
   var pending = ""
 
   while true:
-    var readSet: TFdSet
-    FD_ZERO(readSet)
-    FD_SET(STDIN_FILENO, readSet)
-    var timeout = Timeval(tv_sec: Time(1), tv_usec: Suseconds(0))
-
-    let selectResult = select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout)
-    if selectResult <= 0:
-      result.add(pending)
-      return
-
-    let r = readByteNonBlocking(STDIN_FILENO)
+    let r = readByteWithTimeoutNonBlocking(1_000_000) # 1s per byte
     if not r.success:
-      result.add(pending)
+      result.add(pending) # timeout/error: flush what we have
       return
 
     if stepPasteEnd(state, pending, r.ch, result):
@@ -637,20 +626,29 @@ proc readKeyInput*(): Option[Event] =
     if needRestore:
       flags.restore()
 
-  # Handle escape sequences via the unified routing template (non-blocking I/O).
-  # The 20ms post-ESC select() distinguishes a standalone ESC keypress from the
-  # start of a real sequence; this check is unique to non-blocking mode.
+  # Escape sequences via the unified routing template (non-blocking I/O).
+  # The first post-ESC byte uses a short 20ms wait to tell a standalone ESC from
+  # the start of a sequence; continuation bytes use the standard 50ms per-byte
+  # wait, so a CSI split across packets (slow SSH/tmux) is assembled instead of
+  # decaying into a phantom Escape + stray Char.
   if ch == '\x1b':
-    var readSet: TFdSet
-    FD_ZERO(readSet)
-    FD_SET(STDIN_FILENO, readSet)
-    var timeout = Timeval(tv_sec: Time(0), tv_usec: Suseconds(20000))
-    if select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout) == 0:
+    let firstByte = readByteWithTimeoutNonBlocking(20000)
+    if not firstByte.success:
       return some(Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b")))
+
+    # First byte is already in hand; yield it once, then fall through to the
+    # per-byte reader — avoids a redundant second select() for it.
+    var firstPending = some(firstByte)
+    proc nextEscByte(): tuple[success: bool, ch: char, isTimeout: bool] =
+      if firstPending.isSome:
+        result = firstPending.get
+        firstPending = none(typeof(firstByte))
+      else:
+        result = readByteWithTimeoutNonBlocking()
 
     return some(
       parseEscapeSequenceUnified(
-        readByteNonBlocking(STDIN_FILENO),
+        nextEscByte(),
         readPasteContentNonBlocking(),
         parseMouseEventX10NonBlocking(),
         parseMouseEventSGRNonBlocking(),
