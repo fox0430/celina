@@ -93,8 +93,12 @@ proc parseMouseDataX10*(data: array[3, char]): MouseEventData =
       button = Left
 
     if isDrag:
-      kind = Drag
-    elif (buttonByte and 0x03) == 3:
+      # Motion with a button held is a Drag; with no button (3) it's a Move.
+      if buttonInfo == 3:
+        kind = Move
+      else:
+        kind = Drag
+    elif buttonInfo == 3:
       kind = Release
     else:
       kind = Press
@@ -139,7 +143,11 @@ proc parseMouseDataSGR*(
     if isRelease:
       kind = Release
     elif (buttonCode and 0x20) != 0:
-      kind = Drag
+      # Motion with a button held is a Drag; with no button (3) it's a Move.
+      if buttonInfo == 3:
+        kind = Move
+      else:
+        kind = Drag
     else:
       kind = Press
 
