@@ -40,6 +40,13 @@ proc newAsyncInputReader*(): AsyncInputReader =
     result.usePolling = true
     result.selectorRegistered = false
 
+proc isLive*(reader: AsyncInputReader): bool =
+  ## Whether `reader` can still observe input. False for a nil reader or one
+  ## that has been through `closeAsyncInputReader` (which nils `selector`).
+  ## A polling-mode reader stays usable via direct `poll()`, so it is live as
+  ## long as the object exists.
+  not reader.isNil and (reader.usePolling or reader.selector != nil)
+
 proc closeAsyncInputReader*(reader: AsyncInputReader) =
   ## Close the async input reader. Safe to call on a nil reader and safe
   ## to call repeatedly: after the first call `reader.selector` is set to

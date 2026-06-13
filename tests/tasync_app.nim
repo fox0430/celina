@@ -913,6 +913,33 @@ when hasAsyncSupport:
       app.restoreTerminal()
       app.restoreTerminal()
 
+  suite "AsyncApp Input Reader Lifecycle":
+    test "runAsync re-creates a live input reader on a second run":
+      ## Regression: cleanup closes the input reader, niling its selector; the
+      ## app must also drop the reference so a second `runAsync` builds a fresh
+      ## live reader instead of reusing the closed one. Reuse left
+      ## `hasDataAvailable` permanently false, silently swallowing all input on
+      ## every run after the first.
+      let config = AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+      let app = newAsyncApp(config)
+
+      var liveDuringRun = false
+      app.onTickAsync proc(app: AsyncApp): Future[bool] {.async.} =
+        liveDuringRun = app.isInputReaderLive()
+        app.quit()
+        return true
+
+      # First run: reader is live mid-run, then dropped on completion.
+      waitFor app.runAsync()
+      check liveDuringRun == true
+      check app.isInputReaderLive() == false
+
+      # Second run must rebuild a live reader rather than reuse the closed one.
+      liveDuringRun = false
+      waitFor app.runAsync()
+      check liveDuringRun == true
+      check app.isInputReaderLive() == false
+
   when hasChronos:
     import chronos
 
