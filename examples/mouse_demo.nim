@@ -74,6 +74,8 @@ proc handleMouseEvent(demo: MouseDemo, mouse: MouseEvent) =
       demo.addMessage(
         &"Wheel down at ({mouse.x}, {mouse.y}) {modStr}(offset: {demo.wheelOffset})"
       )
+    of NoButton:
+      discard
   of Release:
     demo.lastMousePos = pos(mouse.x, mouse.y)
     if demo.isDragging:
