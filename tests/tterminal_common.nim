@@ -387,6 +387,19 @@ suite "Terminal Common Module Tests":
       check output.len > 0
       check output.contains("R")
 
+    test "buildDifferentialOutput skips the shadow cell of a wide character":
+      # Regression: a wide char's shadow must not emit its own style/reset —
+      # the lead covers that column, so only one reset should appear.
+      var buffer1 = newBuffer(10, 1)
+      var buffer2 = newBuffer(10, 1)
+
+      buffer2.setCell(0, 0, "中", 2, style(Color.Red))
+
+      let output = buildDifferentialOutput(buffer1, buffer2)
+      check output.contains("中")
+      # Only the lead emits a reset; the shadow contributes nothing.
+      check output.count("[0m") == 1
+
   suite "Full Render Output":
     test "buildFullRenderOutput clears screen first":
       let buffer = newBuffer(3, 2)
@@ -414,6 +427,22 @@ suite "Terminal Common Module Tests":
       let output = buildFullRenderOutput(buffer)
       check output.contains("First")
       check output.contains("Third")
+
+    test "buildFullRenderOutput does not shift line after a wide character":
+      # Regression: a wide char's shadow cell must emit nothing, not a space.
+      var buffer = newBuffer(6, 1)
+      buffer.setString(0, 0, "あB")
+
+      let output = buildFullRenderOutput(buffer)
+      check output.contains("あB")
+      check not output.contains("あ B")
+
+    test "buildFullRenderOutput keeps multiple wide characters contiguous":
+      var buffer = newBuffer(8, 1)
+      buffer.setString(0, 0, "あいC")
+
+      let output = buildFullRenderOutput(buffer)
+      check output.contains("あいC")
 
   suite "Utility Functions":
     test "isTerminalInteractive detection":

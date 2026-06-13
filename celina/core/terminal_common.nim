@@ -384,6 +384,10 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
     var currentHyperlink = ""
 
     for change in changes:
+      # Shadow cell (right half of a wide char): the lead covers it — skip.
+      if change.cell.isShadow:
+        continue
+
       result.add(makeCursorPositionSeq(change.pos.x, change.pos.y))
 
       # Handle hyperlink state change
@@ -420,6 +424,13 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
       let newCell = newBuffer[x, y]
 
       if oldCell != newCell:
+        # Shadow cell (right half of a wide char): the lead already advanced
+        # the cursor across this column. Emit nothing, but keep lastCursorPos
+        # in step so the next cell still positions correctly.
+        if newCell.isShadow:
+          lastCursorPos = (x + 1, y)
+          continue
+
         # Only move cursor if we're not at the right position
         if lastCursorPos != (x, y):
           result.add(makeCursorPositionSeq(x, y))
@@ -488,29 +499,31 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
     for x in 0 ..< buffer.area.width:
       let cell = buffer[x, y]
 
-      # Handle gaps between non-empty cells
-      if cell.isEmpty and cell.style == defaultStyle() and cell.hyperlink.len == 0:
-        lineBuffer.add(" ") # Add space for empty cell
-      else:
-        # Update hyperlink if changed
-        if cell.hyperlink != lastHyperlink:
-          if lastHyperlink.len > 0:
-            lineBuffer.add(Osc8Reset)
-          if cell.hyperlink.len > 0:
-            lineBuffer.add(makeHyperlinkStartSeq(cell.hyperlink))
-          lastHyperlink = cell.hyperlink
+      # Shadow cell (right half of a wide character): emit nothing — the wide
+      # glyph already advanced the cursor two columns. A space here would shift
+      # the rest of the line right. (Blanks hold " ", so they skip this.)
+      if cell.isShadow:
+        continue
 
-        # Update style if changed
-        if cell.style != lastStyle:
-          if lastStyle != defaultStyle():
-            lineBuffer.add(resetSequence())
-          if cell.style != defaultStyle():
-            lineBuffer.add(cell.style.toAnsiSequence())
-          lastStyle = cell.style
+      # Update hyperlink if changed
+      if cell.hyperlink != lastHyperlink:
+        if lastHyperlink.len > 0:
+          lineBuffer.add(Osc8Reset)
+        if cell.hyperlink.len > 0:
+          lineBuffer.add(makeHyperlinkStartSeq(cell.hyperlink))
+        lastHyperlink = cell.hyperlink
 
-        # Add the character
-        lineBuffer.add(cell.symbol)
-        lastNonEmptyX = x
+      # Update style if changed
+      if cell.style != lastStyle:
+        if lastStyle != defaultStyle():
+          lineBuffer.add(resetSequence())
+        if cell.style != defaultStyle():
+          lineBuffer.add(cell.style.toAnsiSequence())
+        lastStyle = cell.style
+
+      # Add the character
+      lineBuffer.add(cell.symbol)
+      lastNonEmptyX = x
 
     # Add line to result
     if lastNonEmptyX >= 0:
