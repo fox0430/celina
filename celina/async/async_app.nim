@@ -6,7 +6,8 @@
 import std/[options, monotimes, times, strformat]
 
 import async_backend, async_terminal, async_events, async_renderer
-from async_io import AsyncInputReader, newAsyncInputReader, closeAsyncInputReader
+from async_io import
+  AsyncInputReader, newAsyncInputReader, closeAsyncInputReader, isLive
 import
   ../core/[
     geometry, buffer, events, fps, config, tick_common, cursor, terminal,
@@ -140,6 +141,13 @@ defineTimeoutHandlerSettersAsync(AsyncApp)
 defineTimeoutAccessors(AsyncApp)
 
 # AsyncApp Lifecycle Management
+
+proc isInputReaderLive*(app: AsyncApp): bool =
+  ## Whether the app currently holds a live input reader. Outside an active
+  ## run this is false (the reader is created in `setupAsync` and dropped in
+  ## `runAsyncInner` cleanup). Mainly useful for tests asserting that a second
+  ## `runAsync` re-creates a usable reader instead of reusing a closed one.
+  app.inputReader.isLive()
 
 proc setupAsync(app: AsyncApp) {.async.} =
   if app.inputReader.isNil:
@@ -418,6 +426,7 @@ proc runAsyncInner(app: AsyncApp) {.async.} =
     app.state.running = false
     await cleanupQuietly(app)
     app.inputReader.closeAsyncInputReader()
+    app.inputReader = nil
     when hasChronos and defined(posix):
       removeSignalHandlers(app)
 
