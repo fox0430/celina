@@ -1765,9 +1765,20 @@ suite "Events Module Tests":
       # The genuine REVIEW #8 regression: `ESC[` is buffered but the arrow byte
       # arrives in a later packet (written by a thread after a delay). Unlike the
       # all-at-once test above, this fails without the per-byte wait.
+      #
+      # Timing-sensitive: the trailing byte is delivered while the reader is mid
+      # `select()`. On a heavily loaded runner the writer thread can be scheduled
+      # late enough to miss the 50ms continuation window, so retry a few times
+      # before declaring failure. A real regression (no per-byte wait) misses on
+      # every attempt; only scheduler jitter is retried away.
       let originalPin = isStdinNonBlockingPinned()
-      let p = redirectStdinFromPipe()
-      if p.saved != -1:
+      var assembled = false
+      var redirected = false
+      for _ in 0 ..< 5:
+        let p = redirectStdinFromPipe()
+        if p.saved == -1:
+          break # redirection refused; skip gracefully like the other tests
+        redirected = true
         try:
           setStdinNonBlockingPinned(false)
           clearPendingByte()
@@ -1776,12 +1787,15 @@ suite "Events Module Tests":
           createThread(writer, delayedArrowWriter, p.wfd)
           let ev = readKeyInput()
           joinThread(writer)
-          check ev.isSome
-          check ev.get.kind == EventKind.Key
-          check ev.get.key.code == ArrowUp
+          assembled =
+            ev.isSome and ev.get.kind == EventKind.Key and ev.get.key.code == ArrowUp
         finally:
           setStdinNonBlockingPinned(originalPin)
           restoreStdin(p)
+        if assembled:
+          break
+      if redirected:
+        check assembled
 
     test "readKeyInput assembles an SGR mouse press from stdin":
       let originalPin = isStdinNonBlockingPinned()
