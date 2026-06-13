@@ -13,6 +13,7 @@ type
     Middle
     WheelUp
     WheelDown
+    NoButton ## No button (motion-only events such as Move)
 
   MouseEventKind* = enum
     Press
@@ -90,7 +91,9 @@ proc parseMouseDataX10*(data: array[3, char]): MouseEventData =
     of 2:
       button = Right
     else:
-      button = Left
+      # buttonInfo 3 means "no button": a Move, or an X10 release (which
+      # does not report which button was let go). Either way, no button.
+      button = NoButton
 
     if isDrag:
       # Motion with a button held is a Drag; with no button (3) it's a Move.
@@ -138,7 +141,8 @@ proc parseMouseDataSGR*(
     of 2:
       button = Right
     else:
-      button = Left
+      # buttonInfo 3 means "no button", reported for motion-only Move events.
+      button = NoButton
 
     if isRelease:
       kind = Release

@@ -64,6 +64,8 @@ suite "Mouse Logic - X10 Format Parsing":
     let result = parseMouseDataX10(data)
 
     check result.kind == Release
+    # X10 release does not report which button was let go, so it is NoButton.
+    check result.button == NoButton
 
   test "Move event (no button held, all-motion reporting)":
     # 0x23 = motion bit | no button: a hover/move, not a drag.
@@ -71,6 +73,7 @@ suite "Mouse Logic - X10 Format Parsing":
     let result = parseMouseDataX10(data)
 
     check result.kind == Move
+    check result.button == NoButton
 
 suite "Mouse Logic - Modifiers":
   test "Left click with Shift":
@@ -156,6 +159,7 @@ suite "Mouse Logic - SGR Format Parsing":
     let result = parseMouseDataSGR(35, 10, 20, false)
 
     check result.kind == Move
+    check result.button == NoButton
 
   test "SGR with Ctrl modifier":
     let result = parseMouseDataSGR(0x10, 10, 20, false)
