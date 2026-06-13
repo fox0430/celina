@@ -693,6 +693,7 @@ suite "Events Module Tests":
       check MouseButton.Middle.ord == 2
       check MouseButton.WheelUp.ord == 3
       check MouseButton.WheelDown.ord == 4
+      check MouseButton.NoButton.ord == 5
 
     test "MouseEventKind enum values":
       check MouseEventKind.Press.ord == 0
@@ -750,12 +751,13 @@ suite "Events Module Tests":
     test "MouseEvent creation - move event":
       let moveEvent = MouseEvent(
         kind: Move,
-        button: Left, # Note: button may not be relevant for Move events
+        button: NoButton, # Move events carry no button
         x: 75,
         y: 125,
         modifiers: {},
       )
       check moveEvent.kind == Move
+      check moveEvent.button == NoButton
       check moveEvent.x == 75
       check moveEvent.y == 125
 
@@ -959,7 +961,7 @@ suite "Events Module Tests":
     test "Large coordinates":
       let largeEvent = Event(
         kind: Mouse,
-        mouse: MouseEvent(kind: Move, button: Left, x: 9999, y: 9999, modifiers: {}),
+        mouse: MouseEvent(kind: Move, button: NoButton, x: 9999, y: 9999, modifiers: {}),
       )
       check largeEvent.mouse.x == 9999
       check largeEvent.mouse.y == 9999
