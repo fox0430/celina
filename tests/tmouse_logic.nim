@@ -65,6 +65,13 @@ suite "Mouse Logic - X10 Format Parsing":
 
     check result.kind == Release
 
+  test "Move event (no button held, all-motion reporting)":
+    # 0x23 = motion bit | no button: a hover/move, not a drag.
+    let data: array[3, char] = [char(0x23), char(40), char(50)]
+    let result = parseMouseDataX10(data)
+
+    check result.kind == Move
+
 suite "Mouse Logic - Modifiers":
   test "Left click with Shift":
     let data: array[3, char] = [char(0x04), char(40), char(50)]
@@ -143,6 +150,12 @@ suite "Mouse Logic - SGR Format Parsing":
 
     check result.button == Left
     check result.kind == Drag
+
+  test "Move with no button held (all-motion reporting)":
+    # 35 = motion bit | no button: a Move, not a Left Drag.
+    let result = parseMouseDataSGR(35, 10, 20, false)
+
+    check result.kind == Move
 
   test "SGR with Ctrl modifier":
     let result = parseMouseDataSGR(0x10, 10, 20, false)
