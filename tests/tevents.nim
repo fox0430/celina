@@ -1753,7 +1753,7 @@ suite "Events Module Tests":
           feedPipe(p, "\x1b[A")
           let ev = readKeyInput()
           check ev.isSome
-          check ev.get.kind == Key
+          check ev.get.kind == EventKind.Key
           check ev.get.key.code == ArrowUp
         finally:
           setStdinNonBlockingPinned(originalPin)
@@ -1775,7 +1775,7 @@ suite "Events Module Tests":
           let ev = readKeyInput()
           joinThread(writer)
           check ev.isSome
-          check ev.get.kind == Key
+          check ev.get.kind == EventKind.Key
           check ev.get.key.code == ArrowUp
         finally:
           setStdinNonBlockingPinned(originalPin)
