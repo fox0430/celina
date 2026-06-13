@@ -1072,6 +1072,74 @@ suite "WindowManager Event System Tests":
     check wm.currentModal().get() == m1Id
     check wm.focusedWindow.get() == m1Id # not `base.id`
 
+  test "Minimized modal does not capture out-of-bounds clicks":
+    # A minimized modal stays on `modalStack` (so it can be restored),
+    # but it must not divert events: out-of-bounds clicks would otherwise
+    # be consumed by modal routing and never reach lower windows.
+    let wm = newWindowManager()
+    let base = newWindow(rect(0, 0, 60, 40), "Base")
+    let modal = newWindow(rect(20, 20, 10, 10), "Modal", modal = true)
+
+    var baseClicked = false
+    base.setMouseHandler(
+      proc(w: Window, m: MouseEvent): bool =
+        baseClicked = true
+        true
+    )
+
+    discard wm.addWindow(base)
+    discard wm.addWindow(modal)
+
+    let outsideClick = Event(
+      kind: EventKind.Mouse, mouse: MouseEvent(x: 5, y: 5, kind: Press, button: Left)
+    )
+
+    # While the modal is visible, the out-of-bounds click is consumed and
+    # never reaches the base window.
+    check wm.handleEvent(outsideClick) == erConsume
+    check not baseClicked
+
+    # After minimizing, the modal stays on the stack but no longer captures
+    # the click, which now routes to the base window underneath.
+    modal.minimize()
+    check wm.modalStack.len == 1
+    check wm.handleEvent(outsideClick) == erConsume
+    check baseClicked
+
+  test "Hidden top modal falls through to next visible modal":
+    # When the top modal is hidden, routing must pick the next visible
+    # modal in the stack rather than dropping events.
+    let wm = newWindowManager()
+    let m1 = newWindow(rect(5, 5, 30, 30), "M1", modal = true)
+    let m2 = newWindow(rect(10, 10, 10, 10), "M2", modal = true)
+
+    var target = ""
+    m1.setKeyHandler(
+      proc(w: Window, k: KeyEvent): bool =
+        target = "m1"
+        true
+    )
+    m2.setKeyHandler(
+      proc(w: Window, k: KeyEvent): bool =
+        target = "m2"
+        true
+    )
+
+    discard wm.addWindow(m1)
+    discard wm.addWindow(m2)
+
+    let keyEvent = Event(kind: EventKind.Key, key: KeyEvent(code: KeyCode.Enter))
+
+    discard wm.handleEvent(keyEvent)
+    check target == "m2"
+
+    # Hiding the top modal hands events to the next visible modal (m1),
+    # not the hidden one.
+    m2.hide()
+    target = ""
+    discard wm.handleEvent(keyEvent)
+    check target == "m1"
+
   test "dispatchResize broadcasts to all visible windows":
     let wm = newWindowManager()
     let w1 = newWindow(rect(0, 0, 10, 10), "W1")
