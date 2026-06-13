@@ -2,12 +2,10 @@
 
 import std/[unittest]
 
-import ../celina/core/terminal
-import ../celina/core/terminal_common
-import ../celina/core/geometry
-import ../celina/core/colors
-import ../celina/core/buffer
-import ../celina/core/errors
+when defined(posix):
+  import std/posix
+
+import ../celina/core/[terminal, terminal_common, geometry, colors, buffer, errors]
 
 suite "Terminal Module Tests":
   suite "Terminal Creation":
@@ -745,3 +743,26 @@ suite "Terminal Module Tests":
 
       terminal.cleanup()
       check not terminal.alternateScreen
+
+  suite "Setup Rollback":
+    test "setup rolls back partial state when raw mode fails":
+      # Regression: enableAlternateScreen succeeds (write to a pipe) but
+      # enableRawMode raises ENOTTY on a non-TTY stdin. setup() must roll the
+      # alternate screen back instead of stranding the shell in it.
+      #
+      # Only meaningful on a non-TTY (the CI case): there setup() is
+      # guaranteed to fail at raw mode. On a real TTY setup() would actually
+      # switch screens and enter raw mode, so we skip it — mirroring why the
+      # Cleanup Behavior suite avoids enableRawMode entirely.
+      when defined(posix):
+        if isatty(STDIN_FILENO) == 0 and isatty(STDOUT_FILENO) == 0:
+          let terminal = newTerminal()
+          var raised = false
+          try:
+            terminal.setup()
+          except CatchableError:
+            raised = true
+
+          check raised
+          check not terminal.alternateScreen
+          check not terminal.rawMode

@@ -482,45 +482,6 @@ proc renderFull*(terminal: Terminal, buffer: Buffer) =
     raise newTerminalError("Full rendering error: " & e.msg)
 
 # Terminal setup and cleanup
-proc setup*(terminal: Terminal) =
-  ## Setup terminal for CLI mode
-  terminal.enableAlternateScreen()
-  terminal.enableRawMode()
-  clearScreen()
-  terminal.updateSize()
-
-proc setupWithHiddenCursor*(terminal: Terminal) =
-  ## Setup terminal for CLI mode with cursor hidden (backward compatibility)
-  terminal.setup()
-  hideCursor()
-
-proc setupWithMouse*(terminal: Terminal) =
-  ## Setup terminal for CLI mode with mouse support
-  ## Raises TerminalError if setup fails
-  try:
-    terminal.setup()
-    terminal.enableMouse()
-  except CatchableError as e:
-    raise newTerminalError("Failed to setup terminal with mouse: " & e.msg)
-
-proc setupWithPaste*(terminal: Terminal) =
-  ## Setup terminal for CLI mode with bracketed paste support
-  ## Raises TerminalError if setup fails
-  try:
-    terminal.setup()
-    terminal.enableBracketedPaste()
-  except CatchableError as e:
-    raise newTerminalError("Failed to setup terminal with paste: " & e.msg)
-
-proc setupWithMouseAndPaste*(terminal: Terminal) =
-  ## Setup terminal for CLI mode with mouse and bracketed paste support
-  ## Raises TerminalError if setup fails
-  try:
-    terminal.setup()
-    terminal.enableMouse()
-    terminal.enableBracketedPaste()
-  except CatchableError as e:
-    raise newTerminalError("Failed to setup terminal with mouse and paste: " & e.msg)
 
 proc cleanup*(terminal: Terminal) =
   ## Cleanup terminal, restoring original settings.
@@ -552,6 +513,62 @@ proc cleanup*(terminal: Terminal) =
     terminal.disableRawMode()
   guard:
     terminal.disableAlternateScreen()
+
+proc setup*(terminal: Terminal) =
+  ## Setup terminal for CLI mode.
+  ##
+  ## Best-effort atomicity: if a step fails after an earlier one already took
+  ## effect (e.g. `enableRawMode` raises ENOTTY on a non-TTY once the
+  ## alternate screen has been entered), the applied steps are rolled back via
+  ## `cleanup` before the error propagates. This keeps the shell from being
+  ## stranded in the alternate screen or raw mode after a failed setup.
+  try:
+    terminal.enableAlternateScreen()
+    terminal.enableRawMode()
+    clearScreen()
+    terminal.updateSize()
+  except CatchableError:
+    terminal.cleanup()
+    raise
+
+proc setupWithHiddenCursor*(terminal: Terminal) =
+  ## Setup terminal for CLI mode with cursor hidden (backward compatibility)
+  terminal.setup()
+  hideCursor()
+
+proc setupWithMouse*(terminal: Terminal) =
+  ## Setup terminal for CLI mode with mouse support
+  ## Raises TerminalError if setup fails. Any partially-applied terminal
+  ## state is rolled back via `cleanup` before the error propagates.
+  try:
+    terminal.setup()
+    terminal.enableMouse()
+  except CatchableError as e:
+    terminal.cleanup()
+    raise newTerminalError("Failed to setup terminal with mouse: " & e.msg)
+
+proc setupWithPaste*(terminal: Terminal) =
+  ## Setup terminal for CLI mode with bracketed paste support
+  ## Raises TerminalError if setup fails. Any partially-applied terminal
+  ## state is rolled back via `cleanup` before the error propagates.
+  try:
+    terminal.setup()
+    terminal.enableBracketedPaste()
+  except CatchableError as e:
+    terminal.cleanup()
+    raise newTerminalError("Failed to setup terminal with paste: " & e.msg)
+
+proc setupWithMouseAndPaste*(terminal: Terminal) =
+  ## Setup terminal for CLI mode with mouse and bracketed paste support
+  ## Raises TerminalError if setup fails. Any partially-applied terminal
+  ## state is rolled back via `cleanup` before the error propagates.
+  try:
+    terminal.setup()
+    terminal.enableMouse()
+    terminal.enableBracketedPaste()
+  except CatchableError as e:
+    terminal.cleanup()
+    raise newTerminalError("Failed to setup terminal with mouse and paste: " & e.msg)
 
 proc isSuspended*(terminal: Terminal): bool =
   ## Check if terminal is currently suspended
