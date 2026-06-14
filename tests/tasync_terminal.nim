@@ -325,6 +325,55 @@ suite "AsyncTerminal Integration Tests":
     check terminal.lastBuffer[0, 1].symbol == "."
     check terminal.lastBuffer[1, 1].symbol == "#"
 
+suite "Async Adopt Rendering":
+  test "drawWithCursorAdoptAsync swaps AsyncBuffer when areas match":
+    let terminal = createTestTerminal()
+    terminal.lastBuffer = newBuffer(10, 5)
+    terminal.lastBuffer[0, 0] = cell("OLD")
+
+    let asyncBuffer = newAsyncBuffer(10, 5)
+    asyncBuffer.withBuffer:
+      buffer[0, 0] = cell("NEW")
+
+    discard waitFor terminal.drawWithCursorAdoptAsync(
+      asyncBuffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default, force = true
+    )
+
+    check terminal.lastBuffer[0, 0].symbol == "NEW"
+    asyncBuffer.withBuffer:
+      check buffer[0, 0].symbol == "OLD"
+
+  test "drawWithCursorAdoptAsync copies AsyncBuffer when areas differ":
+    let terminal = createTestTerminal()
+    terminal.lastBuffer = newBuffer(5, 5)
+    terminal.lastBuffer[0, 0] = cell("OLD")
+
+    let asyncBuffer = newAsyncBuffer(10, 5)
+    asyncBuffer.withBuffer:
+      buffer[0, 0] = cell("NEW")
+
+    discard waitFor terminal.drawWithCursorAdoptAsync(
+      asyncBuffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default, force = true
+    )
+
+    check terminal.lastBuffer[0, 0].symbol == "NEW"
+    asyncBuffer.withBuffer:
+      check buffer[0, 0].symbol == "NEW"
+      check buffer.area == terminal.lastBuffer.area
+
+  test "drawWithCursorAdoptAsync recycles AsyncBuffer across frames":
+    let terminal = createTestTerminal()
+    let asyncBuffer = newAsyncBuffer(10, 5)
+
+    for i in 0 ..< 3:
+      asyncBuffer.withBuffer:
+        buffer.clear()
+        buffer[0, 0] = cell($i)
+      discard waitFor terminal.drawWithCursorAdoptAsync(
+        asyncBuffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default, force = true
+      )
+      check terminal.lastBuffer[0, 0].symbol == $i
+
 suite "AsyncTerminal Performance Considerations":
   test "Large buffer handling":
     let terminal = createTestTerminal()

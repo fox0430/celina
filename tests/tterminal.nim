@@ -508,6 +508,78 @@ suite "Terminal Module Tests":
       # Style unchanged
       check newStyle2 == CursorStyle.SteadyBlock
 
+  suite "Adopt Rendering":
+    test "drawAdopt swaps buffers when areas match":
+      let terminal = newTerminal()
+      terminal.lastBuffer = newBuffer(10, 5)
+      terminal.lastBuffer[0, 0] = cell("OLD")
+
+      var buffer = newBuffer(10, 5)
+      buffer[0, 0] = cell("NEW")
+
+      terminal.drawAdopt(buffer, force = true)
+
+      # lastBuffer adopts the freshly rendered grid
+      check terminal.lastBuffer[0, 0].symbol == "NEW"
+      # caller's buffer is recycled with the previous frame's storage
+      check buffer[0, 0].symbol == "OLD"
+
+    test "drawAdopt copies buffer when areas differ":
+      let terminal = newTerminal()
+      terminal.lastBuffer = newBuffer(5, 5)
+      terminal.lastBuffer[0, 0] = cell("OLD")
+
+      var buffer = newBuffer(10, 5)
+      buffer[0, 0] = cell("NEW")
+
+      terminal.drawAdopt(buffer, force = true)
+
+      check terminal.lastBuffer[0, 0].symbol == "NEW"
+      # area mismatch => copy fallback; caller keeps its own buffer
+      check buffer[0, 0].symbol == "NEW"
+      check terminal.lastBuffer.area == buffer.area
+
+    test "drawWithCursorAdopt swaps buffers when areas match":
+      let terminal = newTerminal()
+      terminal.lastBuffer = newBuffer(10, 5)
+      terminal.lastBuffer[0, 0] = cell("OLD")
+
+      var buffer = newBuffer(10, 5)
+      buffer[0, 0] = cell("NEW")
+
+      discard terminal.drawWithCursorAdopt(
+        buffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default, force = true
+      )
+
+      check terminal.lastBuffer[0, 0].symbol == "NEW"
+      check buffer[0, 0].symbol == "OLD"
+
+    test "drawWithCursorAdopt copies buffer when areas differ":
+      let terminal = newTerminal()
+      terminal.lastBuffer = newBuffer(5, 5)
+      terminal.lastBuffer[0, 0] = cell("OLD")
+
+      var buffer = newBuffer(10, 5)
+      buffer[0, 0] = cell("NEW")
+
+      discard terminal.drawWithCursorAdopt(
+        buffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default, force = true
+      )
+
+      check terminal.lastBuffer[0, 0].symbol == "NEW"
+      check buffer[0, 0].symbol == "NEW"
+      check terminal.lastBuffer.area == buffer.area
+
+    test "drawAdopt recycles buffer across multiple frames":
+      let terminal = newTerminal()
+      var buffer = newBuffer(10, 5)
+
+      for i in 0 ..< 3:
+        buffer.clear()
+        buffer[0, 0] = cell($i)
+        terminal.drawAdopt(buffer, force = true)
+        check terminal.lastBuffer[0, 0].symbol == $i
+
   suite "Integration Tests":
     test "Terminal with styled content":
       let terminal = newTerminal()
