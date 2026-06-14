@@ -627,6 +627,79 @@ proc resume*(terminal: Terminal) =
   clearLastBufferForResume(terminal)
 
 # High-level rendering interface
+proc tryWriteFrame(terminal: Terminal, buffer: Buffer, force: bool): bool =
+  ## Build the differential/full output for `buffer` and write it.
+  ##
+  ## Returns true when `lastBuffer` may be updated (the write succeeded, or there
+  ## was nothing to write); false when the write failed and the frame should be
+  ## retried next time. I/O errors are swallowed so a transient terminal hiccup
+  ## never crashes the render loop. `buffer` is read-only here (passed by hidden
+  ## reference, no copy), so this stays zero-copy for the adopt path.
+  try:
+    let rawOutput =
+      if force or terminal.lastBuffer.area.isEmpty:
+        buildFullRenderOutput(buffer)
+      else:
+        buildDifferentialOutput(terminal.lastBuffer, buffer)
+
+    if rawOutput.len == 0:
+      return true # No changes - safe to update lastBuffer
+
+    # Wrap with synchronized output to prevent flickering
+    # Skip wrapping if sync output is already enabled to avoid double-wrapping
+    let output =
+      if terminal.syncOutputEnabled:
+        rawOutput
+      else:
+        wrapWithSyncOutput(rawOutput)
+    # Use writeWithRetry for robust I/O handling
+    result = writeWithRetry(output)
+  except CatchableError as e:
+    # Silently ignore errors for rendering - next frame will retry
+    # This prevents crashes from transient terminal I/O issues
+    when defined(celinaDebug):
+      stderr.writeLine("Warning: draw() failed: " & e.msg)
+    else:
+      discard e # Avoid "declared but not used" warning
+    result = false
+
+proc tryWriteFrameWithCursor(
+    terminal: Terminal,
+    buffer: Buffer,
+    cursorX, cursorY: int,
+    cursorVisible: bool,
+    cursorStyle: CursorStyle,
+    lastCursorStyle: CursorStyle,
+    force: bool,
+): tuple[ok: bool, style: CursorStyle] =
+  ## Build + write a cursor-positioned frame. Returns whether `lastBuffer` may
+  ## be updated and the new cursor style. Same robustness/zero-copy contract as
+  ## `tryWriteFrame`.
+  result = (false, lastCursorStyle)
+  try:
+    let (rawOutput, newLastCursorStyle) = buildOutputWithCursor(
+      terminal.lastBuffer, buffer, cursorX, cursorY, cursorVisible, cursorStyle,
+      lastCursorStyle, force,
+    )
+    result.style = newLastCursorStyle
+
+    if rawOutput.len == 0:
+      result.ok = true # No changes - safe to update lastBuffer
+      return
+
+    let output =
+      if terminal.syncOutputEnabled:
+        rawOutput
+      else:
+        wrapWithSyncOutput(rawOutput)
+    result.ok = writeWithRetry(output)
+  except CatchableError as e:
+    when defined(celinaDebug):
+      stderr.writeLine("Warning: drawWithCursor() failed: " & e.msg)
+    else:
+      discard e # Avoid "declared but not used" warning
+    result.ok = false
+
 proc draw*(terminal: Terminal, buffer: Buffer, force: bool = false) =
   ## Draw a buffer to the terminal (high-level API)
   ##
@@ -638,44 +711,34 @@ proc draw*(terminal: Terminal, buffer: Buffer, force: bool = false) =
   ## Output is automatically wrapped with synchronized output sequences (DEC mode 2026)
   ## to prevent flickering on supported terminals.
   ##
+  ## The buffer's contents are preserved across the call (copy semantics), so it
+  ## is safe to keep and incrementally update the same buffer between frames.
+  ## Renderer-owned hot paths that fully re-fill the buffer each frame can use
+  ## the zero-copy `drawAdopt` instead.
+  ##
   ## Parameters:
   ## - buffer: The buffer to render to the terminal
   ## - force: If true, forces a full redraw regardless of changes
   ##
   ## Note: For rendering with cursor positioning, use `drawWithCursor()` instead.
   ## For low-level rendering with explicit error handling, use `render()` or `renderFull()`.
-  try:
-    let rawOutput =
-      if force or terminal.lastBuffer.area.isEmpty:
-        buildFullRenderOutput(buffer)
-      else:
-        buildDifferentialOutput(terminal.lastBuffer, buffer)
+  if terminal.tryWriteFrame(buffer, force):
+    terminal.lastBuffer = buffer
+    terminal.lastBuffer.clearDirty() # Clear dirty flag after successful render
+  # else: keep lastBuffer unchanged so next frame can retry the diff
 
-    if rawOutput.len > 0:
-      # Wrap with synchronized output to prevent flickering
-      # Skip wrapping if sync output is already enabled to avoid double-wrapping
-      let output =
-        if terminal.syncOutputEnabled:
-          rawOutput
-        else:
-          wrapWithSyncOutput(rawOutput)
-      # Use writeWithRetry for robust I/O handling
-      # Only update lastBuffer if write was successful
-      if writeWithRetry(output):
-        terminal.lastBuffer = buffer
-        terminal.lastBuffer.clearDirty() # Clear dirty flag after successful render
-      # else: keep lastBuffer unchanged so next frame can retry the diff
-    else:
-      # No output means no changes - safe to update lastBuffer
-      terminal.lastBuffer = buffer
-      terminal.lastBuffer.clearDirty() # Clear dirty flag after successful render
-  except CatchableError as e:
-    # Silently ignore errors for rendering - next frame will retry
-    # This prevents crashes from transient terminal I/O issues
-    when defined(celinaDebug):
-      stderr.writeLine("Warning: draw() failed: " & e.msg)
-    else:
-      discard e # Avoid "declared but not used" warning
+proc drawAdopt*(terminal: Terminal, buffer: var Buffer, force: bool = false) =
+  ## Zero-copy variant of `draw` for renderer-owned buffers.
+  ##
+  ## Instead of copying, the rendered content is swapped into `lastBuffer` and
+  ## the previous frame's storage is handed back in `buffer` (recycled). The
+  ## caller MUST fully re-fill `buffer` before the next frame or it will render
+  ## stale content; `Renderer.render` guarantees this via `renderer.clear()`.
+  ## Prefer the copy-preserving `draw` unless you own the buffer and clear it
+  ## every frame.
+  if terminal.tryWriteFrame(buffer, force):
+    terminal.adoptLastBufferImpl(buffer)
+  # else: keep lastBuffer unchanged so next frame can retry the diff
 
 proc drawWithCursor*(
     terminal: Terminal,
@@ -694,41 +757,41 @@ proc drawWithCursor*(
   ##
   ## Returns the updated lastCursorStyle value. Caller is responsible for tracking this state.
   ##
+  ## The buffer's contents are preserved across the call (copy semantics). For a
+  ## zero-copy renderer-owned hot path, use `drawWithCursorAdopt` instead.
+  ##
   ## Note: This procedure silently ignores I/O errors to prevent crashes from transient
   ## terminal issues. Failed renders will be retried in the next frame.
-  result = lastCursorStyle
-  try:
-    let (rawOutput, newLastCursorStyle) = buildOutputWithCursor(
-      terminal.lastBuffer, buffer, cursorX, cursorY, cursorVisible, cursorStyle,
-      lastCursorStyle, force,
-    )
-    result = newLastCursorStyle
+  let (ok, style) = terminal.tryWriteFrameWithCursor(
+    buffer, cursorX, cursorY, cursorVisible, cursorStyle, lastCursorStyle, force
+  )
+  result = style
+  if ok:
+    terminal.lastBuffer = buffer
+    terminal.lastBuffer.clearDirty() # Clear dirty flag after successful render
+  # else: keep lastBuffer unchanged so next frame can retry the diff
 
-    if rawOutput.len > 0:
-      # Wrap with synchronized output to prevent flickering
-      # Skip wrapping if sync output is already enabled to avoid double-wrapping
-      let output =
-        if terminal.syncOutputEnabled:
-          rawOutput
-        else:
-          wrapWithSyncOutput(rawOutput)
-      # Use writeWithRetry for robust I/O handling
-      # Only update lastBuffer if write was successful
-      if writeWithRetry(output):
-        terminal.lastBuffer = buffer
-        terminal.lastBuffer.clearDirty() # Clear dirty flag after successful render
-      # else: keep lastBuffer unchanged so next frame can retry the diff
-    else:
-      # No output means no changes - safe to update lastBuffer
-      terminal.lastBuffer = buffer
-      terminal.lastBuffer.clearDirty() # Clear dirty flag after successful render
-  except CatchableError as e:
-    # Silently ignore errors for rendering - next frame will retry
-    # This prevents crashes from transient terminal I/O issues
-    when defined(celinaDebug):
-      stderr.writeLine("Warning: drawWithCursor() failed: " & e.msg)
-    else:
-      discard e # Avoid "declared but not used" warning
+proc drawWithCursorAdopt*(
+    terminal: Terminal,
+    buffer: var Buffer,
+    cursorX, cursorY: int,
+    cursorVisible: bool,
+    cursorStyle: CursorStyle = CursorStyle.Default,
+    lastCursorStyle: CursorStyle,
+    force: bool = false,
+): CursorStyle =
+  ## Zero-copy variant of `drawWithCursor` for renderer-owned buffers.
+  ##
+  ## As with `drawAdopt`, the rendered content is swapped into `lastBuffer` and
+  ## the previous frame's storage is recycled back into `buffer`, so the caller
+  ## MUST fully re-fill `buffer` each frame. Used by `Renderer.render`.
+  let (ok, style) = terminal.tryWriteFrameWithCursor(
+    buffer, cursorX, cursorY, cursorVisible, cursorStyle, lastCursorStyle, force
+  )
+  result = style
+  if ok:
+    terminal.adoptLastBufferImpl(buffer)
+  # else: keep lastBuffer unchanged so next frame can retry the diff
 
 # Utility procedures
 proc withTerminal*[T](terminal: Terminal, body: proc(): T): T =

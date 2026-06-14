@@ -513,9 +513,56 @@ proc drawAsync*(
 proc drawAsync*(
     terminal: AsyncTerminal, asyncBuffer: async_buffer.AsyncBuffer, force: bool = false
 ) {.async.} =
-  ## Draw an AsyncBuffer to the terminal asynchronously
-  let buffer = asyncBuffer.toBufferAsync()
-  await terminal.drawAsync(buffer, force)
+  ## Draw an AsyncBuffer to the terminal asynchronously.
+  ## Passes the live grid by reference (no per-frame snapshot copy); the
+  ## underlying `drawAsync(Buffer)` keeps copy semantics for `lastBuffer`.
+  asyncBuffer.withBuffer:
+    await terminal.drawAsync(buffer, force)
+
+proc writeFrameWithCursor(
+    terminal: AsyncTerminal,
+    buffer: Buffer,
+    cursorX, cursorY: int,
+    cursorVisible: bool,
+    cursorStyle: CursorStyle,
+    lastCursorStyle: CursorStyle,
+    force: bool,
+): tuple[ok: bool, style: CursorStyle] =
+  ## Build + write a cursor-positioned frame to stdout. Returns whether
+  ## `lastBuffer` may be updated and the new cursor style.
+  ##
+  ## I/O errors are swallowed so a transient terminal hiccup never crashes the
+  ## async render loop (mirrors the sync `Terminal.drawWithCursor`); on failure
+  ## `ok` is false and the caller leaves `lastBuffer` unchanged to retry next
+  ## frame. `buffer` is read-only (hidden reference, no copy).
+  result = (false, lastCursorStyle)
+  try:
+    let (rawOutput, newLastCursorStyle) = buildOutputWithCursor(
+      terminal.lastBuffer, buffer, cursorX, cursorY, cursorVisible, cursorStyle,
+      lastCursorStyle, force,
+    )
+    result.style = newLastCursorStyle
+
+    if rawOutput.len == 0:
+      result.ok = true # No changes - safe to update lastBuffer
+      return
+
+    # Wrap with synchronized output to prevent flickering
+    # Skip wrapping if sync output is already enabled to avoid double-wrapping
+    let output =
+      if terminal.syncOutputEnabled:
+        rawOutput
+      else:
+        wrapWithSyncOutput(rawOutput)
+    stdout.write(output)
+    stdout.flushFile()
+    result.ok = true
+  except CatchableError as e:
+    when defined(celinaDebug):
+      stderr.writeLine("Warning: drawWithCursorAsync() failed: " & e.msg)
+    else:
+      discard e # Avoid "declared but not used" warning
+    result.ok = false
 
 proc drawWithCursorAsync*(
     terminal: AsyncTerminal,
@@ -526,35 +573,53 @@ proc drawWithCursorAsync*(
     lastCursorStyle: CursorStyle,
     force: bool = false,
 ): Future[CursorStyle] {.async.} =
-  ## Draw buffer with cursor positioning in single write operation
+  ## Draw a buffer with cursor positioning in a single write operation.
   ## This prevents cursor flickering by including cursor commands in the same output
   ##
   ## Output is automatically wrapped with synchronized output sequences (DEC mode 2026)
   ## to prevent flickering on supported terminals.
   ##
+  ## The buffer's contents are preserved across the call (copy semantics). For a
+  ## zero-copy renderer-owned hot path, use `drawWithCursorAdoptAsync`.
+  ##
   ## Returns the updated lastCursorStyle value. Caller is responsible for tracking this state
   ## (e.g., via CursorManager.updateLastStyle()).
-  let (rawOutput, newLastCursorStyle) = buildOutputWithCursor(
-    terminal.lastBuffer, buffer, cursorX, cursorY, cursorVisible, cursorStyle,
-    lastCursorStyle, force,
+  let (ok, style) = terminal.writeFrameWithCursor(
+    buffer, cursorX, cursorY, cursorVisible, cursorStyle, lastCursorStyle, force
   )
+  if ok:
+    terminal.lastBuffer = buffer
+    terminal.lastBuffer.clearDirty()
+  return style
 
-  if rawOutput.len > 0:
-    # Wrap with synchronized output to prevent flickering
-    # Skip wrapping if sync output is already enabled to avoid double-wrapping
-    let output =
-      if terminal.syncOutputEnabled:
-        rawOutput
-      else:
-        wrapWithSyncOutput(rawOutput)
-    stdout.write(output)
-    stdout.flushFile()
-
-  # Update last buffer and clear dirty region for next frame
-  terminal.lastBuffer = buffer
-  terminal.lastBuffer.clearDirty()
-
-  return newLastCursorStyle
+proc drawWithCursorAdoptAsync*(
+    terminal: AsyncTerminal,
+    asyncBuffer: async_buffer.AsyncBuffer,
+    cursorX, cursorY: int,
+    cursorVisible: bool,
+    cursorStyle: CursorStyle = CursorStyle.Default,
+    lastCursorStyle: CursorStyle,
+    force: bool = false,
+): Future[CursorStyle] {.async.} =
+  ## Zero-copy variant of `drawWithCursorAsync` for renderer-owned AsyncBuffers.
+  ##
+  ## The freshly rendered grid is swapped into the terminal's `lastBuffer` and
+  ## the previous frame's storage is recycled back into `asyncBuffer` (no
+  ## per-frame snapshot copy). The caller must therefore fully re-fill
+  ## `asyncBuffer` each frame — `AsyncApp.renderAsync` does this via
+  ## `renderer.clear()`. The buffer is passed as a `ref` (an `AsyncBuffer`)
+  ## rather than `var Buffer` because `{.async.}` procs cannot capture `var`
+  ## parameters.
+  asyncBuffer.withBuffer:
+    # `buffer` aliases `asyncBuffer.buffer` (the live grid); read-only here, so
+    # no copy is made before the zero-copy adopt below.
+    let (ok, style) = terminal.writeFrameWithCursor(
+      buffer, cursorX, cursorY, cursorVisible, cursorStyle, lastCursorStyle, force
+    )
+    if ok:
+      terminal.adoptLastBufferImpl(buffer)
+    # else: keep lastBuffer unchanged so next frame can retry the diff
+    result = style
 
 # Terminal state queries
 # Note: getSize and getArea need explicit proc definitions to avoid conflicts

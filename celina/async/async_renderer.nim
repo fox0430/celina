@@ -61,11 +61,13 @@ proc renderAsync*(renderer: AsyncRenderer, force: bool = false) {.async.} =
   ## Render the buffer to terminal with cursor support
   let cursorState = renderer.cursorManager.getState()
 
-  # Get buffer snapshot for rendering (thread-safe)
-  let bufferSnapshot = renderer.asyncBuffer.toBufferAsync()
-
-  let newLastStyle = await renderer.terminal.drawWithCursorAsync(
-    bufferSnapshot,
+  # Zero-copy: hand the live AsyncBuffer straight to the terminal. It swaps the
+  # rendered content into `lastBuffer` and recycles the previous frame's storage
+  # back into our AsyncBuffer, so there is no per-frame snapshot copy. Safe
+  # because the renderer owns the buffer and re-fills it every frame (renderAsync
+  # below / AsyncApp.renderAsync call renderer.clear() first).
+  let newLastStyle = await renderer.terminal.drawWithCursorAdoptAsync(
+    renderer.asyncBuffer,
     cursorState.x,
     cursorState.y,
     cursorState.visible,
@@ -74,7 +76,9 @@ proc renderAsync*(renderer: AsyncRenderer, force: bool = false) {.async.} =
     force = force,
   )
 
-  # Clear dirty region after successful render
+  # Reset dirty tracking for the next frame. No-op when the buffer was swapped
+  # out and recycled (it already arrives clean); needed on the copy fallback
+  # path (first frame / after a resize) where the live buffer keeps its dirt.
   renderer.asyncBuffer.withBufferAsync:
     buffer.clearDirty()
 

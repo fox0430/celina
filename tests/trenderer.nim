@@ -233,6 +233,26 @@ suite "Renderer Module Tests":
       except TerminalError:
         skip()
 
+    test "Render cycles adopt and recycle buffer":
+      try:
+        let term = newTerminal()
+        let rend = newRenderer(term)
+
+        for i in 0 ..< 3:
+          rend.clear()
+          rend.setString(0, 0, $i, defaultStyle())
+          rend.render()
+
+          # The terminal's lastBuffer must reflect the freshly rendered frame.
+          # The renderer's own buffer is recycled (swapped), so we inspect the
+          # terminal state rather than the renderer buffer here.
+          check term.lastBuffer[0, 0].symbol == $i
+
+        # Final terminal lastBuffer should reflect the last rendered frame
+        check term.lastBuffer[0, 0].symbol == "2"
+      except TerminalError:
+        skip()
+
     test "Resize and render":
       try:
         let term = newTerminal()

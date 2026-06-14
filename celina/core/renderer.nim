@@ -46,7 +46,10 @@ proc render*(renderer: Renderer, force: bool = false) =
   ## Render the buffer to terminal with cursor support
   let cursorState = renderer.cursorManager.getState()
 
-  let newLastStyle = renderer.terminal.drawWithCursor(
+  # Zero-copy: the renderer owns `buffer` and re-fills it every frame (App.render
+  # calls renderer.clear() first), so we use the adopt variant which swaps the
+  # rendered content into the terminal's lastBuffer instead of deep-copying.
+  let newLastStyle = renderer.terminal.drawWithCursorAdopt(
     renderer.buffer,
     cursorState.x,
     cursorState.y,
