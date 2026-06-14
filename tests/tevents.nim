@@ -1,6 +1,7 @@
 # Test suite for events module
 
 import std/[unittest, posix, strutils, options]
+from std/times import epochTime
 
 import ../celina/core/events {.all.}
 import ../celina/core/mouse_logic
@@ -1813,5 +1814,84 @@ suite "Events Module Tests":
           check ev.get.mouse.x == 10
           check ev.get.mouse.y == 5
         finally:
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+  suite "Stashed pendingByte visible to pollers":
+    ## Regression: a UTF-8 resync byte stashed in `pendingByte` is a real
+    ## keystroke the next readKey will emit. hasInput/pollEvents only watch the
+    ## fd via select(), so without consulting pendingByte the stashed byte sat
+    ## invisible until fresh fd input arrived.
+
+    test "hasInput reports a stashed pendingByte over an empty stdin":
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          check not hasInput() # empty pipe: nothing on the fd
+          pendingByte = some('Z'.byte)
+          check hasInput()
+        finally:
+          clearPendingByte()
+          restoreStdin(p)
+
+    test "pollEvents returns immediately for a stashed pendingByte":
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          pendingByte = some('Z'.byte)
+          # A large timeout against an empty fd: without the pendingByte
+          # short-circuit this would block the full second, so assert it
+          # returns true *and* well under that timeout rather than just true.
+          let started = epochTime()
+          check pollEvents(1000)
+          check epochTime() - started < 0.5
+        finally:
+          clearPendingByte()
+          restoreStdin(p)
+
+    test "pollEvents still honors its timeout with no pending byte":
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          check not pollEvents(5)
+        finally:
+          clearPendingByte()
+          restoreStdin(p)
+
+    test "readKeyInput keeps O_NONBLOCK so a stashed UTF-8 lead byte can't block":
+      ## Regression: a stashed pendingByte can be a multibyte UTF-8 lead byte
+      ## (the 0xC3 leftover of a malformed 0xC3 0xC3 pair). readKeyInput reads the
+      ## continuation byte for it via readUtf8CharNonBlocking's raw read(2), which
+      ## is NOT select()-gated, so stdin must be O_NONBLOCK or that read blocks
+      ## forever on a blocking fd. The unpinned auto-toggle must therefore still
+      ## fire when a byte is pending; if it is skipped the second readKeyInput
+      ## below hangs instead of degrading the lead byte to U+FFFD.
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          setStdinNonBlockingPinned(false) # force the auto-toggle path
+          # The second 0xC3 is not a valid continuation byte, so the first read
+          # emits U+FFFD and stashes it as the next event's (lead) first byte.
+          var payload = [0xC3.byte, 0xC3.byte]
+          check write(p.wfd, addr payload[0], 2) == 2
+          let first = readKeyInput()
+          check first.isSome
+          check first.get.kind == EventKind.Key
+          check first.get.key.code == Char
+          check pendingByte.isSome
+          # Pipe is now empty and blocking; without the toggle this read would
+          # block on the stashed lead byte's continuation read.
+          let second = readKeyInput()
+          check second.isSome
+          check second.get.kind == EventKind.Key
+          check second.get.key.code == Char
+          check pendingByte.isNone
+        finally:
+          clearPendingByte()
           setStdinNonBlockingPinned(originalPin)
           restoreStdin(p)

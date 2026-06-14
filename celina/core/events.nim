@@ -626,6 +626,14 @@ proc readKeyInput*(): Option[Event] =
   let pinned = stdinNonBlockingPinned
   var flags: FdFlags
   var needRestore = false
+  # Ensure stdin is O_NONBLOCK before any raw fd read below. This path issues
+  # unguarded reads that assume non-blocking mode: the first readByteNonBlocking,
+  # and — for a multibyte lead byte — readUtf8CharNonBlocking's continuation
+  # read(2) (only the ESC/mouse/paste sub-parsers go through the select()-gated
+  # readByteWithTimeoutNonBlocking). A stashed pendingByte can itself be a UTF-8
+  # lead byte (e.g. the 0xC3 leftover of a 0xC3 0xC3 pair), so the toggle is
+  # still required when one is pending; skipping it would let that continuation
+  # read block indefinitely on a blocking fd.
   if not pinned:
     let fdFlags = getFdFlags(STDIN_FILENO)
     if fdFlags.isNone:
@@ -727,6 +735,12 @@ proc pollKey*(): Event =
 # Check if input is available
 proc hasInput*(): bool =
   ## Check if input is available without blocking
+  # A stashed UTF-8 resync byte is a real keystroke that the next readKey will
+  # emit; select() can't see it because it never reached the fd. Report it as
+  # available so the byte isn't stranded until fresh fd input arrives.
+  if pendingByte.isSome:
+    return true
+
   # Use select to check if input is available
   var readSet: TFdSet
   FD_ZERO(readSet)
@@ -754,6 +768,12 @@ proc pollEvents*(timeoutMs: int): bool =
   ## Poll for available events with a timeout
   ## Returns true if events are available, false if timeout occurred
   ## Similar to crossterm::event::poll()
+  # A stashed UTF-8 resync byte already constitutes an available event; return
+  # immediately rather than sleeping out the timeout while it sits invisible to
+  # select().
+  if pendingByte.isSome:
+    return true
+
   var readSet: TFdSet
   FD_ZERO(readSet)
   FD_SET(STDIN_FILENO, readSet)
