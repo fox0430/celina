@@ -1881,14 +1881,14 @@ suite "Events Module Tests":
           check write(p.wfd, addr payload[0], 2) == 2
           let first = readKeyInput()
           check first.isSome
-          check first.get.kind == Key
+          check first.get.kind == EventKind.Key
           check first.get.key.code == Char
           check pendingByte.isSome
           # Pipe is now empty and blocking; without the toggle this read would
           # block on the stashed lead byte's continuation read.
           let second = readKeyInput()
           check second.isSome
-          check second.get.kind == Key
+          check second.get.kind == EventKind.Key
           check second.get.key.code == Char
           check pendingByte.isNone
         finally:
