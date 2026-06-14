@@ -91,6 +91,32 @@ suite "Cursor Module Tests":
       check manager.styleChanged() == true
       check manager.getStyle() == CursorStyle.SteadyBar
 
+    test "Repeated setStyle before render keeps the change pending":
+      # Regression: setStyle must not touch lastStyle. lastStyle tracks the style
+      # actually applied to the terminal and is only synced after a render.
+      # Calling setStyle twice with the same value before a render previously
+      # corrupted lastStyle, making styleChanged() false and dropping DECSCUSR.
+      let manager = newCursorManager()
+      manager.setStyle(CursorStyle.SteadyBar)
+      manager.setStyle(CursorStyle.SteadyBar)
+      check manager.getStyle() == CursorStyle.SteadyBar
+      check manager.styleChanged() == true # still pending until applied
+
+      # After a render applies the style, no further change is reported.
+      manager.updateLastStyle()
+      check manager.styleChanged() == false
+
+    test "Round-trip within a frame reports no spurious change":
+      # Going A -> B -> A before a render should leave nothing to apply, since
+      # the terminal already shows A.
+      let manager = newCursorManager()
+      manager.setStyle(CursorStyle.SteadyBlock)
+      manager.updateLastStyle() # terminal now shows SteadyBlock
+
+      manager.setStyle(CursorStyle.SteadyBar)
+      manager.setStyle(CursorStyle.SteadyBlock)
+      check manager.styleChanged() == false
+
   suite "State Management":
     test "Get full cursor state":
       let manager = newCursorManager()
