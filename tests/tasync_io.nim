@@ -43,6 +43,16 @@ suite "AsyncIO Buffer Operations":
     check(stats.size == 0)
     check(stats.available == false)
 
+  test "bufferStats reports a stashed pending byte as available":
+    let reader = newAsyncInputReader()
+    # A stashed resync byte never reaches the fd, so `available` must consult
+    # pendingByte to stay consistent with hasInputAsync.
+    try:
+      reader.setPendingByteAsync('Z'.byte)
+      check reader.bufferStats().available
+    finally:
+      reader.closeAsyncInputReader()
+
 suite "Async Output Functions":
   test "writeStdoutAsync writes data":
     let bytesWritten = waitFor writeStdoutAsync(".")
@@ -83,18 +93,39 @@ suite "Async Input Functions":
     check ch.ord >= 0
     reader.closeAsyncInputReader()
 
-  test "peekCharAsync doesn't consume buffer":
+  test "hasInputAsync reports a stashed pending byte":
     let reader = newAsyncInputReader()
-    let ch1 = waitFor reader.peekCharAsync()
-    let ch2 = waitFor reader.peekCharAsync()
-    check ch1 == ch2
-    reader.closeAsyncInputReader()
+    # try/finally so a failed check still closes the reader; otherwise the
+    # leaked selector/STDIN registration could cascade into later tests.
+    try:
+      # A UTF-8 resync byte (Unicode §3.9) lives only in pendingByte, never on
+      # the fd, so hasDataAvailable can't see it. hasInputAsync must still
+      # report it.
+      reader.setPendingByteAsync('Z'.byte)
+      check waitFor reader.hasInputAsync(0)
+      # And it is exactly what the next read hands back, not stranded.
+      check reader.readCharNonBlocking() == 'Z'
+    finally:
+      reader.closeAsyncInputReader()
 
   test "readStdinAsync with timeout":
     let reader = newAsyncInputReader()
     let data = waitFor reader.readStdinAsync(1)
     check data.len >= 0
     reader.closeAsyncInputReader()
+
+  test "readStdinAsync drains a stashed pending byte":
+    let reader = newAsyncInputReader()
+    # hasInputAsync/bufferStats report a stashed byte as available, so
+    # readStdinAsync must be able to consume it; otherwise a
+    # hasInputAsync()/readStdinAsync() loop spins on the invisible byte.
+    try:
+      reader.setPendingByteAsync('Z'.byte)
+      let data = waitFor reader.readStdinAsync(0)
+      check data.len >= 1
+      check data[0] == 'Z' # stashed byte is drained first, before any fd data
+    finally:
+      reader.closeAsyncInputReader()
 
 suite "AsyncInputReader Non-Blocking Operations":
   test "reader lifecycle":

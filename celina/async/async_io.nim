@@ -145,6 +145,13 @@ proc hasInputAsync*(
   # Yield to other async tasks first
   await sleepMs(0)
 
+  if reader.pendingByte.isSome:
+    # A stashed UTF-8 resync byte (Unicode §3.9) is a real keystroke that the
+    # next readCharNonBlocking will emit; it lives only in pendingByte and never
+    # reaches the fd, so hasDataAvailable can't see it. Report it as available so
+    # it isn't stranded until fresh fd input arrives.
+    return true
+
   if reader.buffer.len > 0:
     return true
 
@@ -160,25 +167,6 @@ proc readCharAsync*(reader: AsyncInputReader): Future[char] {.async.} =
 
   result = reader.readCharNonBlocking()
 
-proc peekCharAsync*(reader: AsyncInputReader): Future[char] {.async.} =
-  ## Peek at next character without consuming it
-  if reader.isNil:
-    return '\0'
-
-  await sleepMs(0)
-
-  if reader.buffer.len > 0:
-    return reader.buffer[0]
-
-  if reader.hasDataAvailable(0):
-    let newData = reader.readNonBlocking()
-    if newData.len > 0:
-      reader.buffer.add(newData)
-      if reader.buffer.len > 0:
-        return reader.buffer[0]
-
-  return '\0'
-
 proc readStdinAsync*(
     reader: AsyncInputReader, timeoutMs: int = 10
 ): Future[string] {.async.} =
@@ -188,10 +176,23 @@ proc readStdinAsync*(
 
   await sleepMs(0)
 
+  # Drain the stashed resync byte and any buffered data first, in the same
+  # priority order as readCharNonBlocking. hasInputAsync/bufferStats report both
+  # as available even though they never reach the fd, so a
+  # hasInputAsync()/readStdinAsync() loop would otherwise spin forever on input
+  # this proc could not consume.
+  var prefix = ""
+  if reader.pendingByte.isSome:
+    prefix.add(char(reader.pendingByte.get))
+    reader.pendingByte = none(byte)
+  if reader.buffer.len > 0:
+    prefix.add(reader.buffer)
+    reader.buffer = ""
+
   if reader.hasDataAvailable(timeoutMs):
-    return reader.readNonBlocking()
+    return prefix & reader.readNonBlocking()
   else:
-    return ""
+    return prefix
 
 # Async Output Functions
 
@@ -256,7 +257,14 @@ proc bufferStats*(reader: AsyncInputReader): tuple[size: int, available: bool] =
   ## Get input buffer statistics
   if reader.isNil:
     return (0, false)
-  return (reader.buffer.len, reader.hasDataAvailable(0))
+
+  # `available` mirrors hasInputAsync exactly: a stashed pendingByte and buffered
+  # data are both readable input even though they never reached the fd, so gating
+  # reads on `available` must see them or the byte/buffer is stranded (the bug
+  # this fixes).
+  let available =
+    reader.pendingByte.isSome or reader.buffer.len > 0 or reader.hasDataAvailable(0)
+  return (reader.buffer.len, available)
 
 # Testing and Validation
 
