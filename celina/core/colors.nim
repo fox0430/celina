@@ -457,26 +457,34 @@ proc toAnsiCode*(modifier: StyleModifier): string =
   of Overline: "53"
 
 proc toAnsiSequence*(style: Style): string =
-  ## Convert Style to complete ANSI escape sequence
-  var codes: seq[string] = @[]
+  ## Convert Style to complete ANSI escape sequence.
+  ## The parameter list is built directly into a string to avoid the per-call
+  ## `seq[string]` + `join` allocation, since this runs once per style run on
+  ## every rendered frame.
+  var body = ""
+
+  template emit(code: string) =
+    if body.len > 0:
+      body.add(';')
+    body.add(code)
 
   # Foreground color
   if style.fg.kind != Default:
-    codes.add(style.fg.toAnsiCode(false))
+    emit(style.fg.toAnsiCode(false))
 
   # Background color - always set to ensure terminal default is used
   if style.bg.kind != Default:
-    codes.add(style.bg.toAnsiCode(true))
+    emit(style.bg.toAnsiCode(true))
   elif style.fg.kind != Default:
     # When only foreground is set, explicitly reset background to terminal default
-    codes.add("49")
+    emit("49")
 
   # Modifiers
   for modifier in style.modifiers:
-    codes.add(modifier.toAnsiCode())
+    emit(modifier.toAnsiCode())
 
-  if codes.len > 0:
-    "\e[" & codes.join(";") & "m"
+  if body.len > 0:
+    "\e[" & body & "m"
   else:
     ""
 
