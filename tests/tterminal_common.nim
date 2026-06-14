@@ -588,6 +588,43 @@ suite "Terminal Common Module Tests":
       check not output.contains("[1;3H") # No position for B
       check not output.contains("[1;4H") # No position for C
 
+    test "coalesce same-style run into one SGR sequence":
+      # Regression: a run of adjacent changed cells sharing one style must emit
+      # the style sequence and the closing reset exactly once, not per cell.
+      var buffer1 = newBuffer(5, 1)
+      var buffer2 = newBuffer(5, 1)
+
+      let sameStyle = style(White, Red) # -> \e[37;41m
+      buffer2[1, 0] = cell("A", sameStyle)
+      buffer2[2, 0] = cell("B", sameStyle)
+      buffer2[3, 0] = cell("C", sameStyle)
+
+      let output = buildDifferentialOutput(buffer1, buffer2)
+
+      check output.count("[37;41m") == 1 # Style applied once for the whole run
+      check output.count("[0m") == 1 # One trailing reset, not one per cell
+      # The three glyphs sit between the single style and the single reset
+      check output.find("[37;41m") < output.find("A")
+      check output.find("C") < output.find("[0m")
+
+    test "carry style across a cursor jump over unchanged cells":
+      # Two separated cells with the SAME style: the style survives the cursor
+      # jump, so it is emitted once and reset once even though they are not
+      # adjacent. The unchanged cells in between are never rewritten.
+      var buffer1 = newBuffer(10, 1)
+      var buffer2 = newBuffer(10, 1)
+
+      let sameStyle = style(White, Red)
+      buffer2[1, 0] = cell("A", sameStyle)
+      buffer2[8, 0] = cell("B", sameStyle)
+
+      let output = buildDifferentialOutput(buffer1, buffer2)
+
+      check output.contains("[1;2H") # Position for A
+      check output.contains("[1;9H") # Cursor jump to B
+      check output.count("[37;41m") == 1 # Style not re-emitted after the jump
+      check output.count("[0m") == 1 # Single trailing reset
+
     test "ensure proper style reset":
       # Ensure styles are properly reset to prevent bleeding
       var buffer1 = newBuffer(4, 1)

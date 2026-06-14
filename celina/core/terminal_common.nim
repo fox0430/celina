@@ -382,6 +382,7 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
     # Different sizes, use simple approach
     let changes = calculateSimpleDiff(oldBuffer, newBuffer)
     var currentHyperlink = ""
+    var currentStyle = defaultStyle() # SGR style currently active in the terminal
 
     for change in changes:
       # Shadow cell (right half of a wide char): the lead covers it — skip.
@@ -398,26 +399,29 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
           result.add(makeHyperlinkStartSeq(change.cell.hyperlink))
         currentHyperlink = change.cell.hyperlink
 
-      # Apply style if present
-      let styleSeq = change.cell.style.toAnsiSequence()
-      if styleSeq.len > 0:
-        result.add(styleSeq)
+      # Emit a style sequence only when the style differs from the one already
+      # active; runs of same-styled cells then share a single SGR sequence.
+      if change.cell.style != currentStyle:
+        if currentStyle != defaultStyle():
+          result.add(resetSequence())
+        if change.cell.style != defaultStyle():
+          result.add(change.cell.style.toAnsiSequence())
+        currentStyle = change.cell.style
 
       result.add(change.cell.symbol)
 
-      # Reset style if it was applied
-      if styleSeq.len > 0:
-        result.add(resetSequence())
-
-    # Close any open hyperlink at the end
+    # Close any open hyperlink and reset any lingering style at the end
     if currentHyperlink.len > 0:
       result.add(Osc8Reset)
+    if currentStyle != defaultStyle():
+      result.add(resetSequence())
     return result
 
   var lastCursorPos = (-1, -1) # Track cursor position to minimize cursor moves
   var currentHyperlink = "" # Track current hyperlink state
+  var currentStyle = defaultStyle() # SGR style currently active in the terminal
 
-  # Simple cell-by-cell approach - write each changed cell individually
+  # Cell-by-cell scan; runs of identical style share a single SGR sequence
   for y in 0 ..< newBuffer.area.height:
     for x in 0 ..< newBuffer.area.width:
       let oldCell = oldBuffer[x, y]
@@ -444,23 +448,27 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
             result.add(makeHyperlinkStartSeq(newCell.hyperlink))
           currentHyperlink = newCell.hyperlink
 
-        # Apply style and write character
-        let styleSeq = newCell.style.toAnsiSequence()
-        if styleSeq.len > 0:
-          result.add(styleSeq)
+        # Emit a style sequence only when the style changes. Adjacent changed
+        # cells with the same style reuse the active SGR; carrying the style
+        # across cursor jumps over unchanged cells is also correct, since SGR
+        # only affects glyphs as they are written.
+        if newCell.style != currentStyle:
+          if currentStyle != defaultStyle():
+            result.add(resetSequence())
+          if newCell.style != defaultStyle():
+            result.add(newCell.style.toAnsiSequence())
+          currentStyle = newCell.style
 
         result.add(newCell.symbol)
-
-        # Reset style if it was applied
-        if styleSeq.len > 0:
-          result.add(resetSequence())
 
         # Update cursor position (we wrote one character)
         lastCursorPos = (x + 1, y)
 
-  # Close any open hyperlink at the end
+  # Close any open hyperlink and reset any lingering style at the end
   if currentHyperlink.len > 0:
     result.add(Osc8Reset)
+  if currentStyle != defaultStyle():
+    result.add(resetSequence())
 
 proc buildFullRenderOutput*(buffer: Buffer): string =
   ## Build output string for full buffer render
