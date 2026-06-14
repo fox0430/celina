@@ -848,3 +848,24 @@ template clearLastBufferForResume*(terminal: typed) =
   ## Clear lastBuffer to force full redraw after resume
   terminal.lastBuffer = newBuffer(0, 0)
   terminal.suspendState.isSuspended = false
+
+template adoptLastBufferImpl*(terminal: typed, buffer: var Buffer) =
+  ## Adopt `buffer` as the new `lastBuffer` without the per-frame deep copy.
+  ##
+  ## In steady state both buffers cover the same area, so we `swap` (zero-copy):
+  ## `lastBuffer` takes the freshly rendered content and the caller's `buffer`
+  ## receives the previous frame's storage (recycling the allocation). This is
+  ## only safe when the caller fully re-fills `buffer` before the next render,
+  ## so it is reserved for renderer-owned buffers (the `*Adopt` draw variants);
+  ## the public `draw`/`drawWithCursor` keep copy semantics and never call this.
+  ##
+  ## When the areas differ (first frame, after a resize) we fall back to a copy
+  ## so the caller is never handed a wrong-sized buffer.
+  ##
+  ## Shared by the sync (`terminal.nim`) and async (`async_terminal.nim`)
+  ## backends so the swap/copy contract lives in exactly one place.
+  if terminal.lastBuffer.area == buffer.area:
+    swap(terminal.lastBuffer, buffer)
+  else:
+    terminal.lastBuffer = buffer
+  terminal.lastBuffer.clearDirty()
