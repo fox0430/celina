@@ -6,8 +6,6 @@
 import std/[strformat, termios, posix, strutils, os]
 import geometry, colors, buffer
 
-# ANSI Escape Sequences
-
 type
   AnsiSequence* = distinct string
 
@@ -30,8 +28,7 @@ type
     BlinkingBar
     SteadyBar
 
-  ## Cursor state management for terminal applications
-  CursorState* = object
+  CursorState* = object ## Cursor state management for terminal applications
     x*: int ## Current cursor X position (-1 = not set)
     y*: int ## Current cursor Y position (-1 = not set)
     visible*: bool ## Whether cursor should be visible
@@ -46,6 +43,41 @@ type
     suspendedBracketedPaste*: bool
     suspendedFocusEvents*: bool
     suspendedSyncOutput*: bool
+
+  WriteOutcome* = enum
+    woProgress ## `write` returned n > 0; `n` bytes were written, keep going
+    woInterrupted ## interrupted by a signal (EINTR); retry
+    woWouldBlock ## fd not ready (EAGAIN/EWOULDBLOCK); back off and retry
+    woHardError ## unrecoverable error, or a 0-byte write; give up
+
+  WriteWaitOutcome* = enum
+    wwWritable ## fd reports POLLOUT; a retried `write` should make progress
+    wwNotReady ## not writable within the timeout (or poll itself was interrupted)
+    wwError ## fd reports POLLERR/POLLHUP/POLLNVAL; treat as a hard error
+
+  RenderCommandKind* = enum
+    RckSetPosition
+    RckSetStyle
+    RckWriteText
+    RckClearScreen
+    RckClearLine
+
+  RenderCommand* = object ## A single rendering command
+    case kind*: RenderCommandKind
+    of RckSetPosition:
+      pos*: Position
+    of RckSetStyle:
+      style*: Style
+    of RckWriteText:
+      text*: string
+    of RckClearScreen:
+      discard
+    of RckClearLine:
+      discard
+
+  RenderBatch* = object ## Batch of render commands for efficient output
+    commands*: seq[RenderCommand]
+    estimatedSize*: int # Estimated output buffer size
 
 const
   # Screen control sequences
@@ -116,6 +148,20 @@ const
   OscIconNameStart* = "\e]1;"
   OscTitleOnlyStart* = "\e]2;"
   OscTerminator* = "\a" # BEL character as terminator (widely supported)
+
+  WriteBlockedWaitMs* = 2
+    ## How long one blocked-write wait pauses for stdout to drain: the `poll(2)`
+    ## timeout in the sync path, and the cooperative `sleepMs` backoff in the
+    ## async path. Small so a terminal that drains quickly is serviced with low
+    ## latency; the sync `poll` returns as soon as the fd is writable regardless.
+  WriteMaxBlockedWaits* = 1000
+    ## Maximum number of *consecutive* waits that make no forward progress before
+    ## a write gives up, so a permanently wedged fd cannot hang the caller. The
+    ## counter resets to zero on every byte written, so a slow-but-draining
+    ## terminal handling a large buffer never trips it — only a genuinely stuck
+    ## fd does, after roughly `WriteMaxBlockedWaits * WriteBlockedWaitMs` (~2s)
+    ## of zero progress. This bounds both an EAGAIN stall and a pathological
+    ## EINTR storm with the same budget.
 
 proc makeWindowTitleSeq*(title: string): string {.inline.} =
   ## Generate OSC sequence to set window title and icon name
@@ -212,31 +258,6 @@ proc getTerminalSizeWithFallback*(defaultWidth = 80, defaultHeight = 24): Size =
     size(defaultWidth, defaultHeight)
 
 # Render Optimization
-
-type
-  RenderCommandKind* = enum
-    RckSetPosition
-    RckSetStyle
-    RckWriteText
-    RckClearScreen
-    RckClearLine
-
-  RenderCommand* = object ## A single rendering command
-    case kind*: RenderCommandKind
-    of RckSetPosition:
-      pos*: Position
-    of RckSetStyle:
-      style*: Style
-    of RckWriteText:
-      text*: string
-    of RckClearScreen:
-      discard
-    of RckClearLine:
-      discard
-
-  RenderBatch* = object ## Batch of render commands for efficient output
-    commands*: seq[RenderCommand]
-    estimatedSize*: int # Estimated output buffer size
 
 proc addCommand*(batch: var RenderBatch, cmd: RenderCommand) =
   ## Add a command to the render batch
@@ -536,6 +557,54 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
   # Reset style at the end
   if lastStyle != defaultStyle():
     result.add(resetSequence())
+
+# Low-level write retry policy and classification
+# Shared by the sync (`writeWithRetry` in terminal.nim) and async
+# (`writeStdoutAsync` in async/async_io.nim) write loops so the EINTR/EAGAIN/
+# short-write decision and the give-up thresholds live in one place. The loops
+# still differ in how they wait for a blocked fd to drain (the sync one blocks
+# in `pollWritable`, the async one yields via `await sleepMs` after a
+# non-blocking `pollWritable` probe), so only the policy and the classification
+# are shared, not the loop body itself.
+
+proc classifyWriteResult*(n: int): WriteOutcome =
+  ## Classify the raw return value of a single `write(2)` call into a retry
+  ## decision. `errno` must still reflect that `write` call (call this with no
+  ## intervening syscall). A 0-byte write of a non-empty buffer is treated as a
+  ## hard error since `write` makes no progress and never legitimately returns 0
+  ## for a non-zero request.
+  if n > 0:
+    woProgress
+  elif n < 0 and errno == EINTR:
+    woInterrupted
+  elif n < 0 and (errno == EAGAIN or errno == EWOULDBLOCK):
+    woWouldBlock
+  else:
+    woHardError
+
+proc pollWritable*(fd: cint, timeoutMs: int): WriteWaitOutcome =
+  ## Wait up to `timeoutMs` milliseconds (0 = non-blocking probe) for `fd` to
+  ## accept output. Used by both write loops when `write` reports EAGAIN: instead
+  ## of sleeping blind, they ask the kernel whether the fd has drained, and learn
+  ## when the fd has gone away (POLLHUP/POLLERR) so a flow-controlled write is not
+  ## confused with a dead terminal. A `poll` interrupted by a signal, or that
+  ## merely times out, is reported as `wwNotReady` so the caller backs off and
+  ## retries (its own blocked-wait counter bounds how long that can continue).
+  var pfd: Tpollfd
+  pfd.fd = fd
+  pfd.events = POLLOUT
+  pfd.revents = 0
+
+  let r = posix.poll(addr pfd, 1, timeoutMs.cint)
+  if r <= 0:
+    # r < 0: poll failed/was interrupted; r == 0: timed out, still not writable.
+    return wwNotReady
+  if (pfd.revents.int and (POLLERR.int or POLLHUP.int or POLLNVAL.int)) != 0:
+    # Error bits win over POLLOUT: the fd is gone, writing again would fail.
+    return wwError
+  if (pfd.revents.int and POLLOUT.int) != 0:
+    return wwWritable
+  wwNotReady
 
 # Common terminal control templates
 # These work with both Terminal and AsyncTerminal types
