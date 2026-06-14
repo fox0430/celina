@@ -54,8 +54,13 @@ proc hide*(manager: CursorManager) =
   manager.state.visible = false
 
 proc setStyle*(manager: CursorManager, style: CursorStyle) =
-  ## Set cursor style
-  manager.state.lastStyle = manager.state.style
+  ## Set the desired cursor style.
+  ##
+  ## Does not touch `lastStyle`: that field tracks the style actually applied to
+  ## the terminal and is only updated after a render (via `setLastStyle` /
+  ## `updateLastStyle`). Mutating it here would corrupt `styleChanged()` when
+  ## `setStyle` is called more than once before a render, silently dropping the
+  ## pending DECSCUSR update.
   manager.state.style = style
 
 proc getPosition*(manager: CursorManager): (int, int) =
