@@ -560,6 +560,8 @@ method getMinSize*(widget: List): Size =
 method getPreferredSize*(widget: List, available: Size): Size =
   ## Get preferred size for list widget
   # Prefer to show all items if possible, otherwise use available space
+  if widget.items.len == 0:
+    return size(0, 0)
   let preferredHeight = min(widget.items.len, available.height)
   let bulletWidth = widget.bulletPrefix.displayWidth
   let maxItemWidth = widget.items.mapIt(bulletWidth + it.text.displayWidth).max()
