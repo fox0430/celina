@@ -326,7 +326,7 @@ suite "Progress Bar Widget Tests":
       check called == true
 
   suite "Builder Methods Tests (Chaining)":
-    test "Method chaining with mutating builders":
+    test "Method chaining with copy builders":
       let bar = newProgressBar(0.3)
         .withValue(0.7)
         .withLabel("Chained")
@@ -339,10 +339,12 @@ suite "Progress Bar Widget Tests":
       let (filled, _, _) = bar.getProgressChars()
       check filled == "=" # Line style
 
-    test "Chaining returns same object":
+    test "with* returns an independent copy":
       let bar1 = newProgressBar(0.5)
       let bar2 = bar1.withLabel("Test")
-      check cast[pointer](bar1) == cast[pointer](bar2)
+      check cast[pointer](bar1) != cast[pointer](bar2)
+      check "Test" notin bar1.getLabelWithPercentage()
+      check "Test" in bar2.getLabelWithPercentage()
 
     test "Complex chaining":
       var callbackCalled = false
