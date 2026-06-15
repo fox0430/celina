@@ -511,6 +511,13 @@ suite "List Widget Tests":
       preferred.height == 3 # All 3 items
       preferred.width > 0
 
+    # Empty list must not crash on getPreferredSize (max() over empty seq)
+    let emptyList = newList()
+    let emptyPreferred = emptyList.getPreferredSize(available)
+    check:
+      emptyPreferred.width == 0
+      emptyPreferred.height == 0
+
   test "Focus capability":
     # Test focus determination
     var listWidget = list(@["A", "B"])
