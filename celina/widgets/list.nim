@@ -576,51 +576,23 @@ method canFocus*(widget: List): bool =
 # List widget builders and modifiers
 proc withItems*(widget: List, items: seq[ListItem]): List =
   ## Create a copy with different items
-  result = List(
-    items: items,
-    state: widget.state,
-    selectionMode: widget.selectionMode,
-    selectedIndices: @[],
-    highlightedIndex: if items.len > 0: 0 else: -1,
-    scrollOffset: 0,
-    visibleCount: widget.visibleCount,
-    normalStyle: widget.normalStyle,
-    selectedStyle: widget.selectedStyle,
-    highlightedStyle: widget.highlightedStyle,
-    disabledStyle: widget.disabledStyle,
-    bulletPrefix: widget.bulletPrefix,
-    showScrollbar: widget.showScrollbar,
-    onSelect: widget.onSelect,
-    onMultiSelect: widget.onMultiSelect,
-    onHighlight: widget.onHighlight,
-  )
+  result = copyWidget(widget)
+  result.items = items
+  result.selectedIndices = @[]
+  result.highlightedIndex = if items.len > 0: 0 else: -1
+  result.scrollOffset = 0
 
 proc withSelectionMode*(widget: List, mode: SelectionMode): List =
   ## Create a copy with different selection mode
-  result = List(
-    items: widget.items,
-    state: widget.state,
-    selectionMode: mode,
-    selectedIndices:
-      if mode == Single and widget.selectedIndices.len > 0:
-        @[widget.selectedIndices[0]]
-      elif mode == None:
-        @[]
-      else:
-        widget.selectedIndices,
-    highlightedIndex: widget.highlightedIndex,
-    scrollOffset: widget.scrollOffset,
-    visibleCount: widget.visibleCount,
-    normalStyle: widget.normalStyle,
-    selectedStyle: widget.selectedStyle,
-    highlightedStyle: widget.highlightedStyle,
-    disabledStyle: widget.disabledStyle,
-    bulletPrefix: widget.bulletPrefix,
-    showScrollbar: widget.showScrollbar,
-    onSelect: widget.onSelect,
-    onMultiSelect: widget.onMultiSelect,
-    onHighlight: widget.onHighlight,
-  )
+  result = copyWidget(widget)
+  result.selectionMode = mode
+  result.selectedIndices =
+    if mode == Single and widget.selectedIndices.len > 0:
+      @[widget.selectedIndices[0]]
+    elif mode == None:
+      @[]
+    else:
+      widget.selectedIndices
 
 proc withStyles*(
     widget: List,
@@ -630,67 +602,25 @@ proc withStyles*(
     disabled: Style = defaultStyle(),
 ): List =
   ## Create a copy with different styles
-  result = List(
-    items: widget.items,
-    state: widget.state,
-    selectionMode: widget.selectionMode,
-    selectedIndices: widget.selectedIndices,
-    highlightedIndex: widget.highlightedIndex,
-    scrollOffset: widget.scrollOffset,
-    visibleCount: widget.visibleCount,
-    normalStyle: if normal == defaultStyle(): widget.normalStyle else: normal,
-    selectedStyle: if selected == defaultStyle(): widget.selectedStyle else: selected,
-    highlightedStyle:
-      if highlighted == defaultStyle(): widget.highlightedStyle else: highlighted,
-    disabledStyle: if disabled == defaultStyle(): widget.disabledStyle else: disabled,
-    bulletPrefix: widget.bulletPrefix,
-    showScrollbar: widget.showScrollbar,
-    onSelect: widget.onSelect,
-    onMultiSelect: widget.onMultiSelect,
-    onHighlight: widget.onHighlight,
-  )
+  result = copyWidget(widget)
+  if normal != defaultStyle():
+    result.normalStyle = normal
+  if selected != defaultStyle():
+    result.selectedStyle = selected
+  if highlighted != defaultStyle():
+    result.highlightedStyle = highlighted
+  if disabled != defaultStyle():
+    result.disabledStyle = disabled
 
 proc withBulletPrefix*(widget: List, prefix: string): List =
   ## Create a copy with different bullet prefix
-  result = List(
-    items: widget.items,
-    state: widget.state,
-    selectionMode: widget.selectionMode,
-    selectedIndices: widget.selectedIndices,
-    highlightedIndex: widget.highlightedIndex,
-    scrollOffset: widget.scrollOffset,
-    visibleCount: widget.visibleCount,
-    normalStyle: widget.normalStyle,
-    selectedStyle: widget.selectedStyle,
-    highlightedStyle: widget.highlightedStyle,
-    disabledStyle: widget.disabledStyle,
-    bulletPrefix: prefix,
-    showScrollbar: widget.showScrollbar,
-    onSelect: widget.onSelect,
-    onMultiSelect: widget.onMultiSelect,
-    onHighlight: widget.onHighlight,
-  )
+  result = copyWidget(widget)
+  result.bulletPrefix = prefix
 
 proc withScrollbar*(widget: List, show: bool): List =
   ## Create a copy with scrollbar visibility setting
-  result = List(
-    items: widget.items,
-    state: widget.state,
-    selectionMode: widget.selectionMode,
-    selectedIndices: widget.selectedIndices,
-    highlightedIndex: widget.highlightedIndex,
-    scrollOffset: widget.scrollOffset,
-    visibleCount: widget.visibleCount,
-    normalStyle: widget.normalStyle,
-    selectedStyle: widget.selectedStyle,
-    highlightedStyle: widget.highlightedStyle,
-    disabledStyle: widget.disabledStyle,
-    bulletPrefix: widget.bulletPrefix,
-    showScrollbar: show,
-    onSelect: widget.onSelect,
-    onMultiSelect: widget.onMultiSelect,
-    onHighlight: widget.onHighlight,
-  )
+  result = copyWidget(widget)
+  result.showScrollbar = show
 
 # Convenience constructors for common list types
 proc simpleList*(items: seq[string]): List =
