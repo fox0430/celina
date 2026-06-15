@@ -384,24 +384,8 @@ method canFocus*(widget: Button): bool =
 # Button widget builders and modifiers
 proc withText*(widget: Button, text: string): Button =
   ## Create a copy with different text
-  Button(
-    text: text,
-    normalStyle: widget.normalStyle,
-    hoveredStyle: widget.hoveredStyle,
-    pressedStyle: widget.pressedStyle,
-    focusedStyle: widget.focusedStyle,
-    disabledStyle: widget.disabledStyle,
-    state: widget.state,
-    enabled: widget.enabled,
-    minWidth: widget.minWidth,
-    padding: widget.padding,
-    onClick: widget.onClick,
-    onMouseEnter: widget.onMouseEnter,
-    onMouseLeave: widget.onMouseLeave,
-    onFocus: widget.onFocus,
-    onBlur: widget.onBlur,
-    onKeyPress: widget.onKeyPress,
-  )
+  result = copyWidget(widget)
+  result.text = text
 
 proc withStyles*(
     widget: Button,
@@ -412,87 +396,32 @@ proc withStyles*(
     disabled: Style = defaultStyle(),
 ): Button =
   ## Create a copy with different styles
-  Button(
-    text: widget.text,
-    normalStyle: if normal == defaultStyle(): widget.normalStyle else: normal,
-    hoveredStyle: if hovered == defaultStyle(): widget.hoveredStyle else: hovered,
-    pressedStyle: if pressed == defaultStyle(): widget.pressedStyle else: pressed,
-    focusedStyle: if focused == defaultStyle(): widget.focusedStyle else: focused,
-    disabledStyle: if disabled == defaultStyle(): widget.disabledStyle else: disabled,
-    state: widget.state,
-    enabled: widget.enabled,
-    minWidth: widget.minWidth,
-    padding: widget.padding,
-    onClick: widget.onClick,
-    onMouseEnter: widget.onMouseEnter,
-    onMouseLeave: widget.onMouseLeave,
-    onFocus: widget.onFocus,
-    onBlur: widget.onBlur,
-    onKeyPress: widget.onKeyPress,
-  )
+  result = copyWidget(widget)
+  if normal != defaultStyle():
+    result.normalStyle = normal
+  if hovered != defaultStyle():
+    result.hoveredStyle = hovered
+  if pressed != defaultStyle():
+    result.pressedStyle = pressed
+  if focused != defaultStyle():
+    result.focusedStyle = focused
+  if disabled != defaultStyle():
+    result.disabledStyle = disabled
 
 proc withPadding*(widget: Button, padding: int): Button =
   ## Create a copy with different padding
-  Button(
-    text: widget.text,
-    normalStyle: widget.normalStyle,
-    hoveredStyle: widget.hoveredStyle,
-    pressedStyle: widget.pressedStyle,
-    focusedStyle: widget.focusedStyle,
-    disabledStyle: widget.disabledStyle,
-    state: widget.state,
-    enabled: widget.enabled,
-    minWidth: widget.minWidth,
-    padding: padding,
-    onClick: widget.onClick,
-    onMouseEnter: widget.onMouseEnter,
-    onMouseLeave: widget.onMouseLeave,
-    onFocus: widget.onFocus,
-    onBlur: widget.onBlur,
-    onKeyPress: widget.onKeyPress,
-  )
+  result = copyWidget(widget)
+  result.padding = padding
 
 proc withMinWidth*(widget: Button, minWidth: int): Button =
   ## Create a copy with different minimum width
-  Button(
-    text: widget.text,
-    normalStyle: widget.normalStyle,
-    hoveredStyle: widget.hoveredStyle,
-    pressedStyle: widget.pressedStyle,
-    focusedStyle: widget.focusedStyle,
-    disabledStyle: widget.disabledStyle,
-    state: widget.state,
-    enabled: widget.enabled,
-    minWidth: minWidth,
-    padding: widget.padding,
-    onClick: widget.onClick,
-    onMouseEnter: widget.onMouseEnter,
-    onMouseLeave: widget.onMouseLeave,
-    onFocus: widget.onFocus,
-    onBlur: widget.onBlur,
-    onKeyPress: widget.onKeyPress,
-  )
+  result = copyWidget(widget)
+  result.minWidth = minWidth
 
 proc withOnClick*(widget: Button, onClick: proc()): Button =
   ## Create a copy with different click handler
-  Button(
-    text: widget.text,
-    normalStyle: widget.normalStyle,
-    hoveredStyle: widget.hoveredStyle,
-    pressedStyle: widget.pressedStyle,
-    focusedStyle: widget.focusedStyle,
-    disabledStyle: widget.disabledStyle,
-    state: widget.state,
-    enabled: widget.enabled,
-    minWidth: widget.minWidth,
-    padding: widget.padding,
-    onClick: onClick,
-    onMouseEnter: widget.onMouseEnter,
-    onMouseLeave: widget.onMouseLeave,
-    onFocus: widget.onFocus,
-    onBlur: widget.onBlur,
-    onKeyPress: widget.onKeyPress,
-  )
+  result = copyWidget(widget)
+  result.onClick = onClick
 
 proc withEventHandlers*(
     widget: Button,
@@ -504,24 +433,19 @@ proc withEventHandlers*(
     onKeyPress: proc(key: KeyEvent): EventResult = nil,
 ): Button =
   ## Create a copy with different event handlers
-  Button(
-    text: widget.text,
-    normalStyle: widget.normalStyle,
-    hoveredStyle: widget.hoveredStyle,
-    pressedStyle: widget.pressedStyle,
-    focusedStyle: widget.focusedStyle,
-    disabledStyle: widget.disabledStyle,
-    state: widget.state,
-    enabled: widget.enabled,
-    minWidth: widget.minWidth,
-    padding: widget.padding,
-    onClick: if onClick != nil: onClick else: widget.onClick,
-    onMouseEnter: if onMouseEnter != nil: onMouseEnter else: widget.onMouseEnter,
-    onMouseLeave: if onMouseLeave != nil: onMouseLeave else: widget.onMouseLeave,
-    onFocus: if onFocus != nil: onFocus else: widget.onFocus,
-    onBlur: if onBlur != nil: onBlur else: widget.onBlur,
-    onKeyPress: if onKeyPress != nil: onKeyPress else: widget.onKeyPress,
-  )
+  result = copyWidget(widget)
+  if onClick != nil:
+    result.onClick = onClick
+  if onMouseEnter != nil:
+    result.onMouseEnter = onMouseEnter
+  if onMouseLeave != nil:
+    result.onMouseLeave = onMouseLeave
+  if onFocus != nil:
+    result.onFocus = onFocus
+  if onBlur != nil:
+    result.onBlur = onBlur
+  if onKeyPress != nil:
+    result.onKeyPress = onKeyPress
 
 # Convenience constructors for common button types.
 # Each starts from `defaultButtonStyle()` and overrides only the fields
