@@ -54,6 +54,20 @@ method isFocused*(widget: Widget): bool {.base.} =
   ## Query this widget's focus state. Default implementation returns false.
   false
 
+proc copyWidget*[T: Widget](widget: T): T =
+  ## Return a copy of the ref widget `widget`. Use this at the start of
+  ## builder procs to ensure no fields are accidentally dropped when only a
+  ## few fields need to change.
+  ##
+  ## Notes:
+  ## - This copies the object the ref points to. Value fields (and
+  ##   strings/seqs) are copied, but any nested `ref` fields (e.g. callbacks)
+  ##   are shared with the original, not deep-copied.
+  ## - The copy is created with the *static* type `T`, so calling this through
+  ##   a base-typed parameter does not preserve a more-derived subtype.
+  new(result)
+  result[] = widget[]
+
 template defineKeyMouseDispatch*(WidgetT: untyped) =
   ## Generate the standard `handleEvent` that forwards `EventKind.Key` to
   ## `handleKeyEvent(event.key)` and `EventKind.Mouse` to

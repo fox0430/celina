@@ -730,73 +730,18 @@ method canFocus*(widget: Input): bool =
 # Input widget builders and modifiers
 proc withText*(widget: Input, text: string): Input =
   ## Create a copy with different text
-  result = Input(
-    state: widget.state,
-    placeholder: widget.placeholder,
-    normalStyle: widget.normalStyle,
-    focusedStyle: widget.focusedStyle,
-    placeholderStyle: widget.placeholderStyle,
-    cursorStyle: widget.cursorStyle,
-    selectionStyle: widget.selectionStyle,
-    borderStyle: widget.borderStyle,
-    borderNormalStyle: widget.borderNormalStyle,
-    borderFocusedStyle: widget.borderFocusedStyle,
-    maxLength: widget.maxLength,
-    readOnly: widget.readOnly,
-    password: widget.password,
-    onTextChanged: widget.onTextChanged,
-    onEnter: widget.onEnter,
-    onFocus: widget.onFocus,
-    onBlur: widget.onBlur,
-    onKeyPress: widget.onKeyPress,
-  )
+  result = copyWidget(widget)
   result.setText(text)
 
 proc withPlaceholder*(widget: Input, placeholder: string): Input =
   ## Create a copy with different placeholder
-  Input(
-    state: widget.state,
-    placeholder: placeholder,
-    normalStyle: widget.normalStyle,
-    focusedStyle: widget.focusedStyle,
-    placeholderStyle: widget.placeholderStyle,
-    cursorStyle: widget.cursorStyle,
-    selectionStyle: widget.selectionStyle,
-    borderStyle: widget.borderStyle,
-    borderNormalStyle: widget.borderNormalStyle,
-    borderFocusedStyle: widget.borderFocusedStyle,
-    maxLength: widget.maxLength,
-    readOnly: widget.readOnly,
-    password: widget.password,
-    onTextChanged: widget.onTextChanged,
-    onEnter: widget.onEnter,
-    onFocus: widget.onFocus,
-    onBlur: widget.onBlur,
-    onKeyPress: widget.onKeyPress,
-  )
+  result = copyWidget(widget)
+  result.placeholder = placeholder
 
 proc withMaxLength*(widget: Input, maxLength: int): Input =
   ## Create a copy with different max length
-  Input(
-    state: widget.state,
-    placeholder: widget.placeholder,
-    normalStyle: widget.normalStyle,
-    focusedStyle: widget.focusedStyle,
-    placeholderStyle: widget.placeholderStyle,
-    cursorStyle: widget.cursorStyle,
-    selectionStyle: widget.selectionStyle,
-    borderStyle: widget.borderStyle,
-    borderNormalStyle: widget.borderNormalStyle,
-    borderFocusedStyle: widget.borderFocusedStyle,
-    maxLength: maxLength,
-    readOnly: widget.readOnly,
-    password: widget.password,
-    onTextChanged: widget.onTextChanged,
-    onEnter: widget.onEnter,
-    onFocus: widget.onFocus,
-    onBlur: widget.onBlur,
-    onKeyPress: widget.onKeyPress,
-  )
+  result = copyWidget(widget)
+  result.maxLength = maxLength
 
 proc withStyles*(
     widget: Input,
@@ -807,28 +752,17 @@ proc withStyles*(
     selection: Style = defaultStyle(),
 ): Input =
   ## Create a copy with different styles
-  Input(
-    state: widget.state,
-    placeholder: widget.placeholder,
-    normalStyle: if normal == defaultStyle(): widget.normalStyle else: normal,
-    focusedStyle: if focused == defaultStyle(): widget.focusedStyle else: focused,
-    placeholderStyle:
-      if placeholder == defaultStyle(): widget.placeholderStyle else: placeholder,
-    cursorStyle: if cursor == defaultStyle(): widget.cursorStyle else: cursor,
-    selectionStyle:
-      if selection == defaultStyle(): widget.selectionStyle else: selection,
-    borderStyle: widget.borderStyle,
-    borderNormalStyle: widget.borderNormalStyle,
-    borderFocusedStyle: widget.borderFocusedStyle,
-    maxLength: widget.maxLength,
-    readOnly: widget.readOnly,
-    password: widget.password,
-    onTextChanged: widget.onTextChanged,
-    onEnter: widget.onEnter,
-    onFocus: widget.onFocus,
-    onBlur: widget.onBlur,
-    onKeyPress: widget.onKeyPress,
-  )
+  result = copyWidget(widget)
+  if normal != defaultStyle():
+    result.normalStyle = normal
+  if focused != defaultStyle():
+    result.focusedStyle = focused
+  if placeholder != defaultStyle():
+    result.placeholderStyle = placeholder
+  if cursor != defaultStyle():
+    result.cursorStyle = cursor
+  if selection != defaultStyle():
+    result.selectionStyle = selection
 
 proc withEventHandlers*(
     widget: Input,
@@ -839,26 +773,17 @@ proc withEventHandlers*(
     onKeyPress: proc(key: KeyEvent): EventResult = nil,
 ): Input =
   ## Create a copy with different event handlers
-  Input(
-    state: widget.state,
-    placeholder: widget.placeholder,
-    normalStyle: widget.normalStyle,
-    focusedStyle: widget.focusedStyle,
-    placeholderStyle: widget.placeholderStyle,
-    cursorStyle: widget.cursorStyle,
-    selectionStyle: widget.selectionStyle,
-    borderStyle: widget.borderStyle,
-    borderNormalStyle: widget.borderNormalStyle,
-    borderFocusedStyle: widget.borderFocusedStyle,
-    maxLength: widget.maxLength,
-    readOnly: widget.readOnly,
-    password: widget.password,
-    onTextChanged: if onTextChanged != nil: onTextChanged else: widget.onTextChanged,
-    onEnter: if onEnter != nil: onEnter else: widget.onEnter,
-    onFocus: if onFocus != nil: onFocus else: widget.onFocus,
-    onBlur: if onBlur != nil: onBlur else: widget.onBlur,
-    onKeyPress: if onKeyPress != nil: onKeyPress else: widget.onKeyPress,
-  )
+  result = copyWidget(widget)
+  if onTextChanged != nil:
+    result.onTextChanged = onTextChanged
+  if onEnter != nil:
+    result.onEnter = onEnter
+  if onFocus != nil:
+    result.onFocus = onFocus
+  if onBlur != nil:
+    result.onBlur = onBlur
+  if onKeyPress != nil:
+    result.onKeyPress = onKeyPress
 
 # Convenience constructors for common input types
 proc passwordInput*(
