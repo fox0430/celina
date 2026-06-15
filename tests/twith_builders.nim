@@ -9,7 +9,7 @@
 import std/unittest
 
 import ../celina/core/[geometry, buffer, colors, events, borders]
-import ../celina/widgets/[button, input]
+import ../celina/widgets/[button, input, tabs, text, list]
 
 proc droppedFields[T](src, dst: T, changed: openArray[string]): seq[string] =
   ## Names of fields that should have been carried over from `src` to `dst`
@@ -69,6 +69,56 @@ proc fullInput(): Input =
     discard
   result.onKeyPress = proc(key: KeyEvent): EventResult =
     erConsume
+
+proc fullTabs(): Tabs =
+  ## A Tabs with every field set to a distinct non-default value.
+  result = newTabs(
+    @[
+      Tab(title: "one", content: newText("c1")),
+      Tab(title: "two", content: newText("c2")),
+    ],
+    activeIndex = 1,
+    position = Bottom,
+    showBorder = false,
+  )
+  result.tabStyle = TabStyle(
+    activeStyle: style(Red),
+    inactiveStyle: style(Green),
+    borderStyle: style(Blue),
+    dividerChar: "|",
+  )
+
+proc fullText(): Text =
+  ## A Text with every field set to a distinct non-default value.
+  newText("source", style(Red), Center, WordWrap)
+
+proc fullList(): List =
+  ## A List with every field set to a distinct non-default value.
+  result = newList(
+    @[listItem("a"), listItem("b")],
+    selectionMode = Multiple,
+    style = ListStyle(
+      normal: style(Red),
+      selected: style(Green),
+      highlighted: style(Blue),
+      disabled: style(Yellow),
+    ),
+    bulletPrefix = "* ",
+    showScrollbar = false,
+    callbacks = ListCallbacks(
+      onSelect: proc(index: int) =
+        discard,
+      onMultiSelect: proc(indices: seq[int]) =
+        discard,
+      onHighlight: proc(index: int) =
+        discard,
+    ),
+  )
+  result.state = Focused
+  result.selectedIndices = @[1]
+  result.highlightedIndex = 1
+  result.scrollOffset = 1
+  result.visibleCount = 4
 
 let noDrop = newSeq[string]()
 
@@ -170,3 +220,68 @@ suite "Builder field preservation (structural)":
       check droppedFields(
         src, src.withEventHandlers(onTextChanged = cb), ["onTextChanged"]
       ) == noDrop
+
+  suite "Tabs builders preserve every other field":
+    test "withStyle changes only tabStyle":
+      let src = fullTabs()
+      check droppedFields(src, src.withStyle(defaultTabStyle()), ["tabStyle"]) == noDrop
+
+    test "withPosition changes only position":
+      let src = fullTabs()
+      check droppedFields(src, src.withPosition(Top), ["position"]) == noDrop
+
+    test "withBorder changes only showBorder":
+      let src = fullTabs()
+      check droppedFields(src, src.withBorder(true), ["showBorder"]) == noDrop
+
+  suite "Text builders preserve every other field":
+    test "withStyle changes only style":
+      let src = fullText()
+      check droppedFields(src, src.withStyle(style(Blue)), ["style"]) == noDrop
+
+    test "withAlignment changes only alignment":
+      let src = fullText()
+      check droppedFields(src, src.withAlignment(Right), ["alignment"]) == noDrop
+
+    test "withWrap changes only wrap":
+      let src = fullText()
+      check droppedFields(src, src.withWrap(CharWrap), ["wrap"]) == noDrop
+
+  suite "List builders preserve every other field":
+    test "withItems changes only items and the derived selection fields":
+      let src = fullList()
+      let dst = src.withItems(@[listItem("x")])
+      check droppedFields(
+        src, dst, ["items", "selectedIndices", "highlightedIndex", "scrollOffset"]
+      ) == noDrop
+
+    test "withSelectionMode changes only mode and selection":
+      let src = fullList()
+      check droppedFields(
+        src, src.withSelectionMode(Single), ["selectionMode", "selectedIndices"]
+      ) == noDrop
+
+    test "withStyles (all overridden) changes only the style fields":
+      let src = fullList()
+      let dst = src.withStyles(
+        normal = style(Black),
+        selected = style(White),
+        highlighted = style(BrightBlack),
+        disabled = style(BrightRed),
+      )
+      check droppedFields(
+        src, dst, ["normalStyle", "selectedStyle", "highlightedStyle", "disabledStyle"]
+      ) == noDrop
+
+    test "withStyles (partial) overrides only the given style":
+      let src = fullList()
+      check droppedFields(src, src.withStyles(normal = style(Black)), ["normalStyle"]) ==
+        noDrop
+
+    test "withBulletPrefix changes only bulletPrefix":
+      let src = fullList()
+      check droppedFields(src, src.withBulletPrefix("- "), ["bulletPrefix"]) == noDrop
+
+    test "withScrollbar changes only showScrollbar":
+      let src = fullList()
+      check droppedFields(src, src.withScrollbar(true), ["showScrollbar"]) == noDrop

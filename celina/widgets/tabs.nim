@@ -492,33 +492,18 @@ method handleEvent*(widget: Tabs, event: Event, area: Rect): EventResult =
 # Builder methods
 proc withStyle*(widget: Tabs, tabStyle: TabStyle): Tabs =
   ## Create a copy with different styling
-  Tabs(
-    tabs: widget.tabs,
-    activeIndex: widget.activeIndex,
-    position: widget.position,
-    tabStyle: tabStyle,
-    showBorder: widget.showBorder,
-  )
+  result = copyWidget(widget)
+  result.tabStyle = tabStyle
 
 proc withPosition*(widget: Tabs, position: TabPosition): Tabs =
   ## Create a copy with different tab position
-  Tabs(
-    tabs: widget.tabs,
-    activeIndex: widget.activeIndex,
-    position: position,
-    tabStyle: widget.tabStyle,
-    showBorder: widget.showBorder,
-  )
+  result = copyWidget(widget)
+  result.position = position
 
 proc withBorder*(widget: Tabs, showBorder: bool): Tabs =
   ## Create a copy with border enabled/disabled
-  Tabs(
-    tabs: widget.tabs,
-    activeIndex: widget.activeIndex,
-    position: widget.position,
-    tabStyle: widget.tabStyle,
-    showBorder: showBorder,
-  )
+  result = copyWidget(widget)
+  result.showBorder = showBorder
 
 # Convenience constructors
 proc simpleTabs*(titles: seq[string], contents: seq[Widget]): Tabs =

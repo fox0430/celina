@@ -189,30 +189,18 @@ method getPreferredSize*(widget: Text, available: Size): Size =
 # Text widget builders and modifiers
 proc withStyle*(widget: Text, style: Style): Text =
   ## Create a copy with different style
-  Text(
-    content: widget.content,
-    style: style,
-    alignment: widget.alignment,
-    wrap: widget.wrap,
-  )
+  result = copyWidget(widget)
+  result.style = style
 
 proc withAlignment*(widget: Text, alignment: Alignment): Text =
   ## Create a copy with different alignment
-  Text(
-    content: widget.content,
-    style: widget.style,
-    alignment: alignment,
-    wrap: widget.wrap,
-  )
+  result = copyWidget(widget)
+  result.alignment = alignment
 
 proc withWrap*(widget: Text, wrap: Wrap): Text =
   ## Create a copy with different wrap mode
-  Text(
-    content: widget.content,
-    style: widget.style,
-    alignment: widget.alignment,
-    wrap: wrap,
-  )
+  result = copyWidget(widget)
+  result.wrap = wrap
 
 # Convenience constructors for common styles
 proc boldText*(content: string, alignment: Alignment = Left): Text =
