@@ -3,7 +3,7 @@
 ## This module provides table widgets for displaying structured data in rows
 ## and columns, with support for headers, selection, scrolling, and styling.
 
-import std/[sequtils, options, strutils]
+import std/[sequtils, options, strutils, unicode]
 
 import base
 import ../core/[geometry, buffer, colors, events, borders]
@@ -581,13 +581,20 @@ proc calculateColumnWidths*(widget: Table, availableWidth: int): seq[int] =
       # Start with minimum width based on header
       result[i] = col.title.displayWidth
 
-  # If total fixed width exceeds available content width, scale down proportionally
+  # If total fixed width exceeds available content width, scale down proportionally.
+  # Fixed columns collapse like flex columns when the area is too narrow; the
+  # final guard below guarantees the total never exceeds contentWidth.
   if totalFixedWidth > contentWidth and totalFixedWidth > 0:
     let scaleFactor = contentWidth.float / totalFixedWidth.float
     for i, col in widget.columns:
       if col.width.isSome:
-        result[i] = max(3, int(result[i].float * scaleFactor))
-          # Minimum 3 chars per column
+        result[i] = int(result[i].float * scaleFactor)
+
+  # Footprint of the fixed columns after any scaling above.
+  var fixedWidth = 0
+  for i, col in widget.columns:
+    if col.width.isSome:
+      fixedWidth += result[i]
 
   # Calculate minimum widths for flex columns based on content
   for colIndex in flexColumns:
@@ -595,13 +602,39 @@ proc calculateColumnWidths*(widget: Table, availableWidth: int): seq[int] =
       if colIndex < row.cells.len:
         result[colIndex] = max(result[colIndex], row.cells[colIndex].displayWidth)
 
-  # Distribute remaining width among flex columns
-  let remainingWidth =
-    contentWidth - totalFixedWidth - flexColumns.mapIt(result[it]).foldl(a + b, 0)
-  if remainingWidth > 0 and flexColumns.len > 0:
-    let additionalWidth = remainingWidth div flexColumns.len
-    for colIndex in flexColumns:
-      result[colIndex] += additionalWidth
+  # Fit the flexible columns into the width left over after the fixed columns.
+  if flexColumns.len > 0:
+    let flexBudget = max(0, contentWidth - fixedWidth)
+    let flexContentWidth = flexColumns.mapIt(result[it]).foldl(a + b, 0)
+    if flexContentWidth > flexBudget:
+      # Content is wider than the space available: scale the flex columns down
+      # proportionally so the table stays inside its area instead of growing to
+      # fit the content and overrunning the widget bounds. Columns that no
+      # longer fit collapse to zero and are dropped from the render.
+      if flexContentWidth > 0:
+        let scaleFactor = flexBudget.float / flexContentWidth.float
+        for colIndex in flexColumns:
+          result[colIndex] = max(0, int(result[colIndex].float * scaleFactor))
+    else:
+      # Spare room: distribute it evenly among the flex columns.
+      let additionalWidth = (flexBudget - flexContentWidth) div flexColumns.len
+      for colIndex in flexColumns:
+        result[colIndex] += additionalWidth
+
+  # Final guard: rounding and the per-column minimum on fixed columns can still
+  # leave the total over the content width. Trim the widest column (dropping it
+  # entirely if need be) until the row fits, so the computed widths never imply
+  # a table wider than its area no matter how wide the cell content is.
+  var usedWidth = result.foldl(a + b, 0)
+  while usedWidth > contentWidth:
+    var widest = -1
+    for i in 0 ..< result.len:
+      if result[i] > 0 and (widest == -1 or result[i] > result[widest]):
+        widest = i
+    if widest == -1:
+      break # every column already collapsed to zero
+    result[widest].dec
+    usedWidth.dec
 
 proc calculateTotalLineWidth*(
     columnWidths: seq[int], columnSpacing: int, hasBorders: bool
@@ -612,7 +645,15 @@ proc calculateTotalLineWidth*(
   if visibleColumns.len > 1:
     result += (visibleColumns.len - 1) * columnSpacing
   if hasBorders:
-    result += visibleColumns.len + 1 # Left border + vertical separators + right border
+    # Left border + one separator between each pair of visible columns + right
+    # border. With no visible columns the line is still the two outer borders
+    # (matching the degenerate `topLeft & topRight` the border rows emit), so
+    # the minimum is 2 — never 1, which would make the empty-row width math
+    # below go negative.
+    if visibleColumns.len == 0:
+      result += 2
+    else:
+      result += visibleColumns.len + 1
 
 proc formatCell*(content: string, width: int, alignment: ColumnAlignment): string =
   ## Format a cell's content within the given width
@@ -634,11 +675,59 @@ proc formatCell*(content: string, width: int, alignment: ColumnAlignment): strin
     let rightPad = padding - leftPad
     " ".repeat(leftPad) & content & " ".repeat(rightPad)
 
+proc hasVisibleColumnAfter(columnWidths: seq[int], index: int): bool =
+  ## True when some column after `index` is still visible (width > 0). The last
+  ## *visible* column gets no trailing spacing/separator even when later columns
+  ## exist but have collapsed to zero width. Keying the separators off this
+  ## (rather than the raw index) keeps the rendered line width in step with
+  ## `calculateTotalLineWidth`, which counts separators per visible column — so
+  ## the scrollbar lands on the real right border and no dangling separator is
+  ## drawn before it.
+  for j in index + 1 ..< columnWidths.len:
+    if columnWidths[j] > 0:
+      return true
+  false
+
+proc drawClipped(b: var Buffer, x, y: int, area: Rect, text: string, style: Style) =
+  ## Write `text` on row `y`, clipped to `area`. A row outside the vertical span
+  ## `[area.y, area.bottom)` is dropped whole; within a row, runes outside the
+  ## column range `[area.x, area.right)` — and any wide rune straddling an edge —
+  ## are dropped. This keeps the table strictly inside the area it was handed:
+  ## border glyphs, rounding, a collapsed scrollbar position, or a line that
+  ## doesn't fit the remaining height can no longer spill past any edge and
+  ## corrupt the neighbouring widgets that share the screen buffer.
+  let leftEdge = area.x
+  let rightEdge = area.right
+  if text.len == 0 or leftEdge >= rightEdge or x >= rightEdge:
+    return
+  if y < area.y or y >= area.bottom:
+    return
+  var col = x
+  var drawX = -1
+  var visible = ""
+  for r in text.runes:
+    let w = runeWidth(r)
+    if col >= rightEdge or col + w > rightEdge:
+      break # this (possibly wide) rune would spill past the right edge
+    if col >= leftEdge:
+      if drawX < 0:
+        drawX = col
+      visible.add($r)
+    # runes left of (or straddling) leftEdge are dropped
+    col += w
+  if drawX >= 0 and visible.len > 0:
+    b.setString(drawX, y, visible, style)
+
 # Table widget methods
 method render*(widget: Table, area: Rect, buf: var Buffer) =
   ## Render the table widget
   if area.isEmpty or widget.columns.len == 0:
     return
+
+  # All table drawing goes through `emit`, which clips every write to `area`
+  # (both axes) so nothing can ever spill past the rectangle the table was given.
+  template emit(ex, ey: int, text: string, st: Style) =
+    drawClipped(buf, ex, ey, area, text, st)
 
   let columnWidths = widget.calculateColumnWidths(area.width)
   let borderChars = getBorderChars(widget.borderStyle)
@@ -656,11 +745,11 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
     for i, width in columnWidths:
       if width > 0:
         borderLine.add(borderChars.horizontal.repeat(width))
-        if i < columnWidths.len - 1:
+        if hasVisibleColumnAfter(columnWidths, i):
           borderLine.add(borderChars.horizontal.repeat(widget.columnSpacing))
           borderLine.add(borderChars.topT)
     borderLine.add(borderChars.topRight)
-    buf.setString(area.x, currentY, borderLine, widget.borderColor)
+    emit(area.x, currentY, borderLine, widget.borderColor)
     currentY += 1
 
   # Render header if enabled
@@ -670,7 +759,7 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
 
     # Render left border
     if hasBorders:
-      buf.setString(currentX, currentY, borderChars.vertical, widget.borderColor)
+      emit(currentX, currentY, borderChars.vertical, widget.borderColor)
       currentX += 1
 
     # Render each header cell with proper styling
@@ -682,22 +771,20 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
             col.style.get()
           else:
             widget.headerStyle
-        buf.setString(currentX, currentY, cellContent, cellStyle)
+        emit(currentX, currentY, cellContent, cellStyle)
         currentX += columnWidths[i]
 
         # Render column spacing and separator
-        if i < widget.columns.len - 1:
-          buf.setString(
-            currentX, currentY, " ".repeat(widget.columnSpacing), widget.headerStyle
-          )
+        if hasVisibleColumnAfter(columnWidths, i):
+          emit(currentX, currentY, " ".repeat(widget.columnSpacing), widget.headerStyle)
           currentX += widget.columnSpacing
           if hasBorders:
-            buf.setString(currentX, currentY, borderChars.vertical, widget.borderColor)
+            emit(currentX, currentY, borderChars.vertical, widget.borderColor)
             currentX += 1
 
     # Render right border
     if hasBorders:
-      buf.setString(currentX, currentY, borderChars.vertical, widget.borderColor)
+      emit(currentX, currentY, borderChars.vertical, widget.borderColor)
 
     currentY += 1
 
@@ -707,11 +794,11 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
       for i, width in columnWidths:
         if width > 0:
           separatorLine.add(borderChars.horizontal.repeat(width))
-          if i < columnWidths.len - 1:
+          if hasVisibleColumnAfter(columnWidths, i):
             separatorLine.add(borderChars.horizontal.repeat(widget.columnSpacing))
             separatorLine.add(borderChars.cross)
       separatorLine.add(borderChars.rightT)
-      buf.setString(area.x, currentY, separatorLine, widget.borderColor)
+      emit(area.x, currentY, separatorLine, widget.borderColor)
       currentY += 1
 
   # Calculate visible row area
@@ -758,19 +845,20 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
 
       if hasBorders:
         emptyLine =
-          borderChars.vertical & " ".repeat(expectedWidth - 2) & borderChars.vertical
+          borderChars.vertical & " ".repeat(max(0, expectedWidth - 2)) &
+          borderChars.vertical
       else:
         emptyLine = " ".repeat(expectedWidth)
 
-      buf.setString(area.x, currentY, emptyLine, widget.normalRowStyle)
+      emit(area.x, currentY, emptyLine, widget.normalRowStyle)
 
       # Render scrollbar for empty row (inside the border)
       if needsScrollbar:
         let relativeY = i
         if relativeY >= scrollbarPos and relativeY < scrollbarPos + scrollbarThumbSize:
-          buf.setString(scrollbarX, currentY, "█", style(BrightBlack))
+          emit(scrollbarX, currentY, "█", style(BrightBlack))
         else:
-          buf.setString(scrollbarX, currentY, "│", style(BrightBlack))
+          emit(scrollbarX, currentY, "│", style(BrightBlack))
 
       currentY += 1
       continue
@@ -801,7 +889,7 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
 
     # Render left border
     if hasBorders:
-      buf.setString(currentX, currentY, borderChars.vertical, widget.borderColor)
+      emit(currentX, currentY, borderChars.vertical, widget.borderColor)
       currentX += 1
 
     # Render each data cell with proper styling
@@ -819,28 +907,28 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
             row.style.get()
           else:
             rowStyle
-        buf.setString(currentX, currentY, cellContent, cellStyle)
+        emit(currentX, currentY, cellContent, cellStyle)
         currentX += columnWidths[colIndex]
 
         # Render column spacing and separator
-        if colIndex < widget.columns.len - 1:
-          buf.setString(currentX, currentY, " ".repeat(widget.columnSpacing), cellStyle)
+        if hasVisibleColumnAfter(columnWidths, colIndex):
+          emit(currentX, currentY, " ".repeat(widget.columnSpacing), cellStyle)
           currentX += widget.columnSpacing
           if hasBorders:
-            buf.setString(currentX, currentY, borderChars.vertical, widget.borderColor)
+            emit(currentX, currentY, borderChars.vertical, widget.borderColor)
             currentX += 1
 
     # Render scrollbar for data rows (before right border so it appears inside)
     if needsScrollbar:
       let relativeY = i
       if relativeY >= scrollbarPos and relativeY < scrollbarPos + scrollbarThumbSize:
-        buf.setString(scrollbarX, currentY, "█", style(BrightBlack))
+        emit(scrollbarX, currentY, "█", style(BrightBlack))
       else:
-        buf.setString(scrollbarX, currentY, "│", style(BrightBlack))
+        emit(scrollbarX, currentY, "│", style(BrightBlack))
 
     # Render right border
     if hasBorders:
-      buf.setString(currentX, currentY, borderChars.vertical, widget.borderColor)
+      emit(currentX, currentY, borderChars.vertical, widget.borderColor)
 
     currentY += 1
 
@@ -850,11 +938,11 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
     for i, width in columnWidths:
       if width > 0:
         borderLine.add(borderChars.horizontal.repeat(width))
-        if i < columnWidths.len - 1:
+        if hasVisibleColumnAfter(columnWidths, i):
           borderLine.add(borderChars.horizontal.repeat(widget.columnSpacing))
           borderLine.add(borderChars.bottomT)
     borderLine.add(borderChars.bottomRight)
-    buf.setString(area.x, currentY, borderLine, widget.borderColor)
+    emit(area.x, currentY, borderLine, widget.borderColor)
 
 method getMinSize*(widget: Table): Size =
   ## Get minimum size for table widget

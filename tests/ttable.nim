@@ -2,7 +2,7 @@
 
 import std/[unittest, sequtils, options, strformat]
 
-import ../celina/core/[geometry, colors]
+import ../celina/core/[geometry, colors, buffer]
 import ../celina/widgets/table {.all.}
 
 suite "Table Widget Tests":
@@ -383,17 +383,21 @@ suite "Table Widget Tests":
     # Test edge cases in column width calculation
     var tableWidget = newTable(@[column("A"), column("B"), column("C")])
 
-    # Test with very small available width
+    # Test with very small available width: columns shrink but the table still
+    # fits inside the area (10 is just wide enough for 3 single-char columns).
     let smallWidths = tableWidget.calculateColumnWidths(10)
     check:
       smallWidths.len == 3
-      smallWidths.allIt(it >= 1) # All columns should get at least 1 character
+      smallWidths.allIt(it >= 1) # All columns still get at least 1 character
+      calculateTotalLineWidth(smallWidths, tableWidget.columnSpacing, true) <= 10
 
-    # Test with no available width for content (just borders)
-    let tinyWidths = tableWidget.calculateColumnWidths(4) # Just enough for borders
+    # Test with no room for content (just borders). Columns that cannot fit
+    # collapse to zero rather than overflowing the area.
+    let tinyWidths = tableWidget.calculateColumnWidths(4)
     check:
       tinyWidths.len == 3
-      tinyWidths.allIt(it >= 1)
+      tinyWidths.allIt(it >= 0)
+      calculateTotalLineWidth(tinyWidths, tableWidget.columnSpacing, true) <= 4
 
     # Test with mixed fixed and auto columns
     let mixedColumns = @[column("Fixed", 15), column("Auto1"), column("Auto2")]
@@ -403,6 +407,118 @@ suite "Table Widget Tests":
       mixedWidths[0] == 15 # Fixed width maintained
       mixedWidths[1] > 0 # Auto columns get remaining space
       mixedWidths[2] > 0
+      # Like the other cases, the line must stay within the available width so a
+      # regression in the fixed/flex scaling math cannot slip past unnoticed.
+      calculateTotalLineWidth(mixedWidths, tableWidget.columnSpacing, true) <= 50
+
+    # Fixed columns collapse like flex columns when the area is too narrow,
+    # rather than being clamped to an artificial minimum that the final guard
+    # would only have to trim away.
+    let fixedColumns = @[column("A", 10), column("B", 10), column("C", 10)]
+    tableWidget = newTable(fixedColumns)
+    for areaWidth in [4, 6, 8, 10, 12]:
+      let widths = tableWidget.calculateColumnWidths(areaWidth)
+      let lineWidth = calculateTotalLineWidth(widths, tableWidget.columnSpacing, true)
+      check:
+        widths.allIt(it >= 0)
+        lineWidth <= areaWidth
+
+  test "Wide content does not overflow the area width":
+    # Regression: flexible columns used to grow to fit the widest cell with no
+    # upper bound, so content far wider than the area produced a table line that
+    # ran well past the widget bounds. Column widths must now stay within the
+    # available width regardless of how long the cell content is.
+    let columns = @[column("Name"), column("Description")]
+    let rows = @[
+      tableRow(
+        @[
+          "Alice",
+          "A very very long description that far exceeds the available area width",
+        ]
+      ),
+      tableRow(@["Bob", "Another extremely long piece of content for this row entry"]),
+    ]
+    var tableWidget = newTable(columns, rows)
+
+    # Includes areas narrower than (columns * 3), where columns must collapse
+    # rather than overflow.
+    for areaWidth in [3, 5, 8, 12, 20, 40, 60]:
+      let widths = tableWidget.calculateColumnWidths(areaWidth)
+      let hasBorders = tableWidget.borderStyle != bkNone
+      let lineWidth =
+        calculateTotalLineWidth(widths, tableWidget.columnSpacing, hasBorders)
+      check:
+        widths.allIt(it >= 0)
+        lineWidth <= areaWidth
+
+  test "Wide content does not draw past the widget area on render":
+    # Render tables with very wide cells into sub-regions of a larger buffer,
+    # including pathologically narrow areas, short areas, and a non-zero origin,
+    # and confirm nothing is ever written outside the table's area rectangle.
+    let columns = @[column("Name"), column("Description")]
+    let rows = @[
+      tableRow(@["Alice", "A description that is far wider than the table area"]),
+      tableRow(@["Bob", "Yet another overly long cell value used for this row"]),
+    ]
+
+    # Short heights (1..3) exercise the vertical clip: with borders the header
+    # separator and bottom border can land below a tiny area, so clipping must
+    # apply on the y axis as well as on x.
+    for areaWidth in [3, 5, 8, 12, 24]:
+      for areaHeight in [1, 2, 3, 5]:
+        var tableWidget = newTable(columns, rows)
+        var buf = newBuffer(60, 8)
+        let area = rect(2, 1, areaWidth, areaHeight) # offset origin + narrow width
+        tableWidget.render(area, buf)
+
+        # Every cell outside the area rectangle must remain untouched (a space).
+        for y in 0 ..< buf.area.height:
+          for x in 0 ..< buf.area.width:
+            if x < area.x or x >= area.x + area.width or y < area.y or
+                y >= area.y + area.height:
+              check buf[x, y].symbol == " "
+
+  test "Render does not crash when all columns collapse with empty rows":
+    # Regression: when the area is too narrow for any column, every column
+    # collapses to width 0. With borders and more visible row slots than data
+    # rows, the empty-row path built `repeat(expectedWidth - 2)` with
+    # expectedWidth == 1, raising a RangeDefect. It must now render cleanly.
+    let tableWidget =
+      newTable(@[column("A"), column("B"), column("C")], @[tableRow(@["x", "y", "z"])])
+    let area = rect(0, 0, 3, 10) # width 3 collapses all columns; height 10 => empty rows
+    check tableWidget.calculateColumnWidths(area.width).allIt(it == 0)
+
+    var buf = newBuffer(40, 12)
+    tableWidget.render(area, buf) # must not raise
+
+    # Nothing escapes the (degenerate) area.
+    for y in 0 ..< buf.area.height:
+      for x in 0 ..< buf.area.width:
+        if x < area.x or x >= area.right or y < area.y or y >= area.bottom:
+          check buf[x, y].symbol == " "
+
+  test "Trailing collapsed columns do not draw a dangling separator":
+    # A wide fixed column forces the trailing columns to collapse to zero at a
+    # narrow width. The rendered line must be exactly calculateTotalLineWidth
+    # wide: no separator drawn past the last visible column (which would also
+    # push the scrollbar off the real right border).
+    let columns = @[column("Wide", 12), column("B"), column("C")]
+    let rows = @[tableRow(@["wwwwwwwwwwww", "b", "c"])]
+    let tableWidget = newTable(columns, rows)
+    let area = rect(0, 0, 16, 6)
+    let widths = tableWidget.calculateColumnWidths(area.width)
+    check (widths[1] == 0 and widths[2] == 0) # trailing columns collapsed
+    let expected = calculateTotalLineWidth(widths, tableWidget.columnSpacing, true)
+
+    var buf = newBuffer(20, 6)
+    tableWidget.render(area, buf)
+
+    # Width actually drawn on the top border row = rightmost non-blank column + 1.
+    var drawnRight = -1
+    for x in 0 ..< buf.area.width:
+      if buf[x, area.y].symbol != "" and buf[x, area.y].symbol != " ":
+        drawnRight = x
+    check drawnRight + 1 == expected
 
   test "Separator rendering condition":
     # Test the separator rendering logic (fixes the missing 5th column issue)
