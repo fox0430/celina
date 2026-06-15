@@ -558,6 +558,34 @@ suite "Input Widget Tests":
         input.onEnter("test")
         check enterPressed == true
 
+    test "Builders preserve border fields":
+      let styled = InputStyle(
+        normal: style(White, Reset),
+        focused: style(White, Blue),
+        placeholder: style(BrightBlack, Reset),
+        cursor: style(Black, White),
+        selection: style(White, BrightBlue),
+        borderNormal: style(Red, Reset),
+        borderFocused: style(Green, Reset),
+      )
+      let base = newInput("ph", style = styled, border = bkSingle)
+      check base.borderStyle == bkSingle
+
+      let derived = [
+        base.withText("hi"),
+        base.withPlaceholder("new"),
+        base.withMaxLength(5),
+        base.withStyles(normal = style(Cyan, Black)),
+        base.withEventHandlers(
+          onEnter = proc(text: string) =
+            discard
+        ),
+      ]
+      for input in derived:
+        check input.borderStyle == bkSingle
+        check input.borderNormalStyle == style(Red, Reset)
+        check input.borderFocusedStyle == style(Green, Reset)
+
   suite "Text Changed Callback Tests":
     test "Text changed on setText":
       var changedText = ""
