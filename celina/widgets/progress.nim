@@ -626,21 +626,24 @@ proc setColors*(widget: ProgressBar, colors: ProgressColors) =
   widget.textStyle = colors.text
   widget.percentageStyle = colors.percentage
 
-# Builder methods for fluent API (returns self for chaining)
+# Builder methods for fluent API (each returns an independent copy)
 proc withValue*(widget: ProgressBar, value: float): ProgressBar =
-  ## Set value and return self for chaining
-  widget.setValue(value)
-  result = widget
+  ## Create a copy with a different value.
+  ##
+  ## Note: `setValue` is invoked on the copy, so any `onUpdate` callback
+  ## fires for the copy, not the original.
+  result = copyWidget(widget)
+  result.setValue(value)
 
 proc withLabel*(widget: ProgressBar, label: string): ProgressBar =
-  ## Set label and return self for chaining
-  widget.label = label
-  result = widget
+  ## Create a copy with a different label
+  result = copyWidget(widget)
+  result.label = label
 
 proc withKind*(widget: ProgressBar, kind: ProgressKind): ProgressBar =
-  ## Set visual kind and return self for chaining
-  widget.kind = kind
-  result = widget
+  ## Create a copy with a different visual kind
+  result = copyWidget(widget)
+  result.kind = kind
 
 proc withStyle*(
     widget: ProgressBar, style: ProgressKind
@@ -648,8 +651,9 @@ proc withStyle*(
   ## Deprecated builder for setting the visual kind (formerly `withStyle`).
   ## Parameter is kept as `style` so legacy `widget.withStyle(style = X)`
   ## named-arg callers keep compiling with just a deprecation warning.
-  widget.kind = style
-  result = widget
+  ## Returns an independent copy.
+  result = copyWidget(widget)
+  result.kind = style
 
 proc withColors*(
     widget: ProgressBar,
@@ -658,46 +662,46 @@ proc withColors*(
     textStyle: Style = defaultStyle(),
     percentageStyle: Style = defaultStyle(),
 ): ProgressBar =
-  ## Set colors and return self for chaining (per-field overload).
-  widget.setColors(barStyle, backgroundStyle, textStyle, percentageStyle)
-  result = widget
+  ## Create a copy with different colors (per-field overload).
+  result = copyWidget(widget)
+  result.setColors(barStyle, backgroundStyle, textStyle, percentageStyle)
 
 proc withColors*(widget: ProgressBar, colors: ProgressColors): ProgressBar =
-  ## Set colors from a `ProgressColors` aggregate and return self for chaining.
-  widget.setColors(colors)
-  result = widget
+  ## Create a copy with colors from a `ProgressColors` aggregate.
+  result = copyWidget(widget)
+  result.setColors(colors)
 
 proc withShowPercentage*(widget: ProgressBar, show: bool): ProgressBar =
-  ## Set percentage display and return self for chaining
-  widget.showPercentage = show
-  result = widget
+  ## Create a copy with a different percentage display setting
+  result = copyWidget(widget)
+  result.showPercentage = show
 
 proc withShowBar*(widget: ProgressBar, show: bool): ProgressBar =
-  ## Set bar display and return self for chaining
-  widget.showBar = show
-  result = widget
+  ## Create a copy with a different bar display setting
+  result = copyWidget(widget)
+  result.showBar = show
 
 proc withShowBrackets*(widget: ProgressBar, show: bool): ProgressBar =
-  ## Set brackets display for Hash style and return self for chaining
-  widget.showBrackets = show
-  result = widget
+  ## Create a copy with a different brackets display setting for Hash style
+  result = copyWidget(widget)
+  result.showBrackets = show
 
 proc withCustomChars*(
     widget: ProgressBar, filled, empty, partial: string
 ): ProgressBar =
-  ## Set custom characters and return self for chaining
-  widget.setCustomChars(filled, empty, partial)
-  result = widget
+  ## Create a copy with different custom characters
+  result = copyWidget(widget)
+  result.setCustomChars(filled, empty, partial)
 
 proc withMinWidth*(widget: ProgressBar, minWidth: int): ProgressBar =
-  ## Set minimum width and return self for chaining
-  widget.minWidth = minWidth
-  result = widget
+  ## Create a copy with a different minimum width
+  result = copyWidget(widget)
+  result.minWidth = minWidth
 
 proc withOnUpdate*(widget: ProgressBar, callback: proc(value: float)): ProgressBar =
-  ## Set update callback and return self for chaining
-  widget.onUpdate = callback
-  result = widget
+  ## Create a copy with a different update callback
+  result = copyWidget(widget)
+  result.onUpdate = callback
 
 # Convenience constructors for common progress bar types
 proc simpleProgressBar*(value: float = 0.0, label: string = ""): ProgressBar =

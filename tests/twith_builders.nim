@@ -9,7 +9,7 @@
 import std/unittest
 
 import ../celina/core/[geometry, buffer, colors, events, borders]
-import ../celina/widgets/[button, input, tabs, text, list]
+import ../celina/widgets/[button, input, tabs, text, list, progress]
 
 proc droppedFields[T](src, dst: T, changed: openArray[string]): seq[string] =
   ## Names of fields that should have been carried over from `src` to `dst`
@@ -119,6 +119,21 @@ proc fullList(): List =
   result.highlightedIndex = 1
   result.scrollOffset = 1
   result.visibleCount = 4
+
+proc fullProgressBar(): ProgressBar =
+  ## A ProgressBar with every field set to a distinct non-default value.
+  result = newProgressBar(0.42, "source")
+  result.setCustomChars("F", "E", "P") # also sets kind = pkCustom
+  result.barStyle = style(Red)
+  result.backgroundStyle = style(Green)
+  result.textStyle = style(Blue)
+  result.percentageStyle = style(Yellow)
+  result.showPercentage = false
+  result.showBar = false
+  result.showBrackets = false
+  result.minWidth = 7
+  result.onUpdate = proc(value: float) =
+    discard
 
 let noDrop = newSeq[string]()
 
@@ -285,3 +300,73 @@ suite "Builder field preservation (structural)":
     test "withScrollbar changes only showScrollbar":
       let src = fullList()
       check droppedFields(src, src.withScrollbar(true), ["showScrollbar"]) == noDrop
+
+  suite "ProgressBar builders preserve every other field":
+    test "withValue changes only value":
+      let src = fullProgressBar()
+      check droppedFields(src, src.withValue(0.84), ["value"]) == noDrop
+
+    test "withLabel changes only label":
+      let src = fullProgressBar()
+      check droppedFields(src, src.withLabel("changed"), ["label"]) == noDrop
+
+    test "withKind changes only kind and its character fields":
+      let src = fullProgressBar()
+      check droppedFields(
+        src, src.withKind(pkLine), ["kindVal", "filledChar", "emptyChar", "fillChar"]
+      ) == noDrop
+
+    test "withColors (per-field, all overridden) changes only the color fields":
+      let src = fullProgressBar()
+      let dst = src.withColors(
+        barStyle = style(Black),
+        backgroundStyle = style(White),
+        textStyle = style(BrightBlack),
+        percentageStyle = style(BrightRed),
+      )
+      check droppedFields(
+        src, dst, ["barStyle", "backgroundStyle", "textStyle", "percentageStyle"]
+      ) == noDrop
+
+    test "withColors (aggregate) changes only the color fields":
+      let src = fullProgressBar()
+      let colors = ProgressColors(
+        bar: style(Black),
+        background: style(White),
+        text: style(BrightBlack),
+        percentage: style(BrightRed),
+      )
+      check droppedFields(
+        src,
+        src.withColors(colors),
+        ["barStyle", "backgroundStyle", "textStyle", "percentageStyle"],
+      ) == noDrop
+
+    test "withShowPercentage changes only showPercentage":
+      let src = fullProgressBar()
+      check droppedFields(src, src.withShowPercentage(true), ["showPercentage"]) ==
+        noDrop
+
+    test "withShowBar changes only showBar":
+      let src = fullProgressBar()
+      check droppedFields(src, src.withShowBar(true), ["showBar"]) == noDrop
+
+    test "withShowBrackets changes only showBrackets":
+      let src = fullProgressBar()
+      check droppedFields(src, src.withShowBrackets(true), ["showBrackets"]) == noDrop
+
+    test "withCustomChars changes only the character fields":
+      let src = fullProgressBar()
+      check droppedFields(
+        src, src.withCustomChars("X", "Y", "Z"), ["filledChar", "emptyChar", "fillChar"]
+      ) == noDrop
+
+    test "withMinWidth changes only minWidth":
+      let src = fullProgressBar()
+      check droppedFields(src, src.withMinWidth(11), ["minWidth"]) == noDrop
+
+    test "withOnUpdate changes only onUpdate":
+      let src = fullProgressBar()
+      let cb = proc(value: float) =
+        discard
+      check droppedFields(src, src.withOnUpdate(cb), ["onUpdate"]) == noDrop
