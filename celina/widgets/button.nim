@@ -396,6 +396,11 @@ proc withText*(widget: Button, text: string): Button =
     minWidth: widget.minWidth,
     padding: widget.padding,
     onClick: widget.onClick,
+    onMouseEnter: widget.onMouseEnter,
+    onMouseLeave: widget.onMouseLeave,
+    onFocus: widget.onFocus,
+    onBlur: widget.onBlur,
+    onKeyPress: widget.onKeyPress,
   )
 
 proc withStyles*(
@@ -419,6 +424,11 @@ proc withStyles*(
     minWidth: widget.minWidth,
     padding: widget.padding,
     onClick: widget.onClick,
+    onMouseEnter: widget.onMouseEnter,
+    onMouseLeave: widget.onMouseLeave,
+    onFocus: widget.onFocus,
+    onBlur: widget.onBlur,
+    onKeyPress: widget.onKeyPress,
   )
 
 proc withPadding*(widget: Button, padding: int): Button =
@@ -435,6 +445,11 @@ proc withPadding*(widget: Button, padding: int): Button =
     minWidth: widget.minWidth,
     padding: padding,
     onClick: widget.onClick,
+    onMouseEnter: widget.onMouseEnter,
+    onMouseLeave: widget.onMouseLeave,
+    onFocus: widget.onFocus,
+    onBlur: widget.onBlur,
+    onKeyPress: widget.onKeyPress,
   )
 
 proc withMinWidth*(widget: Button, minWidth: int): Button =
@@ -451,6 +466,11 @@ proc withMinWidth*(widget: Button, minWidth: int): Button =
     minWidth: minWidth,
     padding: widget.padding,
     onClick: widget.onClick,
+    onMouseEnter: widget.onMouseEnter,
+    onMouseLeave: widget.onMouseLeave,
+    onFocus: widget.onFocus,
+    onBlur: widget.onBlur,
+    onKeyPress: widget.onKeyPress,
   )
 
 proc withOnClick*(widget: Button, onClick: proc()): Button =

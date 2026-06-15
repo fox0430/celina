@@ -281,6 +281,60 @@ suite "Button Widget Tests":
       newBtn.setState(Focused)
       check focusCalled == true
 
+    test "Builders preserve all callbacks":
+      var enterCalled = false
+      var leaveCalled = false
+      var focusCalled = false
+      var blurCalled = false
+      var keyHandled = false
+      let base = newButton(
+        "Base",
+        callbacks = ButtonCallbacks(
+          onMouseEnter: proc() =
+            enterCalled = true,
+          onMouseLeave: proc() =
+            leaveCalled = true,
+          onFocus: proc() =
+            focusCalled = true,
+          onBlur: proc() =
+            blurCalled = true,
+          onKeyPress: proc(key: KeyEvent): EventResult =
+            keyHandled = true
+            erConsume,
+        ),
+      )
+
+      let derived = [
+        base.withText("New"),
+        base.withStyles(normal = style(Red, Black)),
+        base.withPadding(3),
+        base.withMinWidth(10),
+      ]
+      for btn in derived:
+        check btn.onMouseEnter != nil
+        check btn.onMouseLeave != nil
+        check btn.onFocus != nil
+        check btn.onBlur != nil
+        check btn.onKeyPress != nil
+
+      # Confirm the preserved callbacks are the originals, not stubs.
+      enterCalled = false
+      leaveCalled = false
+      focusCalled = false
+      blurCalled = false
+      keyHandled = false
+      let b = base.withText("New")
+      b.onMouseEnter()
+      b.onMouseLeave()
+      b.onFocus()
+      b.onBlur()
+      check b.onKeyPress(KeyEvent(code: Enter, char: "", modifiers: {})) == erConsume
+      check enterCalled
+      check leaveCalled
+      check focusCalled
+      check blurCalled
+      check keyHandled
+
   suite "Button Focus Tests":
     test "Button can focus when enabled":
       let btn = newButton("Test")
