@@ -6,6 +6,9 @@
 import std/[options, posix, selectors]
 
 import async_backend
+from ../core/terminal_common import
+  WriteOutcome, classifyWriteResult, WriteWaitOutcome, pollWritable, WriteBlockedWaitMs,
+  WriteMaxBlockedWaits
 
 type
   AsyncIOError* = object of CatchableError
@@ -197,13 +200,87 @@ proc readStdinAsync*(
 # Async Output Functions
 
 proc writeStdoutAsync*(data: string): Future[int] {.async.} =
-  ## Write data to stdout asynchronously
-  await sleepMs(0) # Yield to other tasks
+  ## Write data to stdout asynchronously.
+  ##
+  ## Loops until every byte is written so a short `write(2)` can't leave a
+  ## multi-byte escape sequence half-emitted (which corrupts terminal state).
+  ## On EAGAIN it asks `pollWritable` whether stdout has drained or gone away
+  ## (POLLHUP/POLLERR) and yields cooperatively via `await sleepMs` between
+  ## attempts, so it neither busy-spins nor blocks the event loop. It gives up
+  ## only after `WriteMaxBlockedWaits` consecutive attempts make no progress
+  ## (≈2s on a wedged tty) or on a hard error, so ordinary flow control never
+  ## truncates output. Returns the number of bytes written: `data.len` on
+  ## success, or a short count if it gives up before the data is fully flushed.
+  ##
+  ## This is the async twin of `writeWithRetry` in core/terminal.nim; the two
+  ## share the same EINTR/EAGAIN/short-write contract and retry policy (the
+  ## constants in terminal_common) but differ in how they wait — this one yields
+  ## via `await sleepMs`, the sync version blocks in `pollWritable` — so keep
+  ## their policy in sync when changing either.
+  ##
+  ## TODO: Multiple concurrent calls can interleave bytes on stdout and corrupt
+  ## terminal state. Serialize all async stdout writes through a single queue or
+  ## lock so escape sequences from different tasks never mix.
+  ##
+  ## TODO: Callers currently ignore the short-count return value when the loop
+  ## gives up. Consider surfacing partial-write failures via a result type,
+  ## exception, or debug log so the application knows output was truncated.
 
+  var
+    total = 0
+    blockedWaits = 0
+  let fd = STDOUT_FILENO.cint
+
+  # An empty `data` never enters the loop, so `result` stays 0; no special case
+  # needed. `unsafeAddr data[total]` is only evaluated once `total < data.len`,
+  # so it is never taken on an empty string.
   try:
-    result = posix.write(STDOUT_FILENO.cint, cstring(data), data.len.cint).int
+    while total < data.len:
+      let n = posix.write(fd, unsafeAddr data[total], data.len - total).int
+
+      case classifyWriteResult(n)
+      of woProgress:
+        total += n
+        blockedWaits = 0
+      of woInterrupted:
+        # Interrupted before writing anything. Yield before retrying so a signal
+        # storm (e.g. SIGWINCH during a resize drag) can't starve the event
+        # loop, and count it so a relentless storm can't loop forever.
+        inc blockedWaits
+        if blockedWaits >= WriteMaxBlockedWaits:
+          break
+        await sleepMs(0)
+      of woWouldBlock:
+        # Non-blocking stdout not ready (its open file description shares stdin's
+        # O_NONBLOCK when fd 0/1 point at the same tty). Wait for it to drain
+        # instead of dropping data mid-escape-sequence: probe whether the fd has
+        # become writable or gone away, then yield. Give up only after
+        # WriteMaxBlockedWaits consecutive no-progress waits (steady drainage
+        # resets the counter via woProgress), so a flow-controlled terminal
+        # never truncates output yet a permanently wedged fd can't hang forever.
+        inc blockedWaits
+        if blockedWaits >= WriteMaxBlockedWaits:
+          break
+        case pollWritable(fd, 0) # non-blocking probe; never blocks the event loop
+        of wwError:
+          # stdout went away (POLLHUP/POLLERR); stop and report bytes sent.
+          break
+        of wwWritable:
+          # Writable again: yield once and retry promptly.
+          await sleepMs(0)
+        of wwNotReady:
+          # Still full: back off cooperatively before re-probing the fd.
+          await sleepMs(WriteBlockedWaitMs)
+      of woHardError:
+        # Hard error, or a 0-byte write we can't make progress on. Stop and
+        # report how much actually made it out.
+        break
   except CatchableError:
-    result = 0
+    # Preserve the old contract of never raising out of this proc: report
+    # however many bytes already made it out.
+    discard
+
+  result = total
 
 proc flushStdoutAsync*(): Future[void] {.async.} =
   ## Flush stdout asynchronously

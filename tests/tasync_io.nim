@@ -55,8 +55,16 @@ suite "AsyncIO Buffer Operations":
 
 suite "Async Output Functions":
   test "writeStdoutAsync writes data":
+    # Reports the full byte count, not a partial single-write result.
     let bytesWritten = waitFor writeStdoutAsync(".")
-    check(bytesWritten >= 0)
+    check(bytesWritten == 1)
+
+  test "writeStdoutAsync writes a multi-byte payload in full":
+    # The loop must complete a short write rather than returning one write()'s
+    # partial count, so the whole length comes back.
+    let payload = "abcdefghij"
+    let bytesWritten = waitFor writeStdoutAsync(payload)
+    check(bytesWritten == payload.len)
 
   test "writeStdoutAsync with empty string":
     let bytesWritten = waitFor writeStdoutAsync("")

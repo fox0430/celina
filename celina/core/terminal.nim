@@ -182,54 +182,68 @@ proc disableRawMode*(terminal: Terminal) =
 
 # Safe write helper that handles EAGAIN
 proc writeWithRetry(data: string): bool =
-  ## Write data with retry logic for EAGAIN/EINTR errors
-  ## Returns true if successful, false if failed
-  ## This is a low-level helper that handles transient I/O errors
+  ## Write data with retry logic for EAGAIN/EINTR errors.
+  ## Returns true once every byte is written, false if it gives up.
+  ## This is a low-level helper that handles transient I/O errors.
+  ##
+  ## On EAGAIN it waits for stdout to become writable via `pollWritable` rather
+  ## than dropping data mid-escape-sequence — stdout can be non-blocking when
+  ## fd 0/1 share an open file description and raw mode pinned stdin O_NONBLOCK.
+  ## It gives up only after `WriteMaxBlockedWaits` consecutive waits make no
+  ## progress, so a wedged tty cannot hang the caller while ordinary flow
+  ## control never truncates output. Shares its retry policy (the constants in
+  ## terminal_common) with the async `writeStdoutAsync`; keep the two in sync.
 
-  # Early return for empty data
   if data.len == 0:
+    # Early return for empty data
     return true
 
   try:
     var
       written = 0
-      retries = 0
-    let dataLen = data.len
-    const maxRetries = 3
+      blockedWaits = 0
+    let
+      dataLen = data.len
+      fd = cint(stdout.getFileHandle())
 
     while written < dataLen:
-      let
-        fd = cint(stdout.getFileHandle())
-        n = write(fd, unsafeAddr data[written], dataLen - written)
+      let n = write(fd, unsafeAddr data[written], dataLen - written)
 
-      if n == -1:
-        let err = errno
-        if err == EINTR:
-          # Interrupted by signal, retry immediately
-          continue
-        elif err == EAGAIN or err == EWOULDBLOCK:
-          # Resource temporarily unavailable, retry with backoff
-          retries.inc
-          if retries >= maxRetries:
-            when defined(celinaDebug):
-              stderr.writeLine(
-                "Warning: writeWithRetry failed after max retries (EAGAIN)"
-              )
-            return false
-          discard usleep(1000) # 1ms backoff
-          continue
-        else:
-          # Other error, give up
-          when defined(celinaDebug):
-            stderr.writeLine("Warning: writeWithRetry failed with error: " & $err)
-          return false
-      elif n > 0:
+      case classifyWriteResult(n.int)
+      of woProgress:
         written += n
-        retries = 0
-      else:
-        # Unexpected EOF, give up
+        blockedWaits = 0
+      of woInterrupted:
+        # Interrupted by a signal before any byte moved. Retry immediately, but
+        # count it so a relentless signal storm that never lets the write make
+        # progress can't spin this loop forever.
+        inc blockedWaits
+        if blockedWaits >= WriteMaxBlockedWaits:
+          when defined(celinaDebug):
+            stderr.writeLine("Warning: writeWithRetry gave up after repeated EINTR")
+          return false
+        continue
+      of woWouldBlock:
+        # stdout's kernel buffer is full. Wait for it to drain instead of
+        # dropping the rest of the data; give up only if it stays wedged for
+        # WriteMaxBlockedWaits consecutive waits (steady drainage resets the
+        # counter via woProgress, so this trips only on a truly stuck fd).
+        inc blockedWaits
+        if blockedWaits >= WriteMaxBlockedWaits:
+          when defined(celinaDebug):
+            stderr.writeLine(
+              "Warning: writeWithRetry failed after max retries (EAGAIN)"
+            )
+          return false
+        if pollWritable(fd, WriteBlockedWaitMs) == wwError:
+          when defined(celinaDebug):
+            stderr.writeLine("Warning: writeWithRetry: stdout reported POLLERR/POLLHUP")
+          return false
+        continue
+      of woHardError:
+        # Other error, or a 0-byte write we can't make progress on; give up
         when defined(celinaDebug):
-          stderr.writeLine("Warning: writeWithRetry encountered unexpected EOF")
+          stderr.writeLine("Warning: writeWithRetry failed with error: " & $errno)
         return false
 
     stdout.flushFile()

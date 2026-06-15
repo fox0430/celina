@@ -1,6 +1,6 @@
 # Tests for terminal_common module
 
-import std/[unittest, strutils, times]
+import std/[unittest, strutils, times, posix]
 
 import ../celina/core/terminal_common
 import ../celina/core/[geometry, colors, buffer]
@@ -1197,3 +1197,49 @@ suite "Terminal Common Module Tests":
       check makeWindowTitleSeq("") == "\e]0;\a"
       check makeIconNameSeq("") == "\e]1;\a"
       check makeTitleOnlySeq("") == "\e]2;\a"
+
+  suite "Low-level write retry helpers":
+    test "classifyWriteResult maps write() results to retry outcomes":
+      # n > 0 is forward progress regardless of the stale errno value.
+      errno = EINTR
+      check classifyWriteResult(5) == woProgress
+
+      # n < 0 is decided by errno; compute right after setting it so nothing
+      # clobbers errno in between.
+      errno = EINTR
+      let interrupted = classifyWriteResult(-1)
+      check interrupted == woInterrupted
+
+      errno = EAGAIN
+      let blockedAgain = classifyWriteResult(-1)
+      check blockedAgain == woWouldBlock
+
+      errno = EWOULDBLOCK
+      let blockedWouldBlock = classifyWriteResult(-1)
+      check blockedWouldBlock == woWouldBlock
+
+      errno = EIO
+      let hard = classifyWriteResult(-1)
+      check hard == woHardError
+
+      # A 0-byte write of a non-empty buffer makes no progress -> hard error.
+      check classifyWriteResult(0) == woHardError
+
+    test "pollWritable reports a ready pipe write-end as writable":
+      var fds: array[2, cint]
+      check posix.pipe(fds) == 0
+      defer:
+        discard posix.close(fds[0])
+        discard posix.close(fds[1])
+      # Empty pipe buffer -> POLLOUT, no error bits.
+      check pollWritable(fds[1], 0) == wwWritable
+
+    test "pollWritable reports a pipe whose read-end is closed as error":
+      var fds: array[2, cint]
+      check posix.pipe(fds) == 0
+      defer:
+        discard posix.close(fds[1])
+      # Closing the read end makes further writes fail; poll raises POLLERR,
+      # which must win over any POLLOUT so the caller treats it as a hard error.
+      check posix.close(fds[0]) == 0
+      check pollWritable(fds[1], 0) == wwError
