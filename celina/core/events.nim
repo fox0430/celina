@@ -157,8 +157,11 @@ proc parseMouseEventSGR(): Event =
       break
     buffer.add(ch)
 
-  # If we didn't find a terminator, return unknown event
-  if readCount >= MaxSGRMouseReadBytes or (ch != 'M' and ch != 'm'):
+  if ch != 'M' and ch != 'm':
+    # If we didn't find a terminator, return unknown event. A terminator found on
+    # the MaxSGRMouseReadBytes-th byte is still valid, so guard on the terminator
+    # alone: if the loop instead exited at the byte limit, `ch` holds a
+    # non-terminator byte and this check rejects it anyway.
     return Event(kind: Unknown)
 
   # Parse the SGR format: button;x;y
@@ -575,8 +578,11 @@ proc parseMouseEventSGRNonBlocking(): Event =
       break
     buffer.add(ch)
 
-  # If we didn't find a terminator, return unknown event
-  if readCount >= MaxSGRMouseReadBytes or (ch != 'M' and ch != 'm'):
+  if ch != 'M' and ch != 'm':
+    # If we didn't find a terminator, return unknown event. A terminator found on
+    # the MaxSGRMouseReadBytes-th byte is still valid, so guard on the terminator
+    # alone: if the loop instead exited at the byte limit, `ch` holds a
+    # non-terminator byte and this check rejects it anyway.
     return Event(kind: Unknown)
 
   # Parse the SGR format: button;x;y

@@ -8,6 +8,37 @@ import ../celina/async/async_events {.all.}
 
 when hasAsyncSupport:
   import std/[options, times]
+  from std/posix import dup, dup2, pipe, close, write, STDIN_FILENO
+
+  # --- Test helpers: drive the async byte readers from a controlled pipe.
+  # dup2 a pipe's read end onto STDIN_FILENO so the reader consumes bytes we
+  # write instead of the real terminal.
+  type StdinPipe = tuple[saved: cint, rfd: cint, wfd: cint]
+
+  proc redirectStdinFromPipe(): StdinPipe =
+    let saved = dup(STDIN_FILENO)
+    if saved == -1:
+      return (cint(-1), cint(-1), cint(-1))
+    var fds: array[2, cint]
+    if pipe(fds) != 0:
+      discard close(saved)
+      return (cint(-1), cint(-1), cint(-1))
+    if dup2(fds[0], STDIN_FILENO) == -1:
+      discard close(saved)
+      discard close(fds[0])
+      discard close(fds[1])
+      return (cint(-1), cint(-1), cint(-1))
+    (saved, fds[0], fds[1])
+
+  proc restoreStdin(p: StdinPipe) =
+    discard dup2(p.saved, STDIN_FILENO)
+    discard close(p.saved)
+    discard close(p.rfd)
+    discard close(p.wfd)
+
+  proc feedPipe(p: StdinPipe, data: string) =
+    if data.len > 0:
+      discard posix.write(p.wfd, addr data[0], data.len.cint)
 
 when hasAsyncDispatch:
   template wait*[T](fut: Future[T], timeout: int): untyped =
@@ -119,17 +150,67 @@ suite "Async Event Stream Resize Detection":
     reader.closeAsyncInputReader()
 
 suite "Mouse Event Parsing (Async)":
-  test "parseMouseEventX10 returns unknown (placeholder)":
+  test "parseMouseEventX10 returns unknown when no input is available":
     let reader = newAsyncInputReader()
     let event = waitFor reader.parseMouseEventX10()
     check event.kind == EventKind.Unknown
     reader.closeAsyncInputReader()
 
-  test "parseMouseEventSGR returns unknown (placeholder)":
+  test "parseMouseEventSGR returns unknown when no input is available":
     let reader = newAsyncInputReader()
     let event = waitFor reader.parseMouseEventSGR()
     check event.kind == EventKind.Unknown
     reader.closeAsyncInputReader()
+
+  test "readKeyAsync assembles an SGR mouse press from stdin":
+    let p = redirectStdinFromPipe()
+    if p.saved != -1:
+      try:
+        feedPipe(p, "\x1b[<0;11;6M")
+        let reader = newAsyncInputReader()
+        defer:
+          reader.closeAsyncInputReader()
+        let ev = waitFor reader.readKeyAsync()
+        check ev.kind == Mouse
+        check ev.mouse.kind == Press
+        check ev.mouse.button == Left
+        check ev.mouse.x == 10
+        check ev.mouse.y == 5
+      finally:
+        restoreStdin(p)
+
+  test "readKeyAsync accepts SGR mouse with terminator at byte limit":
+    # Async parser regression: terminator M on the MaxSGRMouseReadBytes-th byte
+    # after ESC[< must still be accepted.
+    let p = redirectStdinFromPipe()
+    if p.saved != -1:
+      try:
+        feedPipe(p, "\x1b[<0000;1234567;123456M")
+        let reader = newAsyncInputReader()
+        defer:
+          reader.closeAsyncInputReader()
+        let ev = waitFor reader.readKeyAsync()
+        check ev.kind == Mouse
+        check ev.mouse.kind == Press
+        check ev.mouse.button == Left
+        check ev.mouse.x == 1234566
+        check ev.mouse.y == 123455
+      finally:
+        restoreStdin(p)
+
+  test "readKeyAsync returns Unknown for SGR mouse without terminator at byte limit":
+    # Same length as above but the final byte is not M/m.
+    let p = redirectStdinFromPipe()
+    if p.saved != -1:
+      try:
+        feedPipe(p, "\x1b[<0000;1234567;123456X")
+        let reader = newAsyncInputReader()
+        defer:
+          reader.closeAsyncInputReader()
+        let ev = waitFor reader.readKeyAsync()
+        check ev.kind == Unknown
+      finally:
+        restoreStdin(p)
 
 suite "Async Event Stream":
   test "AsyncEventStream creation":
