@@ -7,7 +7,8 @@ import ../celina/async/[async_backend, async_io]
 import ../celina/async/async_events {.all.}
 
 when hasAsyncSupport:
-  import std/[options, times, posix]
+  import std/[options, times]
+  from std/posix import dup, dup2, pipe, close, write, STDIN_FILENO
 
   # --- Test helpers: drive the async byte readers from a controlled pipe.
   # dup2 a pipe's read end onto STDIN_FILENO so the reader consumes bytes we
