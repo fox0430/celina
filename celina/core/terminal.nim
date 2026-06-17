@@ -186,74 +186,34 @@ proc writeWithRetry(data: string): bool =
   ## Returns true once every byte is written, false if it gives up.
   ## This is a low-level helper that handles transient I/O errors.
   ##
-  ## On EAGAIN it waits for stdout to become writable via `pollWritable` rather
-  ## than dropping data mid-escape-sequence — stdout can be non-blocking when
-  ## fd 0/1 share an open file description and raw mode pinned stdin O_NONBLOCK.
-  ## It gives up only after `WriteMaxBlockedWaits` consecutive waits make no
-  ## progress, so a wedged tty cannot hang the caller while ordinary flow
-  ## control never truncates output. Shares its retry policy (the constants in
-  ## terminal_common) with the async `writeStdoutAsync`; keep the two in sync.
+  ## First flushes the C stdio buffer so any buffered `stdout.write` data is
+  ## emitted before this direct fd write, preserving output order. Then delegates
+  ## the retry loop to the shared `writeAllBlocking` in terminal_common (the same
+  ## loop the async-mode `writeStdoutBlocking` uses).
+  ## On EAGAIN `writeAllBlocking` waits for stdout to become writable via
+  ## `pollWritable` rather than dropping data mid-escape-sequence — stdout can be
+  ## non-blocking when fd 0/1 share an open file description and raw mode pinned
+  ## stdin O_NONBLOCK — giving up only after `WriteMaxBlockedWaits` consecutive
+  ## waits make no progress, so a wedged tty cannot hang the caller while ordinary
+  ## flow control never truncates output.
 
   if data.len == 0:
     # Early return for empty data
     return true
 
   try:
-    var
-      written = 0
-      blockedWaits = 0
-    let
-      dataLen = data.len
-      fd = cint(stdout.getFileHandle())
-
-    while written < dataLen:
-      let n = write(fd, unsafeAddr data[written], dataLen - written)
-
-      case classifyWriteResult(n.int)
-      of woProgress:
-        written += n
-        blockedWaits = 0
-      of woInterrupted:
-        # Interrupted by a signal before any byte moved. Retry immediately, but
-        # count it so a relentless signal storm that never lets the write make
-        # progress can't spin this loop forever.
-        inc blockedWaits
-        if blockedWaits >= WriteMaxBlockedWaits:
-          when defined(celinaDebug):
-            stderr.writeLine("Warning: writeWithRetry gave up after repeated EINTR")
-          return false
-        continue
-      of woWouldBlock:
-        # stdout's kernel buffer is full. Wait for it to drain instead of
-        # dropping the rest of the data; give up only if it stays wedged for
-        # WriteMaxBlockedWaits consecutive waits (steady drainage resets the
-        # counter via woProgress, so this trips only on a truly stuck fd).
-        inc blockedWaits
-        if blockedWaits >= WriteMaxBlockedWaits:
-          when defined(celinaDebug):
-            stderr.writeLine(
-              "Warning: writeWithRetry failed after max retries (EAGAIN)"
-            )
-          return false
-        if pollWritable(fd, WriteBlockedWaitMs) == wwError:
-          when defined(celinaDebug):
-            stderr.writeLine("Warning: writeWithRetry: stdout reported POLLERR/POLLHUP")
-          return false
-        continue
-      of woHardError:
-        # Other error, or a 0-byte write we can't make progress on; give up
-        when defined(celinaDebug):
-          stderr.writeLine("Warning: writeWithRetry failed with error: " & $errno)
-        return false
-
     stdout.flushFile()
-    return true
   except CatchableError as e:
     when defined(celinaDebug):
-      stderr.writeLine("Warning: writeWithRetry exception: " & e.msg)
+      stderr.writeLine("Warning: writeWithRetry flush failed: " & e.msg)
     else:
       discard e # Avoid "declared but not used" warning
     return false
+
+  if writeAllBlocking(cint(stdout.getFileHandle()), data) != data.len:
+    return false
+
+  true
 
 proc tryWrite(data: string) =
   ## Try to write data, ignoring transient errors
@@ -361,7 +321,7 @@ proc showCursor*() =
   tryWrite(ShowCursorSeq)
 
 proc setCursorPosition*(x, y: int) =
-  ## Set cursor position (1-based coordinates)
+  ## Set cursor position (0-based coordinates; converted to 1-based ANSI coordinates internally)
   tryWrite(makeCursorPositionSeq(x, y))
 
 proc setCursorPosition*(pos: Position) =
@@ -714,6 +674,11 @@ proc tryWriteFrameWithCursor(
       discard e # Avoid "declared but not used" warning
     result.ok = false
 
+  if not result.ok:
+    # Roll back the tracked style: the terminal never received the new DECSCUSR
+    # sequence, so `lastCursorStyle` must stay unchanged for the next frame.
+    result.style = lastCursorStyle
+
 proc draw*(terminal: Terminal, buffer: Buffer, force: bool = false) =
   ## Draw a buffer to the terminal (high-level API)
   ##
@@ -769,7 +734,8 @@ proc drawWithCursor*(
   ## Output is automatically wrapped with synchronized output sequences (DEC mode 2026)
   ## to prevent flickering on supported terminals.
   ##
-  ## Returns the updated lastCursorStyle value. Caller is responsible for tracking this state.
+  ## Returns the updated lastCursorStyle value on success, or the original
+  ## `lastCursorStyle` on failure. Caller is responsible for tracking this state.
   ##
   ## The buffer's contents are preserved across the call (copy semantics). For a
   ## zero-copy renderer-owned hot path, use `drawWithCursorAdopt` instead.
@@ -799,6 +765,9 @@ proc drawWithCursorAdopt*(
   ## As with `drawAdopt`, the rendered content is swapped into `lastBuffer` and
   ## the previous frame's storage is recycled back into `buffer`, so the caller
   ## MUST fully re-fill `buffer` each frame. Used by `Renderer.render`.
+  ##
+  ## Returns the updated lastCursorStyle value on success, or the original
+  ## `lastCursorStyle` on failure.
   let (ok, style) = terminal.tryWriteFrameWithCursor(
     buffer, cursorX, cursorY, cursorVisible, cursorStyle, lastCursorStyle, force
   )

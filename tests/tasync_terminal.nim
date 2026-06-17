@@ -1,6 +1,6 @@
 # Tests for async_terminal module
 
-import std/[unittest, strutils]
+import std/[unittest, strutils, posix]
 
 import ../celina/async/[async_backend, async_buffer]
 import ../celina/core/[geometry, colors, buffer, errors]
@@ -193,6 +193,46 @@ suite "AsyncTerminal ANSI Escape Sequences":
     check area.width > 0
     check area.height > 0
 
+suite "AsyncTerminal Control Sequence Writes":
+  # These exercise the control writes that now route through async_io's
+  # writeOrRaiseAsync/tryWriteAsync instead of a discarded stdout.flushFile().
+  # On a writable fd the full sequence is flushed, so none of them must raise;
+  # a short count would raise (critical clears) or be logged under
+  # -d:celinaDebug (best-effort cursor control).
+  test "clearScreenAsync completes a full write without raising":
+    waitFor clearScreenAsync()
+
+  test "line clears complete without raising":
+    waitFor clearLineAsync()
+    waitFor clearToEndOfLineAsync()
+    waitFor clearToStartOfLineAsync()
+
+  test "cursor show/hide/position/move complete without raising":
+    waitFor hideCursorAsync()
+    waitFor showCursorAsync()
+    waitFor setCursorPositionAsync(0, 0)
+    waitFor setCursorPositionAsync(pos(0, 0))
+    waitFor moveCursorAsync(0, 0)
+
+  test "showCursorAtAsync emits position and show in one sequence":
+    waitFor showCursorAtAsync(0, 0)
+    waitFor showCursorAtAsync(pos(0, 0))
+
+  test "renderCellAsync writes a styled cell without raising":
+    # renderCellAsync now concatenates cursor+style+symbol+reset into one
+    # tryWriteAsync; a full write on a writable fd must not raise.
+    let styledCell = cell("X", style(Color.Red, Color.Blue, {Bold}))
+    waitFor renderCellAsync(styledCell, 0, 0)
+
+  test "renderCellAsync writes an unstyled cell without raising":
+    waitFor renderCellAsync(cell("Y"), 0, 0)
+
+  test "window title procs complete without raising":
+    # These route through best-effort tryWriteAsync; a full write must not raise.
+    waitFor setWindowTitleAsync("celina-test")
+    waitFor setIconNameAsync("celina")
+    waitFor setTitleOnlyAsync("celina-test")
+
 suite "AsyncTerminal POSIX Platform Support":
   test "Terminal size detection works on POSIX systems":
     let size = getTerminalSizeAsync()
@@ -373,6 +413,73 @@ suite "Async Adopt Rendering":
         asyncBuffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default, force = true
       )
       check terminal.lastBuffer[0, 0].symbol == $i
+
+  test "drawWithCursorAdoptAsync keeps lastBuffer in sync with rendered diffs":
+    # Regression for the commit-before-await reorder: `lastBuffer` is adopted from
+    # the grid that produced the bytes (no await sits between reading the live
+    # grid and the swap), so after every frame it must equal what was rendered and
+    # the next frame's diff baseline stays correct. Uses force = false to exercise
+    # the differential (swap) path, not a full redraw.
+    let terminal = createTestTerminal()
+    terminal.lastBuffer = newBuffer(10, 5) # match the AsyncBuffer area (swap path)
+    let asyncBuffer = newAsyncBuffer(10, 5)
+
+    for i in 0 ..< 4:
+      asyncBuffer.withBuffer:
+        buffer.clear()
+        buffer[i, 0] = cell($i)
+      discard waitFor terminal.drawWithCursorAdoptAsync(
+        asyncBuffer,
+        0,
+        0,
+        false,
+        CursorStyle.Default,
+        CursorStyle.Default,
+        force = false,
+      )
+      check terminal.lastBuffer[i, 0].symbol == $i
+      if i > 0:
+        # The previous frame's cell must be gone from the adopted baseline.
+        check terminal.lastBuffer[i - 1, 0].symbol != $(i - 1)
+
+  test "drawWithCursorAdoptAsync rolls back lastBuffer on a truncated write":
+    # Regression for the commit-before-await reorder: on the steady-state swap
+    # path, `lastBuffer` is committed before the write. If the write fails, the
+    # swap must be rolled back so the next frame retries the same diff.
+    let terminal = createTestTerminal()
+    terminal.lastBuffer = newBuffer(10, 5)
+    terminal.lastBuffer[0, 0] = cell("OLD")
+
+    let asyncBuffer = newAsyncBuffer(10, 5)
+    asyncBuffer.withBuffer:
+      buffer[0, 0] = cell("NEW")
+
+    # Redirect stdout (fd 1) to a read-only fd so the underlying posix.write
+    # fails with EBADF and writeOrRaiseAsync raises IOError. Save and restore
+    # the original fd so only this test is affected.
+    let savedStdout = posix.dup(STDOUT_FILENO)
+    let roFd = posix.open("/dev/null", O_RDONLY)
+    require savedStdout >= 0
+    require roFd >= 0
+
+    var rolledBackStyle: CursorStyle
+    try:
+      discard posix.dup2(roFd, STDOUT_FILENO)
+      rolledBackStyle = waitFor terminal.drawWithCursorAdoptAsync(
+        asyncBuffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default, force = true
+      )
+    finally:
+      discard posix.dup2(savedStdout, STDOUT_FILENO)
+      discard posix.close(savedStdout)
+      discard posix.close(roFd)
+
+    # lastBuffer must be rolled back to the pre-write state.
+    check terminal.lastBuffer[0, 0].symbol == "OLD"
+    # The cursor style was never applied either.
+    check rolledBackStyle == CursorStyle.Default
+    # The AsyncBuffer still owns the freshly rendered grid.
+    asyncBuffer.withBuffer:
+      check buffer[0, 0].symbol == "NEW"
 
 suite "AsyncTerminal Performance Considerations":
   test "Large buffer handling":
