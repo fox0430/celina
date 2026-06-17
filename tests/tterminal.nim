@@ -1,6 +1,6 @@
 # Test suite for Terminal module
 
-import std/[unittest]
+import std/[unittest, strutils]
 
 when defined(posix):
   import std/posix
@@ -508,6 +508,17 @@ suite "Terminal Module Tests":
       # Style unchanged
       check newStyle2 == CursorStyle.SteadyBlock
 
+    test "drawWithCursor returns original lastCursorStyle when frame has no output":
+      let terminal = newTerminal()
+      var buffer = newBuffer(20, 10)
+
+      # Empty buffer, hidden cursor: no output is produced, so the tracked
+      # cursor style must remain unchanged.
+      let returnedStyle = terminal.drawWithCursor(
+        buffer, 0, 0, false, CursorStyle.SteadyBlock, CursorStyle.Default
+      )
+      check returnedStyle == CursorStyle.Default
+
   suite "Adopt Rendering":
     test "drawAdopt swaps buffers when areas match":
       let terminal = newTerminal()
@@ -838,3 +849,59 @@ suite "Terminal Module Tests":
           check raised
           check not terminal.alternateScreen
           check not terminal.rawMode
+
+  suite "Buffered stdout ordering":
+    when defined(posix):
+      type StdoutPipe = tuple[saved: cint, rfd: cint]
+
+      proc redirectStdoutToPipe(): StdoutPipe =
+        let saved = dup(STDOUT_FILENO)
+        if saved == -1:
+          return (cint(-1), cint(-1))
+        var fds: array[2, cint]
+        if pipe(fds) != 0:
+          discard close(saved)
+          return (cint(-1), cint(-1))
+        if dup2(fds[1], STDOUT_FILENO) == -1:
+          discard close(saved)
+          discard close(fds[0])
+          discard close(fds[1])
+          return (cint(-1), cint(-1))
+        discard close(fds[1])
+        (saved, fds[0])
+
+      proc restoreStdout(p: StdoutPipe) =
+        if p.saved != -1:
+          discard dup2(p.saved, STDOUT_FILENO)
+          discard close(p.saved)
+        if p.rfd != -1:
+          discard close(p.rfd)
+
+      proc readFromPipe(rfd: cint, maxBytes: int): string =
+        var buf = newString(maxBytes)
+        let n = posix.read(rfd, addr buf[0], maxBytes.cint)
+        if n > 0:
+          result = buf[0 ..< n]
+        else:
+          result = ""
+
+    test "writeWithRetry flushes buffered stdout before control sequences":
+      # Regression: writeWithRetry wrote control sequences directly to the fd
+      # and then flushed the C stdio buffer, so buffered stdout.write data could
+      # appear after the escape sequence instead of before it.
+      when defined(posix):
+        let p = redirectStdoutToPipe()
+        if p.saved == -1:
+          skip()
+        defer:
+          restoreStdout(p)
+
+        stdout.write("hello")
+        showCursor()
+
+        let output = readFromPipe(p.rfd, 1024)
+
+        check output.startsWith("hello")
+        check output.contains(ShowCursorSeq)
+      else:
+        skip()

@@ -8,7 +8,7 @@ import std/[options, posix, selectors]
 import async_backend
 from ../core/terminal_common import
   WriteOutcome, classifyWriteResult, WriteWaitOutcome, pollWritable, WriteBlockedWaitMs,
-  WriteMaxBlockedWaits
+  WriteMaxBlockedWaits, writeAllBlocking
 
 type
   AsyncIOError* = object of CatchableError
@@ -218,13 +218,18 @@ proc writeStdoutAsync*(data: string): Future[int] {.async.} =
   ## via `await sleepMs`, the sync version blocks in `pollWritable` — so keep
   ## their policy in sync when changing either.
   ##
+  ## The return value is a raw byte count (the async twin of `write(2)`); a short
+  ## count means output was truncated. Callers that must not emit a half-written
+  ## control sequence go through `writeOrRaiseAsync` (raises `IOError` on a short
+  ## count) instead of discarding it; `tryWriteAsync` is the best-effort variant
+  ## for non-critical control. These mirror the sync `writeOrRaise`/`tryWrite`
+  ## split in core/terminal.nim, and `async_terminal` routes all its control and
+  ## frame output through them so a truncated escape sequence can never be
+  ## silently swallowed on the live render path.
+  ##
   ## TODO: Multiple concurrent calls can interleave bytes on stdout and corrupt
   ## terminal state. Serialize all async stdout writes through a single queue or
   ## lock so escape sequences from different tasks never mix.
-  ##
-  ## TODO: Callers currently ignore the short-count return value when the loop
-  ## gives up. Consider surfacing partial-write failures via a result type,
-  ## exception, or debug log so the application knows output was truncated.
 
   var
     total = 0
@@ -248,6 +253,11 @@ proc writeStdoutAsync*(data: string): Future[int] {.async.} =
         # loop, and count it so a relentless storm can't loop forever.
         inc blockedWaits
         if blockedWaits >= WriteMaxBlockedWaits:
+          when defined(celinaDebug):
+            stderr.writeLine(
+              "Warning: writeStdoutAsync gave up after " & $WriteMaxBlockedWaits &
+                " interrupted writes (" & $total & "/" & $data.len & " bytes)"
+            )
           break
         await sleepMs(0)
       of woWouldBlock:
@@ -260,10 +270,20 @@ proc writeStdoutAsync*(data: string): Future[int] {.async.} =
         # never truncates output yet a permanently wedged fd can't hang forever.
         inc blockedWaits
         if blockedWaits >= WriteMaxBlockedWaits:
+          when defined(celinaDebug):
+            stderr.writeLine(
+              "Warning: writeStdoutAsync gave up after " & $WriteMaxBlockedWaits &
+                " blocked writes (" & $total & "/" & $data.len & " bytes)"
+            )
           break
         case pollWritable(fd, 0) # non-blocking probe; never blocks the event loop
         of wwError:
           # stdout went away (POLLHUP/POLLERR); stop and report bytes sent.
+          when defined(celinaDebug):
+            stderr.writeLine(
+              "Warning: writeStdoutAsync stdout error (" & $total & "/" & $data.len &
+                " bytes)"
+            )
           break
         of wwWritable:
           # Writable again: yield once and retry promptly.
@@ -274,6 +294,11 @@ proc writeStdoutAsync*(data: string): Future[int] {.async.} =
       of woHardError:
         # Hard error, or a 0-byte write we can't make progress on. Stop and
         # report how much actually made it out.
+        when defined(celinaDebug):
+          stderr.writeLine(
+            "Warning: writeStdoutAsync hard error (" & $total & "/" & $data.len &
+              " bytes)"
+          )
         break
   except CatchableError:
     # Preserve the old contract of never raising out of this proc: report
@@ -283,31 +308,85 @@ proc writeStdoutAsync*(data: string): Future[int] {.async.} =
   result = total
 
 proc flushStdoutAsync*(): Future[void] {.async.} =
-  ## Flush stdout asynchronously
+  ## Flush the C stdio buffer (`stdout.flushFile`) asynchronously.
+  ##
+  ## Note: the async terminal control/render path writes via `posix.write`
+  ## (`writeStdoutAsync`) directly, bypassing the stdio buffer, so it does not
+  ## need this. Retained for callers that emit via buffered `stdout.write` and
+  ## want it flushed — but do not interleave buffered `stdout.write` with the
+  ## `posix.write` control path, or the two byte streams can reach the tty out
+  ## of order.
   await sleepMs(0)
   stdout.flushFile()
 
 # Terminal Control (Async)
 
-proc writeEscapeAsync*(sequence: string): Future[void] {.async.} =
-  ## Write ANSI escape sequence asynchronously
-  discard await writeStdoutAsync("\e" & sequence)
+# Shared short-count checks for the async/blocking write wrappers below. Splitting
+# the best-effort (log) and critical (raise) cases keeps the best-effort wrappers
+# free of an `IOError` effect in non-debug builds, so they stay callable from
+# `{.raises: [].}` contexts (signal handlers).
+proc warnShortWrite(n, expected: int, what: string) =
+  ## Best-effort: log a truncated write under `-d:celinaDebug`, never raise on it.
+  if n != expected:
+    when defined(celinaDebug):
+      stderr.writeLine(
+        "Warning: " & what & " truncated (" & $n & "/" & $expected & " bytes)"
+      )
 
-proc clearScreenAsync*(): Future[void] {.async.} =
-  ## Clear screen asynchronously
-  await writeEscapeAsync("[2J[H")
+proc raiseIfShortWrite(n, expected: int) =
+  ## Critical: raise `IOError` if the write was truncated. A half-written control
+  ## sequence corrupts terminal state, so a short count is surfaced rather than
+  ## silently swallowed.
+  if n != expected:
+    raise newException(
+      IOError, "Terminal write truncated (" & $n & "/" & $expected & " bytes)"
+    )
 
-proc moveCursorAsync*(x, y: int): Future[void] {.async.} =
-  ## Move cursor to position asynchronously
-  await writeEscapeAsync("[" & $(y + 1) & ";" & $(x + 1) & "H")
+proc tryWriteAsync*(data: string): Future[void] {.async.} =
+  ## Best-effort async write for non-critical control sequences (cursor
+  ## show/hide/move, titles, partial-line clears). A truncated write is logged
+  ## under `-d:celinaDebug` and otherwise ignored, so a transient tty hiccup
+  ## degrades gracefully instead of crashing the caller. The async twin of the
+  ## sync `tryWrite` in core/terminal.nim. Pass the full sequence — the constants
+  ## in terminal_common already include the leading ESC.
+  let n = await writeStdoutAsync(data)
+  warnShortWrite(n, data.len, "async terminal write")
 
-proc hideCursorAsync*(): Future[void] {.async.} =
-  ## Hide cursor asynchronously
-  await writeEscapeAsync("[?25l")
+proc writeOrRaiseAsync*(data: string): Future[void] {.async.} =
+  ## Async write for critical control sequences (screen clears, frame output),
+  ## raising `IOError` if the data cannot be flushed in full. A half-written
+  ## control sequence corrupts terminal state, so a short count is surfaced
+  ## rather than silently swallowed (the bug this fixes) — the async twin of the
+  ## sync `writeOrRaise` in core/terminal.nim. Pass the full sequence — the
+  ## constants in terminal_common already include the leading ESC.
+  let n = await writeStdoutAsync(data)
+  raiseIfShortWrite(n, data.len)
 
-proc showCursorAsync*(): Future[void] {.async.} =
-  ## Show cursor asynchronously
-  await writeEscapeAsync("[?25h")
+# Synchronous Blocking Output Functions
+
+proc writeStdoutBlocking*(data: string): int =
+  ## Blocking write of `data` to stdout via the shared `writeAllBlocking` loop in
+  ## terminal_common (the same loop the sync `writeWithRetry` uses). Instead of
+  ## yielding, it blocks in `pollWritable` while stdout is non-writable. Uses
+  ## `STDOUT_FILENO` directly so it never goes through the stdio buffer or mixes
+  ## ordering with `stdout.write`/`stdout.flushFile`. Returns bytes written (a
+  ## short count means it gave up on a wedged tty); never raises.
+  ##
+  ## Intended for mode toggles in `AsyncTerminal` that must stay callable from
+  ## both async procs and the synchronous `cleanup` fallback used by crash
+  ## handlers/signal hooks.
+  writeAllBlocking(STDOUT_FILENO.cint, data)
+
+proc tryWriteBlocking*(data: string) =
+  ## Best-effort synchronous write for mode toggles and other non-critical
+  ## control sequences. A truncated write is logged under `-d:celinaDebug` and
+  ## otherwise ignored. The blocking twin of `tryWriteAsync`.
+  warnShortWrite(writeStdoutBlocking(data), data.len, "blocking terminal write")
+
+proc writeOrRaiseBlocking*(data: string) =
+  ## Synchronous write for critical mode toggles, raising `IOError` if the data
+  ## cannot be flushed in full. The blocking twin of `writeOrRaiseAsync`.
+  raiseIfShortWrite(writeStdoutBlocking(data), data.len)
 
 # Buffer Management
 

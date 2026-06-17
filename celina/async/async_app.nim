@@ -154,7 +154,7 @@ proc setupAsync(app: AsyncApp) {.async.} =
     app.inputReader = newAsyncInputReader()
 
   if app.config.alternateScreen:
-    app.terminal.enableAlternateScreen()
+    await app.terminal.enableAlternateScreenAsync()
 
   if app.config.rawMode:
     app.terminal.enableRawMode(app.inputReader)
@@ -162,13 +162,13 @@ proc setupAsync(app: AsyncApp) {.async.} =
   app.terminal.updateSize()
 
   if app.config.mouseCapture:
-    app.terminal.enableMouse()
+    await app.terminal.enableMouseAsync()
 
   if app.config.bracketedPaste:
-    app.terminal.enableBracketedPaste()
+    await app.terminal.enableBracketedPasteAsync()
 
   if app.config.focusEvents:
-    app.terminal.enableFocusEvents()
+    await app.terminal.enableFocusEventsAsync()
 
   await hideCursorAsync()
   await clearScreenAsync()

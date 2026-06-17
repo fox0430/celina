@@ -184,7 +184,8 @@ proc makeHyperlinkStartSeq*(url: string): string {.inline.} =
   Osc8Start & url & Osc8End
 
 proc makeCursorPositionSeq*(x, y: int): string {.inline.} =
-  ## Generate ANSI sequence for cursor positioning (1-based)
+  ## Generate ANSI sequence for cursor positioning.
+  ## Takes 0-based coordinates and emits a 1-based CSI sequence.
   &"\e[{y + 1};{x + 1}H"
 
 proc makeCursorPositionSeq*(pos: Position): string {.inline.} =
@@ -567,13 +568,13 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
     result.add(resetSequence())
 
 # Low-level write retry policy and classification
-# Shared by the sync (`writeWithRetry` in terminal.nim) and async
-# (`writeStdoutAsync` in async/async_io.nim) write loops so the EINTR/EAGAIN/
-# short-write decision and the give-up thresholds live in one place. The loops
-# still differ in how they wait for a blocked fd to drain (the sync one blocks
-# in `pollWritable`, the async one yields via `await sleepMs` after a
-# non-blocking `pollWritable` probe), so only the policy and the classification
-# are shared, not the loop body itself.
+# Shared by the sync (`writeWithRetry` in terminal.nim), the blocking async-mode
+# (`writeStdoutBlocking` in async/async_io.nim) and the async (`writeStdoutAsync`,
+# same file) write loops so the EINTR/EAGAIN/short-write decision and the give-up
+# thresholds live in one place. The two *blocking* loops now share their whole
+# body via `writeAllBlocking` below; only the async loop stays separate because it
+# must `await sleepMs` (after a non-blocking `pollWritable` probe) instead of
+# blocking in `pollWritable`.
 
 proc classifyWriteResult*(n: int): WriteOutcome =
   ## Classify the raw return value of a single `write(2)` call into a retry
@@ -614,76 +615,73 @@ proc pollWritable*(fd: cint, timeoutMs: int): WriteWaitOutcome =
     return wwWritable
   wwNotReady
 
-# Common terminal control templates
-# These work with both Terminal and AsyncTerminal types
+proc writeAllBlocking*(fd: cint, data: string): int =
+  ## The single shared blocking write loop: loops on `posix.write(fd, ...)` until
+  ## every byte of `data` is written or it gives up after `WriteMaxBlockedWaits`
+  ## consecutive no-progress waits, blocking in `pollWritable` (not yielding)
+  ## while the fd is non-writable. Returns the number of bytes actually written
+  ## (`data.len` on success, a short count on give-up). Never raises — a short
+  ## count is the signal that output was truncated.
+  ##
+  ## `writeStdoutBlocking` (async/async_io.nim) and the sync `writeWithRetry`
+  ## (terminal.nim) both delegate here; the async `writeStdoutAsync` stays
+  ## separate because it must `await` rather than block. Uses the shared
+  ## `classifyWriteResult`/`WriteMaxBlockedWaits` policy above.
+  if data.len == 0:
+    return 0
 
-template writeAndFlush*(data: string) =
-  ## Write data to stdout and flush
-  stdout.write(data)
-  stdout.flushFile()
+  var
+    total = 0
+    blockedWaits = 0
+  try:
+    while total < data.len:
+      let n = posix.write(fd, unsafeAddr data[total], data.len - total).int
 
-template enableAlternateScreenImpl*(terminal: typed) =
-  ## Common logic for enabling alternate screen
-  if not terminal.alternateScreen:
-    writeAndFlush(AlternateScreenEnter)
-    terminal.alternateScreen = true
+      case classifyWriteResult(n)
+      of woProgress:
+        total += n
+        blockedWaits = 0
+      of woInterrupted:
+        # Interrupted before any byte moved. Retry, but count it so a relentless
+        # signal storm cannot spin forever.
+        inc blockedWaits
+        if blockedWaits >= WriteMaxBlockedWaits:
+          when defined(celinaDebug):
+            stderr.writeLine("Warning: writeAllBlocking gave up after repeated EINTR")
+          break
+      of woWouldBlock:
+        # fd's kernel buffer is full. Block in pollWritable until it drains
+        # instead of dropping data mid-escape-sequence; give up only after
+        # WriteMaxBlockedWaits consecutive no-progress waits.
+        inc blockedWaits
+        if blockedWaits >= WriteMaxBlockedWaits:
+          when defined(celinaDebug):
+            stderr.writeLine("Warning: writeAllBlocking gave up after repeated EAGAIN")
+          break
+        case pollWritable(fd, WriteBlockedWaitMs)
+        of wwError:
+          # fd went away (POLLHUP/POLLERR); stop and report bytes sent.
+          when defined(celinaDebug):
+            stderr.writeLine("Warning: writeAllBlocking: fd reported POLLERR/POLLHUP")
+          break
+        of wwWritable:
+          # Writable again: retry promptly.
+          continue
+        of wwNotReady:
+          # The blocking poll already consumed the back-off budget; loop back and
+          # let the blocked-waits counter decide whether to give up.
+          continue
+      of woHardError:
+        # Hard error, or a 0-byte write we can't make progress on; stop and
+        # report how much actually made it out.
+        when defined(celinaDebug):
+          stderr.writeLine("Warning: writeAllBlocking failed with error: " & $errno)
+        break
+  except CatchableError:
+    # Never raise out of the loop: report however many bytes already made it out.
+    discard
 
-template disableAlternateScreenImpl*(terminal: typed) =
-  ## Common logic for disabling alternate screen
-  if terminal.alternateScreen:
-    writeAndFlush(AlternateScreenExit)
-    terminal.alternateScreen = false
-
-template enableMouseImpl*(terminal: typed) =
-  ## Common logic for enabling mouse
-  if not terminal.mouseEnabled:
-    writeAndFlush(enableMouseMode(MouseSGR))
-    terminal.mouseEnabled = true
-
-template disableMouseImpl*(terminal: typed) =
-  ## Common logic for disabling mouse
-  if terminal.mouseEnabled:
-    writeAndFlush(disableMouseMode(MouseSGR))
-    terminal.mouseEnabled = false
-
-# Bracketed paste mode templates
-template enableBracketedPasteImpl*(terminal: typed) =
-  ## Common logic for enabling bracketed paste mode
-  if not terminal.bracketedPasteEnabled:
-    writeAndFlush(BracketedPasteEnable)
-    terminal.bracketedPasteEnabled = true
-
-template disableBracketedPasteImpl*(terminal: typed) =
-  ## Common logic for disabling bracketed paste mode
-  if terminal.bracketedPasteEnabled:
-    writeAndFlush(BracketedPasteDisable)
-    terminal.bracketedPasteEnabled = false
-
-# Focus events templates
-template enableFocusEventsImpl*(terminal: typed) =
-  ## Common logic for enabling focus events
-  if not terminal.focusEventsEnabled:
-    writeAndFlush(FocusEventsEnable)
-    terminal.focusEventsEnabled = true
-
-template disableFocusEventsImpl*(terminal: typed) =
-  ## Common logic for disabling focus events
-  if terminal.focusEventsEnabled:
-    writeAndFlush(FocusEventsDisable)
-    terminal.focusEventsEnabled = false
-
-# Synchronized output templates
-template enableSyncOutputImpl*(terminal: typed) =
-  ## Common logic for enabling synchronized output
-  if not terminal.syncOutputEnabled:
-    writeAndFlush(SyncOutputEnable)
-    terminal.syncOutputEnabled = true
-
-template disableSyncOutputImpl*(terminal: typed) =
-  ## Common logic for disabling synchronized output
-  if terminal.syncOutputEnabled:
-    writeAndFlush(SyncOutputDisable)
-    terminal.syncOutputEnabled = false
+  result = total
 
 proc wrapWithSyncOutput*(output: string): string =
   ## Wrap output string with synchronized output sequences

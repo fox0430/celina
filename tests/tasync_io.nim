@@ -1,9 +1,10 @@
 # Test suite for async_io module
 #
-import std/unittest
+import std/[unittest, posix]
 
 import ../celina/async/async_backend
 import ../celina/async/async_io {.all.}
+import ../celina/core/terminal_common
 
 suite "AsyncIO Module Import":
   test "module imports successfully":
@@ -73,21 +74,70 @@ suite "Async Output Functions":
   test "flushStdoutAsync completes":
     waitFor flushStdoutAsync()
 
-  test "writeEscapeAsync with ANSI code":
-    waitFor writeEscapeAsync("[0m")
+  test "writeOrRaiseAsync completes a full write without raising":
+    # writeOrRaiseAsync raises IOError only on a short count; a fully flushed
+    # sequence (the normal case on a writable fd) must return cleanly.
+    waitFor writeOrRaiseAsync("\e[0m")
 
-  test "clearScreenAsync completes":
-    waitFor clearScreenAsync()
+  test "writeOrRaiseAsync with empty data is a no-op":
+    # An empty write reports 0 of 0 bytes, so the short-count guard must not
+    # misfire and raise on it.
+    waitFor writeOrRaiseAsync("")
 
-suite "Async Cursor Control":
-  test "terminal control functions":
-    waitFor writeEscapeAsync("[0m")
-    waitFor hideCursorAsync()
-    waitFor showCursorAsync()
+  test "tryWriteAsync completes a full write without raising":
+    # tryWriteAsync is best-effort: a full write must not raise, and a truncated
+    # one would only be logged under -d:celinaDebug.
+    waitFor tryWriteAsync("\e[0m")
 
-  test "cursor hide and show sequence":
-    waitFor hideCursorAsync()
-    waitFor showCursorAsync()
+  test "tryWriteAsync with empty data is a no-op":
+    waitFor tryWriteAsync("")
+
+suite "Blocking Output Functions":
+  test "writeStdoutBlocking writes data":
+    let bytesWritten = writeStdoutBlocking(".")
+    check(bytesWritten == 1)
+
+  test "writeStdoutBlocking writes a multi-byte payload in full":
+    let payload = "abcdefghij"
+    let bytesWritten = writeStdoutBlocking(payload)
+    check(bytesWritten == payload.len)
+
+  test "writeStdoutBlocking with empty string":
+    let bytesWritten = writeStdoutBlocking("")
+    check(bytesWritten == 0)
+
+  test "writeOrRaiseBlocking completes a full write without raising":
+    writeOrRaiseBlocking("\e[0m")
+
+  test "writeOrRaiseBlocking with empty data is a no-op":
+    writeOrRaiseBlocking("")
+
+  test "tryWriteBlocking completes a full write without raising":
+    tryWriteBlocking("\e[0m")
+
+  test "tryWriteBlocking with empty data is a no-op":
+    tryWriteBlocking("")
+
+suite "Shared Blocking Write Loop":
+  # writeAllBlocking is the loop that writeStdoutBlocking (and the sync
+  # writeWithRetry) delegate to. These cover both the full-write path and the
+  # give-up/short-count path that drives the raise in writeOrRaise*.
+  test "writeAllBlocking writes a full payload":
+    check writeAllBlocking(STDOUT_FILENO.cint, "abc") == 3
+
+  test "writeAllBlocking with empty data is a no-op":
+    check writeAllBlocking(STDOUT_FILENO.cint, "") == 0
+
+  test "writeAllBlocking reports a short count on an unwritable fd":
+    # A read-only fd makes posix.write fail with EBADF -> woHardError -> give up,
+    # so the loop returns a short count. This is the condition writeOrRaiseAsync/
+    # writeOrRaiseBlocking turn into an IOError, exercised without wedging real
+    # stdout (which would block for the full ~2s retry budget).
+    let roFd = posix.open("/dev/null", O_RDONLY)
+    check roFd >= 0
+    let n = writeAllBlocking(roFd.cint, "abc")
+    discard posix.close(roFd)
+    check n == 0
 
 suite "Async Input Functions":
   test "hasInputAsync with nil reader returns false":
