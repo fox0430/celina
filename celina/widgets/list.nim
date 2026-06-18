@@ -183,8 +183,13 @@ proc removeItem*(widget: List, index: int) =
         else:
           it
       )
-    if widget.highlightedIndex >= widget.items.len:
-      widget.highlightedIndex = max(0, widget.items.len - 1)
+    if widget.items.len == 0:
+      widget.highlightedIndex = -1
+    else:
+      if index < widget.highlightedIndex:
+        dec widget.highlightedIndex
+      if widget.highlightedIndex >= widget.items.len:
+        widget.highlightedIndex = widget.items.len - 1
 
 proc clearItems*(widget: List) =
   ## Clear all items from the list

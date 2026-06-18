@@ -268,8 +268,13 @@ proc removeRow*(widget: Table, index: int) =
         else:
           it
       )
-    if widget.highlightedIndex >= widget.rows.len:
-      widget.highlightedIndex = max(0, widget.rows.len - 1)
+    if widget.rows.len == 0:
+      widget.highlightedIndex = -1
+    else:
+      if index < widget.highlightedIndex:
+        dec widget.highlightedIndex
+      if widget.highlightedIndex >= widget.rows.len:
+        widget.highlightedIndex = widget.rows.len - 1
 
 proc clearRows*(widget: Table) =
   ## Clear all rows from the table

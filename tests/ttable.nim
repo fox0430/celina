@@ -141,6 +141,35 @@ suite "Table Widget Tests":
       tableWidget.selectedIndices.len == 0
       tableWidget.highlightedIndex == 0
 
+  test "removeRow resets highlight to -1 when emptied":
+    var tableWidget = table(@["Name"], @[@["Only"]])
+    check tableWidget.highlightedIndex == 0
+
+    tableWidget.removeRow(0)
+    check:
+      tableWidget.rows.len == 0
+      tableWidget.highlightedIndex == -1
+
+  test "removeRow keeps highlight on the same row when removing before it":
+    var tableWidget = table(@["Name"], @[@["A"], @["B"], @["C"], @["D"]])
+    tableWidget.highlightedIndex = 2 # "C"
+
+    # Removing a row before the highlight should keep the highlight on "C"
+    tableWidget.removeRow(0)
+    check:
+      tableWidget.rows.len == 3
+      tableWidget.highlightedIndex == 1
+      tableWidget.rows[tableWidget.highlightedIndex].cells[0] == "C"
+
+    # Removing the highlighted row clamps within range
+    tableWidget.removeRow(2) # remove "D"
+    check tableWidget.highlightedIndex == 1 # still "C"
+
+    tableWidget.removeRow(1) # remove highlighted "C"
+    check:
+      tableWidget.rows.len == 1
+      tableWidget.highlightedIndex == 0
+
   test "Single selection":
     # Test single selection mode
     let rows = @[@["A", "1"], @["B", "2"], @["C", "3"]]
