@@ -158,11 +158,30 @@ suite "Button Widget Tests":
       btn.onBlur = proc() =
         blurCalled = true
 
-      btn.setState(Focused) # Should trigger onFocus
+      btn.setFocus(true) # Should trigger onFocus
       check focusCalled == true
+      check btn.state == Focused
 
-      btn.setState(Normal) # Should trigger onBlur
+      btn.setFocus(false) # Should trigger onBlur
       check blurCalled == true
+      check btn.state == Normal
+
+    test "setState is render-only and does not fire focus callbacks":
+      var focusCalled = 0
+      var blurCalled = 0
+      var btn = newButton("Test")
+
+      btn.onFocus = proc() =
+        focusCalled.inc()
+      btn.onBlur = proc() =
+        blurCalled.inc()
+
+      # setState drives the visual only; focus is owned by setFocus.
+      btn.setState(Focused)
+      btn.setState(Normal)
+      check focusCalled == 0
+      check blurCalled == 0
+      check not btn.isFocused()
 
   suite "Button Mouse Event Tests":
     test "Mouse click in bounds":
@@ -209,6 +228,185 @@ suite "Button Widget Tests":
       let handled = btn.handleMouseEvent(pressEvent, area)
       check handled == erContinue
       check clickCount == 0
+
+    test "Keyboard focus survives mouse hover and leave":
+      var btn = newButton("Test")
+      btn.setFocus(true)
+      check btn.isFocused()
+      check btn.state == Focused
+
+      let area = rect(10, 10, 20, 3)
+
+      # Hovering shows the hover visual but keeps keyboard focus.
+      let moveIn = MouseEvent(kind: Move, button: Left, x: 15, y: 11, modifiers: {})
+      check btn.handleMouseEvent(moveIn, area) == erConsume
+      check btn.state == Hovered
+      check btn.isFocused()
+
+      # Leaving restores the focus visual instead of dropping to Normal.
+      let moveOut = MouseEvent(kind: Move, button: Left, x: 1, y: 1, modifiers: {})
+      check btn.handleMouseEvent(moveOut, area) == erContinue
+      check btn.isFocused()
+      check btn.state == Focused
+
+    test "Hover callbacks fire while keeping focus":
+      var enterCalled = 0
+      var leaveCalled = 0
+      var focusCalled = 0
+      var btn = newButton("Test")
+      btn.onMouseEnter = proc() =
+        enterCalled.inc()
+      btn.onMouseLeave = proc() =
+        leaveCalled.inc()
+      btn.onFocus = proc() =
+        focusCalled.inc()
+      btn.setFocus(true)
+      check focusCalled == 1
+
+      let area = rect(10, 10, 20, 3)
+      let moveIn = MouseEvent(kind: Move, button: Left, x: 15, y: 11, modifiers: {})
+      discard btn.handleMouseEvent(moveIn, area)
+      let moveOut = MouseEvent(kind: Move, button: Left, x: 1, y: 1, modifiers: {})
+      discard btn.handleMouseEvent(moveOut, area)
+
+      check enterCalled == 1
+      check leaveCalled == 1
+      # Leaving the hover must not re-fire onFocus.
+      check focusCalled == 1
+      check btn.isFocused()
+
+    test "Click on focused button preserves keyboard focus":
+      var btn = newButton("Test")
+      btn.setFocus(true)
+      let area = rect(10, 10, 20, 3)
+
+      let pressEvent =
+        MouseEvent(kind: Press, button: Left, x: 15, y: 11, modifiers: {})
+      let releaseEvent =
+        MouseEvent(kind: Release, button: Left, x: 15, y: 11, modifiers: {})
+      discard btn.handleMouseEvent(pressEvent, area)
+      discard btn.handleMouseEvent(releaseEvent, area)
+      check btn.isFocused()
+
+      # Moving away after the click restores the focus visual.
+      let moveOut = MouseEvent(kind: Move, button: Left, x: 1, y: 1, modifiers: {})
+      discard btn.handleMouseEvent(moveOut, area)
+      check btn.state == Focused
+      check btn.isFocused()
+
+    test "Release outside bounds cancels the press without clicking":
+      var clickCount = 0
+      var leaveCount = 0
+      var btn = newButton("Test")
+      btn.onClick = proc() =
+        clickCount.inc()
+      btn.onMouseLeave = proc() =
+        leaveCount.inc()
+      btn.setFocus(true)
+      let area = rect(10, 10, 20, 3)
+
+      # Press inside, then release after the pointer has left the button.
+      discard btn.handleMouseEvent(
+        MouseEvent(kind: Press, button: Left, x: 15, y: 11, modifiers: {}), area
+      )
+      check btn.state == Pressed
+      discard btn.handleMouseEvent(
+        MouseEvent(kind: Release, button: Left, x: 1, y: 1, modifiers: {}), area
+      )
+
+      # No click fires, the Pressed visual is reset, and focus is restored.
+      check clickCount == 0
+      check leaveCount == 1
+      check btn.state == Focused
+      check btn.isFocused()
+
+    test "A full click fires onMouseEnter exactly once":
+      var enterCount = 0
+      var btn = newButton("Test")
+      btn.onMouseEnter = proc() =
+        enterCount.inc()
+      let area = rect(10, 10, 20, 3)
+
+      # Hover, press, release -- the Release must not re-fire onMouseEnter.
+      discard btn.handleMouseEvent(
+        MouseEvent(kind: Move, button: Left, x: 15, y: 11, modifiers: {}), area
+      )
+      discard btn.handleMouseEvent(
+        MouseEvent(kind: Press, button: Left, x: 15, y: 11, modifiers: {}), area
+      )
+      discard btn.handleMouseEvent(
+        MouseEvent(kind: Release, button: Left, x: 15, y: 11, modifiers: {}), area
+      )
+      check btn.state == Hovered
+      check enterCount == 1
+
+    test "Click without a preceding Move still fires onMouseEnter once":
+      var enterCount = 0
+      var clickCount = 0
+      var btn = newButton("Test")
+      btn.onMouseEnter = proc() =
+        enterCount.inc()
+      btn.onClick = proc() =
+        clickCount.inc()
+      let area = rect(10, 10, 20, 3)
+
+      # Terminals in press/release-only mode never send Move: the press must
+      # still surface a single onMouseEnter.
+      discard btn.handleMouseEvent(
+        MouseEvent(kind: Press, button: Left, x: 15, y: 11, modifiers: {}), area
+      )
+      discard btn.handleMouseEvent(
+        MouseEvent(kind: Release, button: Left, x: 15, y: 11, modifiers: {}), area
+      )
+      check enterCount == 1
+      check clickCount == 1
+
+    test "Drag out and back in still completes the click":
+      var clickCount = 0
+      var btn = newButton("Test")
+      btn.onClick = proc() =
+        clickCount.inc()
+      let area = rect(10, 10, 20, 3)
+
+      discard btn.handleMouseEvent(
+        MouseEvent(kind: Press, button: Left, x: 15, y: 11, modifiers: {}), area
+      )
+      # Dragging out while held keeps the press alive (so it can be resumed).
+      discard btn.handleMouseEvent(
+        MouseEvent(kind: Move, button: Left, x: 1, y: 1, modifiers: {}), area
+      )
+      check btn.state == Pressed
+      # Dragging back in keeps it pressed, and releasing inside clicks.
+      discard btn.handleMouseEvent(
+        MouseEvent(kind: Move, button: Left, x: 15, y: 11, modifiers: {}), area
+      )
+      check btn.state == Pressed
+      discard btn.handleMouseEvent(
+        MouseEvent(kind: Release, button: Left, x: 15, y: 11, modifiers: {}), area
+      )
+      check clickCount == 1
+
+    test "Keyboard activation keeps focus visual":
+      var btn = newButton("Test")
+      btn.setFocus(true)
+      check btn.handleKeyEvent(KeyEvent(code: Enter, char: "", modifiers: {})) ==
+        erConsume
+      check btn.state == Focused
+      check btn.isFocused()
+
+    test "Keyboard activation does not re-fire onFocus":
+      var focusCount = 0
+      var btn = newButton("Test")
+      btn.onFocus = proc() =
+        focusCount.inc()
+      btn.setFocus(true)
+      check focusCount == 1
+
+      check btn.handleKeyEvent(KeyEvent(code: Enter, char: "", modifiers: {})) ==
+        erConsume
+      check btn.handleKeyEvent(KeyEvent(code: Space, char: " ", modifiers: {})) ==
+        erConsume
+      check focusCount == 1
 
   suite "Button Text and Styling Tests":
     test "Button text formatting":
@@ -278,7 +476,7 @@ suite "Button Widget Tests":
       newBtn.handleClick()
       check clickCount == 1
 
-      newBtn.setState(Focused)
+      newBtn.setFocus(true)
       check focusCalled == true
 
     test "Builders preserve all callbacks":
@@ -344,6 +542,25 @@ suite "Button Widget Tests":
       var btn = newButton("Test")
       btn.setEnabled(false)
       check btn.canFocus() == false
+
+    test "Disabling clears focus and fires blur":
+      var focusCount = 0
+      var blurCount = 0
+      var btn = newButton("Test")
+      btn.onFocus = proc() =
+        focusCount.inc()
+      btn.onBlur = proc() =
+        blurCount.inc()
+
+      btn.setFocus(true)
+      check btn.isFocused()
+      check focusCount == 1
+      check blurCount == 0
+
+      btn.setEnabled(false)
+      check not btn.isFocused()
+      check btn.state == Disabled
+      check blurCount == 1
 
   suite "Wide Character Layout":
     test "getMinSize counts CJK as 2 columns each":

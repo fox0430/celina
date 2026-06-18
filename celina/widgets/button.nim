@@ -41,6 +41,10 @@ type
     focusedStyle*: Style
     disabledStyle*: Style
     state*: ButtonState
+    keyboardFocused*: bool
+      ## Keyboard focus, tracked independently of the visual `state` so it
+      ## survives transient mouse hover/press. `setFocus`/`isFocused` are the
+      ## authoritative focus API; `state` only drives rendering.
     enabled*: bool
     minWidth*: int
     padding*: int
@@ -80,6 +84,7 @@ proc newButton*(
     focusedStyle: style.focused,
     disabledStyle: style.disabled,
     state: Normal,
+    keyboardFocused: false,
     enabled: true,
     minWidth: minWidth,
     padding: padding,
@@ -183,7 +188,13 @@ proc button*(
 
 # Button state management
 proc setState*(widget: Button, newState: ButtonState) =
-  ## Set the button state and trigger appropriate events
+  ## Set the visual state and fire the matching hover callbacks.
+  ##
+  ## This is a render/hover setter only: it never touches keyboard focus and
+  ## never fires `onFocus`/`onBlur`. Focus is owned exclusively by `setFocus`
+  ## (and cleared by `setEnabled(false)`), which track `keyboardFocused`.
+  ## Driving focus through `setState` would desync the `Focused` visual from
+  ## `keyboardFocused`, so only the hover callbacks flow through here.
   if not widget.enabled and newState != Disabled:
     return # Can't change state when disabled
 
@@ -194,30 +205,31 @@ proc setState*(widget: Button, newState: ButtonState) =
   else:
     widget.state = Disabled
 
-  # Trigger state change events
+  # Fire hover callbacks on the visual transition. Focus callbacks are
+  # intentionally not fired here -- see the doc comment above.
   if oldState != newState:
     case newState
     of Hovered:
       if widget.onMouseEnter != nil:
         widget.onMouseEnter()
-    of Focused:
-      if widget.onFocus != nil:
-        widget.onFocus()
     of Normal:
       if oldState == Hovered and widget.onMouseLeave != nil:
         widget.onMouseLeave()
-      elif oldState == Focused and widget.onBlur != nil:
-        widget.onBlur()
     else:
       discard
 
 proc setEnabled*(widget: Button, enabled: bool) =
   ## Enable or disable the button
-  widget.enabled = enabled
-  if not enabled:
-    widget.state = Disabled
-  else:
+  if enabled:
+    widget.enabled = true
     widget.state = Normal
+  else:
+    let wasFocused = widget.keyboardFocused
+    widget.enabled = false
+    widget.state = Disabled
+    widget.keyboardFocused = false
+    if wasFocused and widget.onBlur != nil:
+      widget.onBlur()
 
 proc isEnabled*(widget: Button): bool =
   ## Check if the button is enabled
@@ -247,7 +259,10 @@ proc handleKeyEvent*(widget: Button, event: KeyEvent): EventResult =
   of Enter, Space:
     widget.setState(Pressed)
     widget.handleClick()
-    widget.setState(if widget.state == Focused: Focused else: Normal)
+    # Restore the resting visual based on keyboard focus, not the just-set
+    # `Pressed` state (which would otherwise always fall through to Normal).
+    # Set `state` directly so `onFocus` is not re-fired on each activation.
+    widget.state = if widget.keyboardFocused: Focused else: Normal
     return erConsume
   else:
     return erContinue
@@ -268,11 +283,20 @@ proc handleMouseEvent*(widget: Button, event: MouseEvent, area: Rect): EventResu
     case event.kind
     of Press:
       if event.button == Left:
+        # A press with no preceding hover (e.g. terminals that report only
+        # press/release and never Move) still means the pointer entered the
+        # button, so fire onMouseEnter once here. setState(Pressed) never
+        # fires it on its own.
+        if widget.state notin {Hovered, Pressed} and widget.onMouseEnter != nil:
+          widget.onMouseEnter()
         widget.setState(Pressed)
         return erConsume
     of Release:
       if event.button == Left and widget.state == Pressed:
-        widget.setState(Hovered)
+        # The pointer is still inside, so this Pressed -> Hovered transition
+        # must not re-fire onMouseEnter. Set the visual directly before
+        # invoking the click.
+        widget.state = Hovered
         widget.handleClick()
         return erConsume
     of Move:
@@ -282,9 +306,31 @@ proc handleMouseEvent*(widget: Button, event: MouseEvent, area: Rect): EventResu
     else:
       discard
   else:
-    # Mouse left the button area
-    if widget.state == Hovered:
-      widget.setState(Normal)
+    # Mouse is outside the button area.
+    case event.kind
+    of Release:
+      # A press that ends outside the button cancels the click: reset the
+      # visual (reporting the leave) without invoking onClick. Restore the
+      # focus visual if the button still holds keyboard focus; set `state`
+      # directly so the restore does not re-fire `onFocus`.
+      if widget.state == Pressed:
+        if widget.onMouseLeave != nil:
+          widget.onMouseLeave()
+        widget.state = if widget.keyboardFocused: Focused else: Normal
+    else:
+      # The mouse left while hovering. A press in progress (Pressed) is left
+      # alone so the user can drag back in and still complete the click on
+      # release.
+      if widget.state == Hovered:
+        if widget.keyboardFocused:
+          # Keep keyboard focus: report the hover leaving but restore the
+          # focus visual instead of dropping to Normal. Set `state` directly
+          # so the Hovered -> Focused move does not re-fire `onFocus`.
+          if widget.onMouseLeave != nil:
+            widget.onMouseLeave()
+          widget.state = Focused
+        else:
+          widget.setState(Normal)
 
   return erContinue
 
@@ -292,12 +338,30 @@ proc handleMouseEvent*(widget: Button, event: MouseEvent, area: Rect): EventResu
 defineKeyMouseDispatch(Button)
 
 method setFocus*(widget: Button, focused: bool) =
+  ## Set keyboard focus. Tracks focus via `keyboardFocused` independently of
+  ## the visual `state`, so an active mouse hover/press is not disturbed and
+  ## focus is restored once the mouse leaves. Fires `onFocus`/`onBlur` on a
+  ## real focus transition (even while the button is hovered).
   if not widget.enabled:
     return
-  widget.setState(if focused: Focused else: Normal)
+  let wasFocused = widget.keyboardFocused
+  widget.keyboardFocused = focused
+  if focused and not wasFocused:
+    if widget.onFocus != nil:
+      widget.onFocus()
+  elif not focused and wasFocused:
+    if widget.onBlur != nil:
+      widget.onBlur()
+  # Update the resting visual without going through `setState` (which would
+  # re-fire focus callbacks). Leave an in-progress hover/press visual alone.
+  if focused:
+    if widget.state notin {Hovered, Pressed}:
+      widget.state = Focused
+  elif widget.state == Focused:
+    widget.state = Normal
 
 method isFocused*(widget: Button): bool =
-  widget.state == Focused
+  widget.keyboardFocused
 
 # Button styling utilities
 proc getCurrentStyle*(widget: Button): Style =
