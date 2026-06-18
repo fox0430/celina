@@ -189,6 +189,40 @@ suite "Progress Bar Widget Tests":
       check empty6 == "."
       check partial6 == "~"
 
+    test "chars override is honoured for non-custom kinds":
+      # Regression: previously getProgressChars returned hardcoded glyphs for
+      # every kind except pkCustom, so a `chars = ...` override on pkBlock /
+      # pkLine / pkArrow / pkHash was silently discarded.
+      let blockBar = newProgressBar(
+        0.5,
+        kind = pkBlock,
+        chars = ProgressChars(filled: "X", empty: "y", partial: "z"),
+      )
+      check blockBar.getProgressChars() == ("X", "y", "z")
+
+      let lineBar = newProgressBar(
+        0.5, kind = pkLine, chars = ProgressChars(filled: "A", empty: "B", partial: "C")
+      )
+      check lineBar.getProgressChars() == ("A", "B", "C")
+
+    test "partial chars override falls back to the kind's own defaults":
+      # Only `filled` supplied; `empty`/`partial` must fall back to the
+      # pkLine defaults (space / ">"), not to empty strings.
+      let bar = newProgressBar(0.5, kind = pkLine, chars = ProgressChars(filled: "#"))
+      check bar.getProgressChars() == ("#", " ", ">")
+
+    test "chars override renders into the buffer":
+      # End-to-end: the overridden glyph reaches the rendered cells.
+      let bar = newProgressBar(
+        1.0,
+        kind = pkBlock,
+        showPercentage = false,
+        chars = ProgressChars(filled: "X", empty: "y", partial: "z"),
+      )
+      var buf = newBuffer(10, 1)
+      bar.render(rect(0, 0, 10, 1), buf)
+      check buf[0, 0].symbol == "X"
+
   suite "Size Tests":
     test "Minimum size calculation":
       let bar1 = newProgressBar(0.5, "Test")

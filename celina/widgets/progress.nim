@@ -38,7 +38,11 @@ type
     text*: Style ## Style for text/label
     percentage*: Style ## Style for percentage text
 
-  ProgressChars* = object ## Custom characters (used when kind == pkCustom)
+  ProgressChars* = object
+    ## Glyphs for the bar. Any field left empty falls back to the kind's
+    ## default glyph, so a `chars = ...` override applies to *every* kind
+    ## (not just `pkCustom`); `pkCustom`, having no glyphs of its own, falls
+    ## back to the `pkBlock` defaults.
     filled*: string
     empty*: string
     partial*: string
@@ -108,7 +112,8 @@ proc defaultProgressColors*(kind: ProgressKind = pkBlock): ProgressColors =
 
 proc defaultProgressChars*(kind: ProgressKind = pkBlock): ProgressChars =
   ## Build the default characters for a progress kind. `pkCustom` returns
-  ## empty strings (the caller must supply the glyphs).
+  ## empty strings; the constructor and `setCustomChars` fall back to the
+  ## `pkBlock` defaults for any empty field.
   case kind
   of pkBlock:
     ProgressChars(filled: "█", empty: "░", partial: "▒")
@@ -139,19 +144,19 @@ proc newProgressBar*(
   ## The visual style is determined by `kind` (an enum). Colors come from
   ## the `style` aggregate, and characters from `chars`. For `pkCustom`,
   ## supply the glyphs via `chars`.
-  let effectiveChars =
-    if kind == pkCustom:
-      # Per-field fallback: only substitute defaults for fields the caller
-      # left empty, so partial customizations (e.g. supplying only `empty`)
-      # are not silently discarded.
-      let defaults = defaultProgressChars(pkBlock)
-      ProgressChars(
-        filled: if chars.filled.len > 0: chars.filled else: defaults.filled,
-        empty: if chars.empty.len > 0: chars.empty else: defaults.empty,
-        partial: if chars.partial.len > 0: chars.partial else: defaults.partial,
-      )
-    else:
-      chars
+  # Per-field fallback: substitute the kind's default glyph for any field the
+  # caller left empty, so partial customizations (e.g. supplying only `empty`)
+  # are not silently discarded. This applies to every kind, not just
+  # `pkCustom`: `getProgressChars` reads these stored fields directly, so a
+  # non-custom bar must end up with a complete glyph set even when `chars` is
+  # partial. `pkCustom` has no glyphs of its own, so it falls back to the
+  # `pkBlock` defaults.
+  let fallback = defaultProgressChars(if kind == pkCustom: pkBlock else: kind)
+  let effectiveChars = ProgressChars(
+    filled: if chars.filled.len > 0: chars.filled else: fallback.filled,
+    empty: if chars.empty.len > 0: chars.empty else: fallback.empty,
+    partial: if chars.partial.len > 0: chars.partial else: fallback.partial,
+  )
   result = ProgressBar(
     value: clamp(value, 0.0, 1.0),
     label: label,
@@ -276,18 +281,15 @@ proc isComplete*(widget: ProgressBar): bool =
 
 # Style character selection
 proc getProgressChars*(widget: ProgressBar): tuple[filled, empty, partial: string] =
-  ## Get the characters to use for rendering based on style
-  case widget.kindVal
-  of pkBlock:
-    result = ("█", "░", "▒")
-  of pkLine:
-    result = ("=", " ", ">") # Empty is now space instead of dash
-  of pkArrow:
-    result = ("═", " ", ">") # Empty is now space instead of ─
-  of pkHash:
-    result = ("#", "-", "=")
-  of pkCustom:
-    result = (widget.filledChar, widget.emptyChar, widget.fillChar)
+  ## Get the characters to use for rendering.
+  ##
+  ## `filledChar`/`emptyChar`/`fillChar` are the single source of truth: the
+  ## constructor, the `kind=` setter and `setCustomChars` all keep them in sync
+  ## with the active kind's defaults and any caller overrides. Returning them
+  ## directly means a `chars = ...` override is honoured for *every* kind, not
+  ## just `pkCustom`. Previously the non-custom kinds returned hardcoded glyphs
+  ## here and silently discarded the override.
+  result = (widget.filledChar, widget.emptyChar, widget.fillChar)
 
 # Rendering utilities
 proc renderWithBrackets(
