@@ -83,6 +83,35 @@ suite "List Widget Tests":
       listWidget.items.len == 3
       listWidget.highlightedIndex == 0
 
+  test "removeItem resets highlight to -1 when emptied":
+    var listWidget = newList(@[listItem("Only")])
+    check listWidget.highlightedIndex == 0
+
+    listWidget.removeItem(0)
+    check:
+      listWidget.items.len == 0
+      listWidget.highlightedIndex == -1
+
+  test "removeItem keeps highlight on the same item when removing before it":
+    var listWidget = newList(@["A", "B", "C", "D"].mapIt(listItem(it)))
+    listWidget.highlightedIndex = 2 # "C"
+
+    # Removing an item before the highlight should keep the highlight on "C"
+    listWidget.removeItem(0)
+    check:
+      listWidget.items.len == 3
+      listWidget.highlightedIndex == 1
+      listWidget.items[listWidget.highlightedIndex].text == "C"
+
+    # Removing the highlighted item clamps within range
+    listWidget.removeItem(2) # remove "D"
+    check listWidget.highlightedIndex == 1 # still "C"
+
+    listWidget.removeItem(1) # remove highlighted "C"
+    check:
+      listWidget.items.len == 1
+      listWidget.highlightedIndex == 0
+
   test "Single selection mode":
     # Test single selection behavior
     var selectedIdx = -1
