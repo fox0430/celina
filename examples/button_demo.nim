@@ -34,7 +34,7 @@ proc main() =
   var lastBufferHeight = 24
 
   # Start with button focused for keyboard interaction
-  btn.setState(Focused)
+  btn.setFocus(true)
 
   app.onEvent proc(event: Event): EventResult =
     case event.kind

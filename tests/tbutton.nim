@@ -95,7 +95,7 @@ suite "Button Widget Tests":
       var btn = newButton("Test")
       btn.onClick = proc() =
         clickCount.inc()
-      btn.setState(Focused)
+      btn.setFocus(true)
 
       let enterEvent = KeyEvent(code: Enter, char: "", modifiers: {})
 
@@ -108,7 +108,7 @@ suite "Button Widget Tests":
       var btn = newButton("Test")
       btn.onClick = proc() =
         clickCount.inc()
-      btn.setState(Focused)
+      btn.setFocus(true)
 
       let spaceEvent = KeyEvent(code: Space, char: " ", modifiers: {})
 
@@ -127,6 +127,12 @@ suite "Button Widget Tests":
 
       let customEvent = KeyEvent(code: Char, char: "x", modifiers: {})
 
+      # Unfocused: the custom handler is not reached and the key falls through.
+      check btn.handleKeyEvent(customEvent) == erContinue
+      check customKeyPressed == false
+
+      # Focused: the custom handler fires and consumes the key.
+      btn.setFocus(true)
       let handled = btn.handleKeyEvent(customEvent)
       check handled == erConsume
       check customKeyPressed == true
@@ -394,6 +400,25 @@ suite "Button Widget Tests":
       check btn.state == Focused
       check btn.isFocused()
 
+    test "handleKeyEvent ignores keys when not focused":
+      var clickCount = 0
+      var btn = newButton("Test")
+      btn.onClick = proc() =
+        clickCount.inc()
+
+      # Not focused: Enter/Space fall through (erContinue) and onClick is not run.
+      check btn.handleKeyEvent(KeyEvent(code: Enter, char: "", modifiers: {})) ==
+        erContinue
+      check btn.handleKeyEvent(KeyEvent(code: Space, char: " ", modifiers: {})) ==
+        erContinue
+      check clickCount == 0
+
+      # Focused: the same keys are consumed and trigger onClick.
+      btn.setFocus(true)
+      check btn.handleKeyEvent(KeyEvent(code: Enter, char: "", modifiers: {})) ==
+        erConsume
+      check clickCount == 1
+
     test "Keyboard activation does not re-fire onFocus":
       var focusCount = 0
       var btn = newButton("Test")
@@ -407,6 +432,19 @@ suite "Button Widget Tests":
       check btn.handleKeyEvent(KeyEvent(code: Space, char: " ", modifiers: {})) ==
         erConsume
       check focusCount == 1
+
+    test "Keyboard activation that disables the button keeps the Disabled visual":
+      # A submit handler that disables itself (double-submit guard) must keep
+      # the Disabled visual: the post-click visual restore must not clobber it.
+      var btn = newButton("Submit")
+      btn.onClick = proc() =
+        btn.setEnabled(false)
+      btn.setFocus(true)
+      check btn.handleKeyEvent(KeyEvent(code: Enter, char: "", modifiers: {})) ==
+        erConsume
+      check not btn.isEnabled()
+      check btn.state == Disabled
+      check not btn.isFocused()
 
   suite "Button Text and Styling Tests":
     test "Button text formatting":

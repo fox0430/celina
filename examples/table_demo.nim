@@ -75,6 +75,9 @@ proc main() =
     ),
   )
 
+  # Focus the table so vim-like keyboard navigation works
+  tableWidget.setFocus(true)
+
   # Variables for UI state
   var showHelp = true
   var currentBorderStyle = bkRounded

@@ -53,10 +53,16 @@ type
     onSelect*: proc(index: int)
     onMultiSelect*: proc(indices: seq[int])
     onHighlight*: proc(index: int)
+    onFocus*: proc() ## Called when the table gains keyboard focus
+    onBlur*: proc() ## Called when the table loses keyboard focus
 
   Table* = ref object of Widget ## Table widget for structured data
     columns*: seq[Column]
     rows*: seq[TableRow]
+    keyboardFocused*: bool
+      ## Keyboard focus. `setFocus`/`isFocused` are the authoritative focus API;
+      ## key navigation is gated on this so the table only consumes keys when
+      ## it actually holds focus.
     # Selection and navigation
     selectionMode*: SelectionMode
     selectedIndices*: seq[int]
@@ -78,6 +84,8 @@ type
     onSelect*: proc(index: int)
     onMultiSelect*: proc(indices: seq[int])
     onHighlight*: proc(index: int)
+    onFocus*: proc() # Called when the table gains keyboard focus
+    onBlur*: proc() # Called when the table loses keyboard focus
 
 # Legacy `BorderStyle` type and `NoBorder`/`SimpleBorder`/etc. value aliases
 # now live in `core/borders` and are re-exported above. Centralising them
@@ -157,6 +165,7 @@ proc newTable*(
   Table(
     columns: columns,
     rows: rows,
+    keyboardFocused: false,
     selectionMode: selectionMode,
     selectedIndices: @[],
     highlightedIndex: if rows.len > 0: 0 else: -1,
@@ -174,6 +183,8 @@ proc newTable*(
     onSelect: callbacks.onSelect,
     onMultiSelect: callbacks.onMultiSelect,
     onHighlight: callbacks.onHighlight,
+    onFocus: callbacks.onFocus,
+    onBlur: callbacks.onBlur,
   )
 
 proc newTable*(
@@ -246,6 +257,22 @@ proc removeColumn*(widget: Table, index: int) =
       if index < row.cells.len:
         row.cells.delete(index)
 
+# Focus helpers
+proc isFocusable(widget: Table): bool {.inline.} =
+  ## A table accepts keyboard focus only while it has at least one selectable
+  ## row to navigate. Backs both `canFocus` and `syncKeyboardFocus` so the focus
+  ## rule lives in a single place.
+  widget.selectionMode != None and widget.rows.anyIt(it.selectable)
+
+proc syncKeyboardFocus(widget: Table) =
+  ## Relinquish keyboard focus (firing `onBlur`) when the table can no longer
+  ## hold it -- e.g. after its last selectable row is removed -- so
+  ## `keyboardFocused` never disagrees with `canFocus`. Mirrors `setFocus`
+  ## refusing focus up front; a no-longer-focusable table neither keeps
+  ## reporting focus nor silently swallows navigation keys.
+  if widget.keyboardFocused and not widget.isFocusable():
+    widget.updateKeyboardFocus(false)
+
 # Row management
 proc addRow*(widget: Table, row: TableRow) =
   ## Add a row to the table
@@ -275,6 +302,7 @@ proc removeRow*(widget: Table, index: int) =
         dec widget.highlightedIndex
       if widget.highlightedIndex >= widget.rows.len:
         widget.highlightedIndex = widget.rows.len - 1
+    widget.syncKeyboardFocus()
 
 proc clearRows*(widget: Table) =
   ## Clear all rows from the table
@@ -282,6 +310,7 @@ proc clearRows*(widget: Table) =
   widget.selectedIndices = @[]
   widget.highlightedIndex = -1
   widget.scrollOffset = 0
+  widget.syncKeyboardFocus()
 
 proc setData*(widget: Table, rows: seq[seq[string]]) =
   ## Replace all row data
@@ -289,6 +318,7 @@ proc setData*(widget: Table, rows: seq[seq[string]]) =
   widget.selectedIndices = @[]
   widget.highlightedIndex = if rows.len > 0: 0 else: -1
   widget.scrollOffset = 0
+  widget.syncKeyboardFocus()
 
 # Selection management
 proc selectRow*(widget: Table, index: int) =
@@ -467,6 +497,9 @@ proc handleKeyEvent*(widget: Table, event: KeyEvent): EventResult =
   ## Handle keyboard input for the table with vim-like navigation.
   ## Returns `erConsume` when the table reacted to the event, `erContinue`
   ## otherwise.
+  # Only consume navigation/selection keys while holding keyboard focus.
+  if not widget.keyboardFocused:
+    return erContinue
   if widget.rows.len == 0:
     return erContinue
 
@@ -870,7 +903,7 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
 
     let row = widget.rows[rowIndex]
     let isSelected = rowIndex in widget.selectedIndices
-    let isHighlighted = rowIndex == widget.highlightedIndex
+    let isHighlighted = rowIndex == widget.highlightedIndex and widget.keyboardFocused
 
     # Determine row style
     let rowStyle =
@@ -974,4 +1007,16 @@ method getPreferredSize*(widget: Table, available: Size): Size =
 
 method canFocus*(widget: Table): bool =
   ## Tables can receive focus when they have selectable rows
-  widget.selectionMode != None and widget.rows.anyIt(it.selectable)
+  widget.isFocusable()
+
+method setFocus*(widget: Table, focused: bool) =
+  ## Set keyboard focus. Tracked via `keyboardFocused`, which gates key handling.
+  ## Acquiring focus is refused when the table is not focusable (`canFocus`), so
+  ## a table with no selectable rows never silently swallows navigation keys.
+  ## Fires `onFocus`/`onBlur` on a real focus transition.
+  if focused and not widget.isFocusable():
+    return
+  widget.updateKeyboardFocus(focused)
+
+method isFocused*(widget: Table): bool =
+  widget.keyboardFocused

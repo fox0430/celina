@@ -224,12 +224,9 @@ proc setEnabled*(widget: Button, enabled: bool) =
     widget.enabled = true
     widget.state = Normal
   else:
-    let wasFocused = widget.keyboardFocused
     widget.enabled = false
     widget.state = Disabled
-    widget.keyboardFocused = false
-    if wasFocused and widget.onBlur != nil:
-      widget.onBlur()
+    widget.updateKeyboardFocus(false)
 
 proc isEnabled*(widget: Button): bool =
   ## Check if the button is enabled
@@ -248,6 +245,12 @@ proc handleKeyEvent*(widget: Button, event: KeyEvent): EventResult =
   if not widget.enabled:
     return erContinue
 
+  if not widget.keyboardFocused:
+    # Only consume keys while holding keyboard focus, so an unfocused button lets
+    # the keys fall through to the caller's focus cycling (matches List/Table/
+    # Tabs/Input). Gated before `onKeyPress` so the custom handler is focus-scoped.
+    return erContinue
+
   # First try custom key handler
   if widget.onKeyPress != nil:
     let r = widget.onKeyPress(event)
@@ -262,7 +265,10 @@ proc handleKeyEvent*(widget: Button, event: KeyEvent): EventResult =
     # Restore the resting visual based on keyboard focus, not the just-set
     # `Pressed` state (which would otherwise always fall through to Normal).
     # Set `state` directly so `onFocus` is not re-fired on each activation.
-    widget.state = if widget.keyboardFocused: Focused else: Normal
+    # `handleClick` may have disabled the button (e.g. a submit handler that
+    # guards against double submits), so don't clobber the Disabled visual.
+    if widget.enabled:
+      widget.state = if widget.keyboardFocused: Focused else: Normal
     return erConsume
   else:
     return erContinue
@@ -344,14 +350,7 @@ method setFocus*(widget: Button, focused: bool) =
   ## real focus transition (even while the button is hovered).
   if not widget.enabled:
     return
-  let wasFocused = widget.keyboardFocused
-  widget.keyboardFocused = focused
-  if focused and not wasFocused:
-    if widget.onFocus != nil:
-      widget.onFocus()
-  elif not focused and wasFocused:
-    if widget.onBlur != nil:
-      widget.onBlur()
+  widget.updateKeyboardFocus(focused)
   # Update the resting visual without going through `setState` (which would
   # re-fire focus callbacks). Leave an in-progress hover/press visual alone.
   if focused:

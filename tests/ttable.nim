@@ -2,7 +2,7 @@
 
 import std/[unittest, sequtils, options, strformat]
 
-import ../celina/core/[geometry, colors, buffer]
+import ../celina/core/[geometry, colors, buffer, events]
 import ../celina/widgets/table {.all.}
 
 suite "Table Widget Tests":
@@ -800,3 +800,127 @@ suite "Table Scrollbar Tests":
     check:
       table.highlightedIndex == 0
       table.scrollOffset == 0
+
+  test "setFocus/isFocused round-trip":
+    var tableWidget = table(@["A"], @[@["1"], @["2"], @["3"]])
+    check not tableWidget.isFocused()
+    check not tableWidget.keyboardFocused
+
+    tableWidget.setFocus(true)
+    check tableWidget.isFocused()
+    check tableWidget.keyboardFocused
+
+    tableWidget.setFocus(false)
+    check not tableWidget.isFocused()
+    check not tableWidget.keyboardFocused
+
+  test "handleKeyEvent ignores keys when not focused":
+    var tableWidget = table(@["A"], @[@["1"], @["2"], @["3"]])
+    check tableWidget.highlightedIndex == 0
+
+    # Not focused: navigation keys are not consumed and the highlight is unmoved.
+    let downEvent = KeyEvent(code: ArrowDown, char: "", modifiers: {})
+    check tableWidget.handleKeyEvent(downEvent) == erContinue
+    check tableWidget.highlightedIndex == 0
+
+    # Vim 'j' is also ignored while unfocused.
+    let jEvent = KeyEvent(code: Char, char: "j", modifiers: {})
+    check tableWidget.handleKeyEvent(jEvent) == erContinue
+    check tableWidget.highlightedIndex == 0
+
+  test "handleKeyEvent consumes keys when focused":
+    var tableWidget = table(@["A"], @[@["1"], @["2"], @["3"]])
+    tableWidget.setFocus(true)
+    check tableWidget.highlightedIndex == 0
+
+    let downEvent = KeyEvent(code: ArrowDown, char: "", modifiers: {})
+    check tableWidget.handleKeyEvent(downEvent) == erConsume
+    check tableWidget.highlightedIndex == 1
+
+    let upEvent = KeyEvent(code: ArrowUp, char: "", modifiers: {})
+    check tableWidget.handleKeyEvent(upEvent) == erConsume
+    check tableWidget.highlightedIndex == 0
+
+    # Vim 'j' moves down once focused.
+    let jEvent = KeyEvent(code: Char, char: "j", modifiers: {})
+    check tableWidget.handleKeyEvent(jEvent) == erConsume
+    check tableWidget.highlightedIndex == 1
+
+  test "setFocus is refused when the table cannot focus":
+    # No rows -> canFocus() is false, so acquiring focus is refused.
+    var tableWidget = table(@["A"])
+    check not tableWidget.canFocus()
+    tableWidget.setFocus(true)
+    check not tableWidget.isFocused()
+    check not tableWidget.keyboardFocused
+
+  test "setFocus fires onFocus/onBlur on transition":
+    var focusCount = 0
+    var blurCount = 0
+    var tableWidget = table(@["A"], @[@["1"], @["2"], @["3"]])
+    tableWidget.onFocus = proc() =
+      focusCount.inc()
+    tableWidget.onBlur = proc() =
+      blurCount.inc()
+
+    tableWidget.setFocus(true)
+    check focusCount == 1
+    check blurCount == 0
+
+    # Re-focusing an already-focused table does not re-fire onFocus.
+    tableWidget.setFocus(true)
+    check focusCount == 1
+
+    tableWidget.setFocus(false)
+    check focusCount == 1
+    check blurCount == 1
+
+    # Re-blurring does not re-fire onBlur.
+    tableWidget.setFocus(false)
+    check blurCount == 1
+
+  test "clearRows drops keyboard focus and fires onBlur":
+    var blurCount = 0
+    var tableWidget = table(@["A"], @[@["1"], @["2"]])
+    tableWidget.onBlur = proc() =
+      blurCount.inc()
+    tableWidget.setFocus(true)
+    check tableWidget.isFocused()
+
+    # Clearing every row makes the table non-focusable, so it must relinquish
+    # focus instead of reporting focus / swallowing keys with nothing to navigate.
+    tableWidget.clearRows()
+    check not tableWidget.canFocus()
+    check not tableWidget.isFocused()
+    check not tableWidget.keyboardFocused
+    check blurCount == 1
+
+  test "removeRow of the last selectable row drops keyboard focus":
+    var blurCount = 0
+    var tableWidget = table(@["A"], @[@["1"]])
+    tableWidget.onBlur = proc() =
+      blurCount.inc()
+    tableWidget.setFocus(true)
+    check tableWidget.isFocused()
+
+    tableWidget.removeRow(0)
+    check not tableWidget.canFocus()
+    check not tableWidget.isFocused()
+    check blurCount == 1
+
+  test "setData keeps focus while rows stay selectable, drops it when empty":
+    var blurCount = 0
+    var tableWidget = table(@["A"], @[@["1"], @["2"]])
+    tableWidget.onBlur = proc() =
+      blurCount.inc()
+    tableWidget.setFocus(true)
+
+    # Replacing with fresh selectable rows keeps the table focusable -> focus held.
+    tableWidget.setData(@[@["x"], @["y"], @["z"]])
+    check tableWidget.isFocused()
+    check blurCount == 0
+
+    # Replacing with no rows relinquishes focus exactly once.
+    tableWidget.setData(newSeq[seq[string]]())
+    check not tableWidget.isFocused()
+    check blurCount == 1

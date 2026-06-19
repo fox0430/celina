@@ -37,6 +37,7 @@ suite "Button handleEvent dispatch":
     var btn = newButton("OK")
     btn.onClick = proc() =
       clicked.inc()
+    btn.setFocus(true)
     let area = rect(0, 0, 10, 3)
     let r = btn.handleEvent(keyEv(Enter), area)
     check r == erConsume
@@ -53,6 +54,7 @@ suite "Button handleEvent dispatch":
     var btn = newButton("OK")
     btn.onClick = proc() =
       clicked.inc()
+    btn.setFocus(true)
     let asBase: Widget = btn
     let area = rect(0, 0, 10, 3)
     check asBase.handleEvent(keyEv(Enter), area) == erConsume
@@ -174,6 +176,8 @@ suite "Tabs dispatch":
   test "Tab key cycles forward; Shift+Tab cycles backward":
     let widget =
       newTabs(@[tab("a", newText("A")), tab("b", newText("B")), tab("c", newText("C"))])
+    # Tab cycling only fires while the Tabs widget holds keyboard focus.
+    widget.setFocus(true)
     let area = rect(0, 0, 20, 10)
     check widget.activeIndex == 0
     check widget.handleEvent(keyEv(KeyCode.Tab), area) == erConsume

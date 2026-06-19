@@ -10,9 +10,10 @@ import ../core/[geometry, buffer, colors, events]
 
 type
   ListState* = enum
-    ## List visual states
+    ## List visual states. Keyboard focus is tracked separately via
+    ## `keyboardFocused`; this enum only distinguishes the enabled (`Normal`)
+    ## and `Disabled` states that affect rendering and key gating.
     Normal
-    Focused
     Disabled
 
   SelectionMode* = enum
@@ -36,10 +37,16 @@ type
     onSelect*: proc(index: int) ## Single selection callback
     onMultiSelect*: proc(indices: seq[int]) ## Multiple selection callback
     onHighlight*: proc(index: int) ## Highlight change callback
+    onFocus*: proc() ## Called when the list gains keyboard focus
+    onBlur*: proc() ## Called when the list loses keyboard focus
 
   List* = ref object of Widget ## List widget for displaying items
     items*: seq[ListItem]
     state*: ListState
+    keyboardFocused*: bool
+      ## Keyboard focus, tracked independently of the visual `state`.
+      ## `setFocus`/`isFocused` are the authoritative focus API; `state` only
+      ## carries the `Normal`/`Disabled` distinction used for rendering.
     selectionMode*: SelectionMode
     selectedIndices*: seq[int]
     highlightedIndex*: int # Currently highlighted item (keyboard navigation)
@@ -56,6 +63,8 @@ type
     onSelect*: proc(index: int) # Single selection callback
     onMultiSelect*: proc(indices: seq[int]) # Multiple selection callback
     onHighlight*: proc(index: int) # Highlight change callback
+    onFocus*: proc() # Called when the list gains keyboard focus
+    onBlur*: proc() # Called when the list loses keyboard focus
 
 proc defaultListStyle*(): ListStyle =
   ## Default style aggregate matching the historical per-field defaults.
@@ -94,6 +103,7 @@ proc newList*(
   List(
     items: items,
     state: Normal,
+    keyboardFocused: false,
     selectionMode: selectionMode,
     selectedIndices: @[],
     highlightedIndex: if items.len > 0: 0 else: -1,
@@ -108,6 +118,8 @@ proc newList*(
     onSelect: callbacks.onSelect,
     onMultiSelect: callbacks.onMultiSelect,
     onHighlight: callbacks.onHighlight,
+    onFocus: callbacks.onFocus,
+    onBlur: callbacks.onBlur,
   )
 
 proc newList*(
@@ -149,17 +161,46 @@ proc list*(items: seq[string], selectionMode: SelectionMode = Single): List =
   newList(listItems, selectionMode)
 
 # List state management
+# Keyboard-focus transitions go through `updateKeyboardFocus` (base.nim), shared
+# with every other focusable widget so the `onFocus`/`onBlur` contract matches.
+
 proc setState*(widget: List, newState: ListState) =
-  ## Set the list state
+  ## Set the visual list state (`Normal`/`Disabled`). This is render-only and
+  ## does NOT grant keyboard focus -- use `setFocus(true)` for that. Switching to
+  ## `Disabled` drops keyboard focus (firing `onBlur` if it was held), since a
+  ## disabled list cannot hold focus.
   widget.state = newState
+  if newState == Disabled:
+    widget.updateKeyboardFocus(false)
 
 proc setEnabled*(widget: List, enabled: bool) =
-  ## Enable or disable the list
-  widget.state = if enabled: Normal else: Disabled
+  ## Enable or disable the list. Disabling drops keyboard focus (firing `onBlur`
+  ## if it was held), since a disabled list cannot hold focus.
+  if enabled:
+    widget.state = Normal
+  else:
+    widget.state = Disabled
+    widget.updateKeyboardFocus(false)
 
 proc isEnabled*(widget: List): bool =
   ## Check if the list is enabled
   widget.state != Disabled
+
+# Focus helpers
+proc isFocusable(widget: List): bool {.inline.} =
+  ## A list accepts keyboard focus only while it is enabled and has at least one
+  ## selectable item to navigate. Backs both `canFocus` and `syncKeyboardFocus`
+  ## so the focus rule lives in a single place.
+  widget.isEnabled() and widget.items.anyIt(it.selectable)
+
+proc syncKeyboardFocus(widget: List) =
+  ## Relinquish keyboard focus (firing `onBlur`) when the list can no longer
+  ## hold it -- e.g. after its last selectable item is removed -- so
+  ## `keyboardFocused` never disagrees with `canFocus`. Mirrors `setFocus`
+  ## refusing focus up front; a no-longer-focusable list neither keeps reporting
+  ## focus nor silently swallows navigation keys.
+  if widget.keyboardFocused and not widget.isFocusable():
+    widget.updateKeyboardFocus(false)
 
 # Item management
 proc addItem*(widget: List, item: ListItem) =
@@ -190,6 +231,7 @@ proc removeItem*(widget: List, index: int) =
         dec widget.highlightedIndex
       if widget.highlightedIndex >= widget.items.len:
         widget.highlightedIndex = widget.items.len - 1
+    widget.syncKeyboardFocus()
 
 proc clearItems*(widget: List) =
   ## Clear all items from the list
@@ -197,6 +239,7 @@ proc clearItems*(widget: List) =
   widget.selectedIndices = @[]
   widget.highlightedIndex = -1
   widget.scrollOffset = 0
+  widget.syncKeyboardFocus()
 
 proc setItems*(widget: List, items: seq[ListItem]) =
   ## Replace all items in the list
@@ -204,6 +247,7 @@ proc setItems*(widget: List, items: seq[ListItem]) =
   widget.selectedIndices = @[]
   widget.highlightedIndex = if items.len > 0: 0 else: -1
   widget.scrollOffset = 0
+  widget.syncKeyboardFocus()
 
 proc setItems*(widget: List, items: seq[string]) =
   ## Replace all items with simple text items
@@ -345,6 +389,11 @@ proc handleKeyEvent*(widget: List, event: KeyEvent): EventResult =
   if not widget.isEnabled():
     return erContinue
 
+  # Only consume navigation/selection keys while holding keyboard focus, so an
+  # unfocused list lets the keys fall through to the caller's focus cycling.
+  if not widget.keyboardFocused:
+    return erContinue
+
   case event.code
   of ArrowUp:
     widget.highlightPrevious()
@@ -439,12 +488,17 @@ proc handleMouseEvent*(widget: List, event: MouseEvent, area: Rect): EventResult
 defineKeyMouseDispatch(List)
 
 method setFocus*(widget: List, focused: bool) =
-  if not widget.isEnabled():
+  ## Set keyboard focus, tracked via `keyboardFocused` independently of the
+  ## visual `state`. Acquiring focus is refused when the list is not focusable
+  ## (`canFocus`) -- disabled or without any selectable item -- so such a list
+  ## never silently swallows navigation keys. Fires `onFocus`/`onBlur` on a real
+  ## focus transition.
+  if focused and not widget.isFocusable():
     return
-  widget.state = if focused: Focused else: Normal
+  widget.updateKeyboardFocus(focused)
 
 method isFocused*(widget: List): bool =
-  widget.state == Focused
+  widget.keyboardFocused
 
 # Rendering utilities
 proc getItemStyle*(widget: List, index: int): Style =
@@ -458,7 +512,7 @@ proc getItemStyle*(widget: List, index: int): Style =
 
   # Then selection/highlight styles
   let isSelected = index in widget.selectedIndices
-  let isHighlighted = index == widget.highlightedIndex and widget.state == Focused
+  let isHighlighted = index == widget.highlightedIndex and widget.keyboardFocused
 
   if isSelected and isHighlighted:
     # Combine styles - use selected background with highlighted foreground
@@ -576,7 +630,7 @@ method getPreferredSize*(widget: List, available: Size): Size =
 
 method canFocus*(widget: List): bool =
   ## Lists can receive focus when enabled and have selectable items
-  widget.isEnabled() and widget.items.anyIt(it.selectable)
+  widget.isFocusable()
 
 # List widget builders and modifiers
 proc withItems*(widget: List, items: seq[ListItem]): List =

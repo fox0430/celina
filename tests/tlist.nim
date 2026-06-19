@@ -273,7 +273,7 @@ suite "List Widget Tests":
   test "Keyboard event handling":
     # Test keyboard input
     var listWidget = selectList(@["A", "B", "C"])
-    listWidget.setState(Focused)
+    listWidget.setFocus(true)
 
     # Arrow down
     let downEvent = KeyEvent(code: ArrowDown, char: "", modifiers: {})
@@ -320,7 +320,7 @@ suite "List Widget Tests":
         "Item 8",
       ]
     )
-    listWidget.setState(Focused)
+    listWidget.setFocus(true)
     let area = rect(10, 5, 20, 3) # Small area to enable scrolling
 
     # Click on first item
@@ -362,7 +362,7 @@ suite "List Widget Tests":
   test "Multi-select with Ctrl+Click":
     # Test multiple selection with Ctrl modifier
     var listWidget = checkList(@["A", "B", "C"])
-    listWidget.setState(Focused)
+    listWidget.setFocus(true)
     let area = rect(0, 0, 10, 5)
 
     # First click
@@ -402,7 +402,7 @@ suite "List Widget Tests":
     # Select and highlight different items
     listWidget.selectedIndices = @[2]
     listWidget.highlightedIndex = 1
-    listWidget.setState(Focused)
+    listWidget.setFocus(true)
 
     # Render the list
     listWidget.render(area, buffer)
@@ -500,10 +500,6 @@ suite "List Widget Tests":
       listWidget.state == Normal
       listWidget.isEnabled() == true
 
-    # Set focused
-    listWidget.setState(Focused)
-    check listWidget.state == Focused
-
     # Disable
     listWidget.setEnabled(false)
     check:
@@ -587,3 +583,209 @@ suite "List Widget Tests":
     check buf[0, 0].symbol == "日"
     check buf[2, 0].symbol == "."
     check buf[4, 0].symbol == "."
+
+  test "isFocused reflects keyboardFocused after setFocus":
+    var listWidget = list(@["A", "B", "C"])
+    check not listWidget.isFocused()
+    check not listWidget.keyboardFocused
+
+    listWidget.setFocus(true)
+    check listWidget.isFocused()
+    check listWidget.keyboardFocused
+    # setFocus tracks `keyboardFocused` only; the visual `state` is untouched.
+    check listWidget.state == Normal
+
+    listWidget.setFocus(false)
+    check not listWidget.isFocused()
+    check not listWidget.keyboardFocused
+    check listWidget.state == Normal
+
+  test "setEnabled(false) clears keyboard focus":
+    var listWidget = list(@["A", "B", "C"])
+    listWidget.setFocus(true)
+    check listWidget.isFocused()
+
+    listWidget.setEnabled(false)
+    check not listWidget.isFocused()
+    check not listWidget.keyboardFocused
+    check listWidget.state == Disabled
+
+  test "setState(Disabled) clears keyboard focus":
+    var listWidget = list(@["A", "B", "C"])
+    listWidget.setFocus(true)
+    check listWidget.isFocused()
+
+    listWidget.setState(Disabled)
+    check not listWidget.isFocused()
+    check not listWidget.keyboardFocused
+    check listWidget.state == Disabled
+
+  test "setFocus does not clobber Disabled state":
+    var listWidget = list(@["A", "B", "C"])
+    listWidget.setEnabled(false)
+    # A disabled list ignores setFocus and stays disabled/unfocused.
+    listWidget.setFocus(true)
+    check not listWidget.isFocused()
+    check listWidget.state == Disabled
+
+  test "Highlight style only applies while keyboard focused":
+    var listWidget = newList(
+      @[listItem("A"), listItem("B")],
+      Single,
+      style = ListStyle(
+        normal: style(White),
+        selected: style(Black, White),
+        highlighted: style(Yellow, BrightBlack),
+        disabled: style(BrightBlack, Reset),
+      ),
+    )
+    listWidget.highlightedIndex = 0
+
+    # Not focused: highlighted row renders with the normal style.
+    check listWidget.getItemStyle(0) == style(White)
+
+    # Focused: the highlighted row picks up the highlight style.
+    listWidget.setFocus(true)
+    check listWidget.getItemStyle(0) == style(Yellow, BrightBlack)
+
+  test "handleKeyEvent ignores keys when not focused":
+    var listWidget = selectList(@["A", "B", "C"])
+    check listWidget.highlightedIndex == 0
+
+    # Not focused: navigation keys are not consumed and the highlight is unmoved.
+    let downEvent = KeyEvent(code: ArrowDown, char: "", modifiers: {})
+    check listWidget.handleKeyEvent(downEvent) == erContinue
+    check listWidget.highlightedIndex == 0
+
+    # Vim 'j' is also ignored while unfocused.
+    let jEvent = KeyEvent(code: Char, char: "j", modifiers: {})
+    check listWidget.handleKeyEvent(jEvent) == erContinue
+    check listWidget.highlightedIndex == 0
+
+  test "handleKeyEvent consumes keys when focused":
+    var listWidget = selectList(@["A", "B", "C"])
+    listWidget.setFocus(true)
+    check listWidget.highlightedIndex == 0
+
+    let downEvent = KeyEvent(code: ArrowDown, char: "", modifiers: {})
+    check listWidget.handleKeyEvent(downEvent) == erConsume
+    check listWidget.highlightedIndex == 1
+
+    # Vim 'j' moves down once focused.
+    let jEvent = KeyEvent(code: Char, char: "j", modifiers: {})
+    check listWidget.handleKeyEvent(jEvent) == erConsume
+    check listWidget.highlightedIndex == 2
+
+  test "Disabling a focused list fires onBlur":
+    # A focused list that gets disabled loses keyboard focus, so onBlur must
+    # fire -- consistently via both setEnabled(false) and setState(Disabled),
+    # matching setFocus(false) and Button's setEnabled(false).
+    var blurCount = 0
+    var listWidget = list(@["A", "B", "C"])
+    listWidget.onBlur = proc() =
+      blurCount.inc()
+
+    listWidget.setFocus(true)
+    listWidget.setEnabled(false)
+    check blurCount == 1
+    check not listWidget.isFocused()
+
+    # Re-enable, re-focus, then disable via setState(Disabled): onBlur again.
+    listWidget.setEnabled(true)
+    listWidget.setFocus(true)
+    listWidget.setState(Disabled)
+    check blurCount == 2
+    check not listWidget.isFocused()
+
+    # Disabling an already-unfocused list does not fire onBlur.
+    listWidget.setEnabled(true)
+    listWidget.setEnabled(false)
+    check blurCount == 2
+
+  test "setFocus fires onFocus/onBlur on transition":
+    var focusCount = 0
+    var blurCount = 0
+    var listWidget = list(@["A", "B", "C"])
+    listWidget.onFocus = proc() =
+      focusCount.inc()
+    listWidget.onBlur = proc() =
+      blurCount.inc()
+
+    listWidget.setFocus(true)
+    check focusCount == 1
+    check blurCount == 0
+
+    # Re-focusing an already-focused list does not re-fire onFocus.
+    listWidget.setFocus(true)
+    check focusCount == 1
+
+    listWidget.setFocus(false)
+    check focusCount == 1
+    check blurCount == 1
+
+    # Re-blurring does not re-fire onBlur.
+    listWidget.setFocus(false)
+    check blurCount == 1
+
+  test "setFocus is refused when the list cannot focus":
+    # An empty list and an enabled list with no selectable item are both
+    # non-focusable (canFocus() == false), so acquiring focus is refused instead
+    # of silently swallowing navigation keys.
+    var emptyList = list(newSeq[string]())
+    check not emptyList.canFocus()
+    emptyList.setFocus(true)
+    check not emptyList.isFocused()
+    check not emptyList.keyboardFocused
+
+    var unselectableList = newList(@[newListItem("A", selectable = false)])
+    check not unselectableList.canFocus()
+    unselectableList.setFocus(true)
+    check not unselectableList.isFocused()
+
+  test "clearItems drops keyboard focus and fires onBlur":
+    var blurCount = 0
+    var listWidget = list(@["A", "B"])
+    listWidget.onBlur = proc() =
+      blurCount.inc()
+    listWidget.setFocus(true)
+    check listWidget.isFocused()
+
+    # Clearing every item makes the list non-focusable, so it must relinquish
+    # focus instead of reporting focus / swallowing keys with nothing to navigate.
+    listWidget.clearItems()
+    check not listWidget.canFocus()
+    check not listWidget.isFocused()
+    check not listWidget.keyboardFocused
+    check blurCount == 1
+    # An unfocused empty list no longer consumes navigation keys.
+    check listWidget.handleKeyEvent(KeyEvent(code: ArrowDown)) == erContinue
+
+  test "removeItem of the last selectable item drops keyboard focus":
+    var blurCount = 0
+    var listWidget = list(@["A"])
+    listWidget.onBlur = proc() =
+      blurCount.inc()
+    listWidget.setFocus(true)
+    check listWidget.isFocused()
+
+    listWidget.removeItem(0)
+    check not listWidget.canFocus()
+    check not listWidget.isFocused()
+    check blurCount == 1
+
+  test "setItems keeps focus while items stay selectable, drops it when empty":
+    var blurCount = 0
+    var listWidget = list(@["A", "B"])
+    listWidget.onBlur = proc() =
+      blurCount.inc()
+    listWidget.setFocus(true)
+
+    # Replacing with fresh selectable items keeps the list focusable -> focus held.
+    listWidget.setItems(@["x", "y", "z"])
+    check listWidget.isFocused()
+    check blurCount == 0
+
+    # Replacing with no items relinquishes focus exactly once.
+    listWidget.setItems(newSeq[string]())
+    check not listWidget.isFocused()
+    check blurCount == 1

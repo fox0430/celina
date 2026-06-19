@@ -114,7 +114,7 @@ proc fullList(): List =
         discard,
     ),
   )
-  result.state = Focused
+  result.state = Disabled
   result.selectedIndices = @[1]
   result.highlightedIndex = 1
   result.scrollOffset = 1
