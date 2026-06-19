@@ -319,3 +319,46 @@ suite "Text Widget Tests":
       let minSize = widget.getMinSize()
       # Longest word is "日本" with display width 4
       check minSize.width >= 4
+
+    test "WordWrap breaks an over-long word instead of dropping content":
+      # A single word wider than the line must be broken across lines so no
+      # characters are lost (previously the overflow was truncated away).
+      let widget = newText("abcdefghij", wrap = WordWrap)
+      var buf = newBuffer(4, 3)
+      let area = rect(0, 0, 4, 3)
+      widget.render(area, buf)
+      # 10 chars at width 4 -> "abcd" / "efgh" / "ij"
+      check buf[0, 0].symbol == "a"
+      check buf[3, 0].symbol == "d"
+      check buf[0, 1].symbol == "e"
+      check buf[3, 1].symbol == "h"
+      check buf[0, 2].symbol == "i"
+      check buf[1, 2].symbol == "j"
+
+    test "WordWrap over-long word keeps its trailing chunk joinable":
+      # The remainder of a broken word stays on the current line so a short
+      # following word can share it, and the final word is not lost.
+      let widget = newText("abcdef xy", wrap = WordWrap)
+      var buf = newBuffer(4, 3)
+      let area = rect(0, 0, 4, 3)
+      widget.render(area, buf)
+      # "abcdef" -> "abcd" + "ef"; "ef xy" (width 5) overflows so "ef"
+      # flushes and "xy" follows: "abcd" / "ef" / "xy"
+      check buf[0, 0].symbol == "a"
+      check buf[3, 0].symbol == "d"
+      check buf[0, 1].symbol == "e"
+      check buf[1, 1].symbol == "f"
+      check buf[0, 2].symbol == "x"
+      check buf[1, 2].symbol == "y"
+
+    test "WordWrap over-long wide-character word is broken not truncated":
+      let widget = newText("日本語学習", wrap = WordWrap)
+      var buf = newBuffer(4, 3)
+      let area = rect(0, 0, 4, 3)
+      widget.render(area, buf)
+      # Each glyph is width 2, line width 4 -> 2 glyphs per line, none dropped
+      check buf[0, 0].symbol == "日"
+      check buf[2, 0].symbol == "本"
+      check buf[0, 1].symbol == "語"
+      check buf[2, 1].symbol == "学"
+      check buf[0, 2].symbol == "習"

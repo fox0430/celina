@@ -48,6 +48,32 @@ proc text*(
   newText(content, style, alignment, wrap)
 
 # Text processing utilities
+proc wrapByWidth(line: string, maxWidth: int): seq[string] =
+  ## Break a string into chunks whose display width each fit within
+  ## `maxWidth`, splitting at any character boundary. A rune wider than
+  ## `maxWidth` (e.g. a wide CJK glyph when maxWidth is 1) cannot fit and is
+  ## dropped, since it can be neither placed nor split.
+  var chunk = ""
+  var w = 0
+  for r in line.runes:
+    let rw = runeWidth(r)
+    if rw > maxWidth:
+      # A single wide character cannot fit; flush and drop it
+      if chunk.len > 0:
+        result.add(chunk)
+        chunk = ""
+        w = 0
+      continue
+    if w + rw > maxWidth:
+      result.add(chunk)
+      chunk = $r
+      w = rw
+    else:
+      chunk.add($r)
+      w += rw
+  if chunk.len > 0:
+    result.add(chunk)
+
 proc splitIntoLines(text: string, maxWidth: int, wrap: Wrap): seq[string] =
   ## Split text into lines based on wrapping mode
   result = @[]
@@ -79,12 +105,21 @@ proc splitIntoLines(text: string, maxWidth: int, wrap: Wrap): seq[string] =
           if testLine.displayWidth <= maxWidth:
             currentLine = testLine
           else:
+            # The word does not fit on the current line; flush it first.
             if currentLine.len > 0:
               result.add(currentLine)
+              currentLine = ""
+            if word.displayWidth <= maxWidth:
               currentLine = word
             else:
-              # Single word is too long, force break
-              result.add(word.truncateToWidth(maxWidth))
+              # The word alone is wider than a whole line. Break it across
+              # lines instead of dropping the overflow; the trailing chunk
+              # stays current so the next word can join it.
+              let chunks = wrapByWidth(word, maxWidth)
+              for i in 0 ..< max(chunks.len - 1, 0):
+                result.add(chunks[i])
+              if chunks.len > 0:
+                currentLine = chunks[^1]
 
         if currentLine.len > 0:
           result.add(currentLine)
@@ -93,27 +128,8 @@ proc splitIntoLines(text: string, maxWidth: int, wrap: Wrap): seq[string] =
     for line in text.splitLines():
       if line.displayWidth <= maxWidth:
         result.add(line)
-        continue
-      var chunk = ""
-      var w = 0
-      for r in line.runes:
-        let rw = runeWidth(r)
-        if rw > maxWidth:
-          # A single wide character cannot fit; flush and drop it
-          if chunk.len > 0:
-            result.add(chunk)
-            chunk = ""
-            w = 0
-          continue
-        if w + rw > maxWidth:
-          result.add(chunk)
-          chunk = $r
-          w = rw
-        else:
-          chunk.add($r)
-          w += rw
-      if chunk.len > 0:
-        result.add(chunk)
+      else:
+        result.add(wrapByWidth(line, maxWidth))
 
 proc alignLine(line: string, width: int, alignment: Alignment): string =
   ## Align a line within the given width
