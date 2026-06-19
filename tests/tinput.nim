@@ -13,7 +13,7 @@ suite "Input Widget Tests":
       check input.state.cursor == 0
       check input.state.selection == (0, 0)
       check input.state.offset == 0
-      check input.state.focused == false
+      check input.keyboardFocused == false
       check input.placeholder == ""
       check input.maxLength == 0
       check input.readOnly == false
@@ -197,6 +197,31 @@ suite "Input Widget Tests":
       check input.hasFocus() == true
       input.setFocus(false)
       check input.hasFocus() == false
+
+    test "isFocused/keyboardFocused stay in sync":
+      var input = newInput()
+      check not input.isFocused()
+      check not input.keyboardFocused
+
+      input.setFocus(true)
+      check input.isFocused()
+      check input.keyboardFocused
+
+      input.setFocus(false)
+      check not input.isFocused()
+      check not input.keyboardFocused
+
+    test "handleKeyEvent ignores keys when not focused":
+      var input = newInput()
+      # Not focused: typed characters are not consumed and the text is unchanged.
+      let event = KeyEvent(code: Char, char: "a", modifiers: {})
+      check input.handleKeyEvent(event) == erContinue
+      check input.getText() == ""
+
+      # Focused: the same key is consumed and inserts the character.
+      input.setFocus(true)
+      check input.handleKeyEvent(event) == erConsume
+      check input.getText() == "a"
 
     test "Focus callbacks":
       var focusCalled = false

@@ -68,6 +68,23 @@ proc copyWidget*[T: Widget](widget: T): T =
   new(result)
   result[] = widget[]
 
+template updateKeyboardFocus*(widget: untyped, focused: bool) =
+  ## Toggle `widget.keyboardFocused`, firing `widget.onFocus`/`widget.onBlur`
+  ## exactly once on a real transition and never on a no-op re-focus.
+  ##
+  ## Every focusable widget (Button/Input/List/Table/Tabs) routes its focus
+  ## changes through this so the focus-callback contract is identical
+  ## everywhere. The widget must expose `keyboardFocused: bool` plus
+  ## `onFocus`/`onBlur` proc fields. Callers that also keep a visual state in
+  ## sync (e.g. Button) do that around this call.
+  if widget.keyboardFocused != focused:
+    widget.keyboardFocused = focused
+    if focused:
+      if widget.onFocus != nil:
+        widget.onFocus()
+    elif widget.onBlur != nil:
+      widget.onBlur()
+
 template defineKeyMouseDispatch*(WidgetT: untyped) =
   ## Generate the standard `handleEvent` that forwards `EventKind.Key` to
   ## `handleKeyEvent(event.key)` and `EventKind.Mouse` to

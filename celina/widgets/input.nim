@@ -28,7 +28,6 @@ type
     cursor*: int # Cursor position (in runes)
     selection*: tuple[start, stop: int] # Selection range (in runes)
     offset*: int # Horizontal scroll offset for long text (in runes)
-    focused*: bool # Whether the input has focus
 
   InputStyle* = object ## Style aggregate for input widget colors
     normal*: Style ## Content style when not focused
@@ -49,6 +48,10 @@ type
 
   Input* = ref object of Widget ## Text input widget
     state*: InputState
+    keyboardFocused*: bool
+      ## Keyboard focus, tracked independently of the visual styling.
+      ## `setFocus`/`isFocused` are the authoritative focus API; key handling is
+      ## gated on this so the input only consumes keys while it holds focus.
     placeholder*: string
     normalStyle*: Style
     focusedStyle*: Style
@@ -97,7 +100,8 @@ proc newInput*(
 ): Input =
   ## Create a new Input widget using `InputStyle` and `InputCallbacks` aggregates.
   Input(
-    state: InputState(text: "", cursor: 0, selection: (0, 0), offset: 0, focused: false),
+    state: InputState(text: "", cursor: 0, selection: (0, 0), offset: 0),
+    keyboardFocused: false,
     placeholder: placeholder,
     normalStyle: style.normal,
     focusedStyle: style.focused,
@@ -253,19 +257,14 @@ proc getCursor*(widget: Input): int =
 
 method setFocus*(widget: Input, focused: bool) =
   ## Set focus state. Fires `onFocus`/`onBlur` callbacks on transition.
-  if widget.state.focused != focused:
-    widget.state.focused = focused
-    if focused and widget.onFocus != nil:
-      widget.onFocus()
-    elif not focused and widget.onBlur != nil:
-      widget.onBlur()
+  widget.updateKeyboardFocus(focused)
 
 method isFocused*(widget: Input): bool =
-  widget.state.focused
+  widget.keyboardFocused
 
 proc hasFocus*(widget: Input): bool {.inline.} =
   ## Backwards-compatible alias for `isFocused`.
-  widget.state.focused
+  widget.keyboardFocused
 
 proc hasSelection*(widget: Input): bool =
   ## Check if there's a text selection
@@ -379,7 +378,7 @@ proc handleKeyEvent*(widget: Input, event: KeyEvent): EventResult =
   ## Handle keyboard input for the input widget.
   ## Returns `erConsume` when the widget handled the key, `erContinue`
   ## otherwise so the global handler can still see it.
-  if not widget.state.focused:
+  if not widget.keyboardFocused:
     return erContinue
 
   # First try custom key handler
@@ -605,7 +604,7 @@ method render*(widget: Input, area: Rect, buf: var Buffer) =
 
     # Draw border
     let borderStyle =
-      if widget.state.focused: widget.borderFocusedStyle else: widget.borderNormalStyle
+      if widget.keyboardFocused: widget.borderFocusedStyle else: widget.borderNormalStyle
     let bc = getBorderChars(widget.borderStyle)
 
     # Draw corners
@@ -634,7 +633,7 @@ method render*(widget: Input, area: Rect, buf: var Buffer) =
 
   let displayText = widget.getDisplayText()
   let currentStyle =
-    if widget.state.focused: widget.focusedStyle else: widget.normalStyle
+    if widget.keyboardFocused: widget.focusedStyle else: widget.normalStyle
 
   # Calculate visible text range using content area
   let (_, visStart, visEnd, _) = widget.calculateVisibleRange(contentArea.width)
@@ -692,7 +691,7 @@ method render*(widget: Input, area: Rect, buf: var Buffer) =
 proc getCursorPosition*(widget: Input, area: Rect): tuple[x, y: int, visible: bool] =
   ## Get the screen cursor position for this input widget
   ## Returns the absolute screen coordinates and visibility
-  if not widget.state.focused:
+  if not widget.keyboardFocused:
     return (-1, -1, false)
 
   # Determine content area (inside border if any)

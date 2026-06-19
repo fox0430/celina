@@ -27,7 +27,7 @@ proc main() =
   )
 
   # Configure the list
-  listWidget.setState(Focused)
+  listWidget.setFocus(true)
 
   let config = AppConfig(
     title: "List Widget Demo",
@@ -58,7 +58,7 @@ proc main() =
               onSelect = proc(index: int) =
                 selectedItem = index,
             )
-            listWidget.setState(Focused)
+            listWidget.setFocus(true)
           of "2":
             # Switch to multiple selection mode
             listMode = 1
@@ -67,12 +67,12 @@ proc main() =
               onMultiSelect = proc(indices: seq[int]) =
                 multipleSelection = indices,
             )
-            listWidget.setState(Focused)
+            listWidget.setFocus(true)
           of "3":
             # Switch to no selection mode with bullets
             listMode = 2
             listWidget = bulletList(items, "→ ")
-            listWidget.setState(Focused)
+            listWidget.setFocus(true)
           of "c":
             # Clear selection
             listWidget.clearSelection()

@@ -427,3 +427,162 @@ suite "Tabs Widget":
     check buf[3, 0].symbol == "本"
     check buf[5, 0].symbol == "語"
     check buf[7, 0].symbol == " "
+
+  test "setFocus/isFocused round-trip":
+    let widget =
+      newTabs(@[tab("Tab 1", newText("Content 1")), tab("Tab 2", newText("Content 2"))])
+    check not widget.isFocused()
+    check not widget.keyboardFocused
+
+    widget.setFocus(true)
+    check widget.isFocused()
+    check widget.keyboardFocused
+
+    widget.setFocus(false)
+    check not widget.isFocused()
+    check not widget.keyboardFocused
+
+  test "Tab key is not consumed when not focused":
+    let widget = newTabs(
+      @[
+        tab("Tab 1", newText("Content 1")),
+        tab("Tab 2", newText("Content 2")),
+        tab("Tab 3", newText("Content 3")),
+      ]
+    )
+    let area = rect(0, 0, 40, 10)
+    check widget.activeIndex == 0
+
+    # Unfocused: Tab falls through (content forwarding) without cycling tabs.
+    let tabEvent =
+      Event(kind: Key, key: KeyEvent(code: KeyCode.Tab, char: "", modifiers: {}))
+    check widget.handleEvent(tabEvent, area) == erContinue
+    check widget.activeIndex == 0
+
+    # BackTab is likewise ignored while unfocused.
+    let backTabEvent =
+      Event(kind: Key, key: KeyEvent(code: KeyCode.BackTab, char: "", modifiers: {}))
+    check widget.handleEvent(backTabEvent, area) == erContinue
+    check widget.activeIndex == 0
+
+  test "Tab cycles tabs when focused":
+    let widget = newTabs(
+      @[
+        tab("Tab 1", newText("Content 1")),
+        tab("Tab 2", newText("Content 2")),
+        tab("Tab 3", newText("Content 3")),
+      ]
+    )
+    widget.setFocus(true)
+    let area = rect(0, 0, 40, 10)
+    check widget.activeIndex == 0
+
+    let tabEvent =
+      Event(kind: Key, key: KeyEvent(code: KeyCode.Tab, char: "", modifiers: {}))
+    check widget.handleEvent(tabEvent, area) == erConsume
+    check widget.activeIndex == 1
+
+    check widget.handleEvent(tabEvent, area) == erConsume
+    check widget.activeIndex == 2
+
+    # Shift+Tab cycles backwards.
+    let shiftTabEvent =
+      Event(kind: Key, key: KeyEvent(code: KeyCode.Tab, char: "", modifiers: {Shift}))
+    check widget.handleEvent(shiftTabEvent, area) == erConsume
+    check widget.activeIndex == 1
+
+  test "Mouse tab selection works regardless of focus":
+    let widget = newTabs(
+      @[
+        tab("Tab 1", newText("Content 1")),
+        tab("Tab 2", newText("Content 2")),
+        tab("Tab 3", newText("Content 3")),
+      ]
+    )
+    let area = rect(0, 0, 40, 10)
+    check widget.activeIndex == 0
+
+    # Click the second tab while unfocused: selection still works.
+    let bar = widget.tabBarRect(area)
+    # Find an x that hits tab index 1.
+    var targetX = -1
+    for x in area.x ..< area.x + area.width:
+      if widget.tabIndexAt(area, x, bar.y) == 1:
+        targetX = x
+        break
+    check targetX >= 0
+    let clickEvent = Event(
+      kind: Mouse,
+      mouse: MouseEvent(kind: Press, button: Left, x: targetX, y: bar.y, modifiers: {}),
+    )
+    check widget.handleEvent(clickEvent, area) == erConsume
+    check widget.activeIndex == 1
+
+  test "setFocus fires onFocus/onBlur on transition":
+    var focusCount = 0
+    var blurCount = 0
+    let widget =
+      newTabs(@[tab("Tab 1", newText("Content 1")), tab("Tab 2", newText("Content 2"))])
+    widget.onFocus = proc() =
+      focusCount.inc()
+    widget.onBlur = proc() =
+      blurCount.inc()
+
+    widget.setFocus(true)
+    check focusCount == 1
+    check blurCount == 0
+
+    # Re-focusing an already-focused widget does not re-fire onFocus.
+    widget.setFocus(true)
+    check focusCount == 1
+
+    widget.setFocus(false)
+    check focusCount == 1
+    check blurCount == 1
+
+    # Re-blurring does not re-fire onBlur.
+    widget.setFocus(false)
+    check blurCount == 1
+
+  test "newTabs wires onFocus/onBlur callbacks":
+    # Constructor parity with List/Table: focus callbacks can be passed at
+    # construction, not only assigned afterwards.
+    var focusCount = 0
+    var blurCount = 0
+    let widget = newTabs(
+      @[tab("Tab 1", newText("Content 1")), tab("Tab 2", newText("Content 2"))],
+      onFocus = proc() =
+        focusCount.inc(),
+      onBlur = proc() =
+        blurCount.inc(),
+    )
+    check widget.onFocus != nil
+    check widget.onBlur != nil
+
+    widget.setFocus(true)
+    check focusCount == 1
+    widget.setFocus(false)
+    check blurCount == 1
+
+  test "active tab is underlined only while the widget holds keyboard focus":
+    let widget =
+      newTabs(@[tab("Tab 1", newText("Content 1")), tab("Tab 2", newText("Content 2"))])
+
+    proc topRowHasUnderline(w: Tabs): bool =
+      var buf = newBuffer(40, 10)
+      w.render(rect(0, 0, 40, 10), buf)
+      for x in 0 ..< 40:
+        if Underline in buf[x, 0].style.modifiers:
+          return true
+      false
+
+    # Unfocused: the active tab carries no focus underline.
+    check not widget.topRowHasUnderline()
+
+    # Focused: the active tab picks up the underline focus cue.
+    widget.setFocus(true)
+    check widget.topRowHasUnderline()
+
+    # Blurring removes it again.
+    widget.setFocus(false)
+    check not widget.topRowHasUnderline()

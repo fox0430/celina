@@ -32,6 +32,12 @@ type
     position*: TabPosition
     tabStyle*: TabStyle
     showBorder*: bool
+    keyboardFocused*: bool
+      ## Keyboard focus. `setFocus`/`isFocused` are the authoritative focus API;
+      ## Tab/Shift+Tab cycling is gated on this so the keys fall through to the
+      ## caller's focus cycling when the widget is not focused.
+    onFocus*: proc() ## Called when the tabs widget gains keyboard focus
+    onBlur*: proc() ## Called when the tabs widget loses keyboard focus
 
 # Default tab styles
 proc defaultTabStyle*(): TabStyle =
@@ -50,6 +56,8 @@ proc newTabs*(
     position: TabPosition = Top,
     tabStyle: TabStyle = defaultTabStyle(),
     showBorder: bool = true,
+    onFocus: proc() = nil,
+    onBlur: proc() = nil,
 ): Tabs =
   ## Create a new Tabs widget
   Tabs(
@@ -58,6 +66,9 @@ proc newTabs*(
     position: position,
     tabStyle: tabStyle,
     showBorder: showBorder,
+    keyboardFocused: false,
+    onFocus: onFocus,
+    onBlur: onBlur,
   )
 
 proc tabs*(
@@ -66,9 +77,11 @@ proc tabs*(
     position: TabPosition = Top,
     tabStyle: TabStyle = defaultTabStyle(),
     showBorder: bool = true,
+    onFocus: proc() = nil,
+    onBlur: proc() = nil,
 ): Tabs =
   ## Convenience constructor for Tabs widget
-  newTabs(tabs, activeIndex, position, tabStyle, showBorder)
+  newTabs(tabs, activeIndex, position, tabStyle, showBorder, onFocus, onBlur)
 
 proc tab*(title: string, content: Widget): Tab =
   ## Create a single tab
@@ -221,7 +234,14 @@ proc renderTabBar(widget: Tabs, area: Rect, buf: var Buffer): int =
 
     let style =
       if i == widget.activeIndex:
-        widget.tabStyle.activeStyle
+        # While the Tabs widget holds keyboard focus, underline the active tab so
+        # focus is visible during focus cycling. Derived from the user's
+        # `activeStyle` (rather than a separate, easily-unset style field) so it
+        # never overrides their configured colors.
+        if widget.keyboardFocused:
+          widget.tabStyle.activeStyle.addModifier(Underline)
+        else:
+          widget.tabStyle.activeStyle
       else:
         widget.tabStyle.inactiveStyle
 
@@ -404,6 +424,17 @@ method canFocus*(widget: Tabs): bool =
   ## Tabs widget can receive focus for keyboard navigation
   true
 
+method setFocus*(widget: Tabs, focused: bool) =
+  ## Set keyboard focus. Tracked via `keyboardFocused`, which gates Tab cycling.
+  ## Acquiring focus is refused when the widget is not focusable (`canFocus`).
+  ## Fires `onFocus`/`onBlur` on a real focus transition.
+  if focused and not widget.canFocus():
+    return
+  widget.updateKeyboardFocus(focused)
+
+method isFocused*(widget: Tabs): bool =
+  widget.keyboardFocused
+
 func tabBarHeight*(widget: Tabs): int =
   ## Height of the tab bar row (1 when tabs exist, 0 otherwise).
   if widget.tabs.len > 0: 1 else: 0
@@ -459,7 +490,11 @@ method handleEvent*(widget: Tabs, event: Event, area: Rect): EventResult =
   if widget.tabs.len == 0:
     return erContinue
 
-  if event.kind == EventKind.Key:
+  # Tab cycling only fires while the Tabs widget holds keyboard focus. When it
+  # does not, the key is NOT consumed here; it is instead forwarded to the
+  # active tab's content below, and only reaches the caller's focus cycling
+  # (as erContinue) if that child does not consume it either.
+  if event.kind == EventKind.Key and widget.keyboardFocused:
     let key = event.key
     case key.code
     of KeyCode.Tab:
