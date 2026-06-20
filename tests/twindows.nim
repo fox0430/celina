@@ -383,6 +383,31 @@ suite "Window Rendering Tests":
     # Check title rendering
     check destBuffer[7, 5].symbol == "T" # First character of "Test Border"
 
+  test "Multibyte window title truncates on rune boundaries":
+    # A title wider than the column budget must be truncated by display width
+    # on rune boundaries, not raw bytes — otherwise a codepoint is split into
+    # invalid UTF-8 and/or the title overflows the border.
+    proc renderedTitle(title: string): string =
+      var destBuffer = newBuffer(50, 20)
+      let window = newWindow(rect(5, 5, 20, 10), title) # maxTitleLen = 16 cols
+      window.render(destBuffer)
+      # Read the interior title row, skipping wide-char shadow cells (empty
+      # symbol) and the horizontal border fill that follows the title.
+      for x in 7 .. 23:
+        let sym = destBuffer[x, 5].symbol
+        if sym.len > 0 and sym != "─":
+          result.add(sym)
+
+    # "é" (U+00E9): 2 bytes, 1 column. 20 of them overflow the 16-col budget.
+    let narrow = renderedTitle("é".repeat(20))
+    check narrow == "é".repeat(15) & "…"
+    check narrow.displayWidth == 16
+
+    # "世": 3 bytes, 2 columns. Wide runes are dropped whole, never split.
+    let wide = renderedTitle("世".repeat(10))
+    check wide == "世".repeat(7) & "…"
+    check wide.displayWidth <= 16
+
   test "Window without border rendering":
     var destBuffer = newBuffer(50, 20)
     let window = newWindow(rect(5, 5, 20, 10), "No Border", border = none(WindowBorder))
