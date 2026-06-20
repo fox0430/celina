@@ -281,6 +281,24 @@ suite "Progress Bar Widget Tests":
       let bar = textOnlyProgressBar(0.75, "Text Only")
       bar.render(rect(0, 0, 50, 1), buf)
 
+    test "pkHash bar in a height-1 area stays within bounds":
+      # Regression: pkHash forced a two-line layout regardless of height,
+      # drawing the bar at area.y + 1 — one row below a height-1 area.
+      var buf = newBuffer(20, 3)
+      let bar = newProgressBar(0.5, kind = pkHash)
+      bar.render(rect(0, 0, 20, 1), buf)
+
+      # The row below the height-1 area must be untouched (no bar spill).
+      for x in 0 ..< 20:
+        check buf[x, 1].symbol == " "
+
+      # The bar must still render within the area (row 0).
+      var drewInside = false
+      for x in 0 ..< 20:
+        if buf[x, 0].symbol notin ["", " "]:
+          drewInside = true
+      check drewInside
+
   suite "Setter Methods Tests":
     test "Label setter":
       var bar = newProgressBar(0.5, "Original")

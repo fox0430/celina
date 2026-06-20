@@ -447,7 +447,11 @@ method render*(widget: ProgressBar, area: Rect, buf: var Buffer) =
   let textLen = text.displayWidth
 
   if widget.showBar:
-    if (area.height >= 2 and textLen > 0) or widget.kindVal == pkHash:
+    # Two-line layout (text above, bar below) requires at least two rows.
+    # `pkHash` prefers it even without text, but must still fall back to a
+    # single line in a height-1 area — otherwise the bar is drawn at
+    # `area.y + 1`, one row outside the widget's area.
+    if area.height >= 2 and (textLen > 0 or widget.kindVal == pkHash):
       # Two-line layout: text above, bar below
       let textY = area.y
       let barY = area.y + 1
