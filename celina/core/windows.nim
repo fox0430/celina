@@ -484,16 +484,22 @@ proc drawBorder(window: Window, destBuffer: var Buffer) =
     for y in (area.y + 1) ..< (area.bottom - 1):
       destBuffer.setString(area.right - 1, y, chars.vertical, style)
 
-  # Draw title if present
+  # Draw title if present. `maxTitleLen` is a column budget, so compare and
+  # truncate by display width — never by byte length — so a multibyte or
+  # wide-character title is not split mid-codepoint (which would emit invalid
+  # UTF-8) and never overflows the border.
   if window.title.len > 0 and border.top:
-    let titleStart = area.x + 2
     let maxTitleLen = max(0, area.width - 4)
-    let displayTitle =
-      if window.title.len <= maxTitleLen:
-        window.title
-      else:
-        window.title[0 ..< maxTitleLen - 1] & "…"
-    destBuffer.setString(titleStart, area.y, displayTitle, style)
+    if maxTitleLen > 0:
+      let titleStart = area.x + 2
+      let displayTitle =
+        if window.title.displayWidth <= maxTitleLen:
+          window.title
+        else:
+          # Reserve one column for the ellipsis (width 1) and truncate the
+          # rest on rune boundaries.
+          window.title.truncateToWidth(maxTitleLen - 1) & "…"
+      destBuffer.setString(titleStart, area.y, displayTitle, style)
 
 proc render*(window: Window, destBuffer: var Buffer) =
   ## Render window to destination buffer
