@@ -710,8 +710,18 @@ proc handleEvent*(wm: WindowManager, event: Event): EventResult =
       if event.mouse.kind == Press:
         discard wm.focusWindow(window.id)
       return window.handleWindowEvent(event)
+    # No window under the cursor: the click is outside every window. Do not
+    # fall through to the focused window, whose general `eventHandler` would
+    # otherwise observe (and could `erConsume`) an out-of-bounds click (its
+    # specific `mouseHandler` is already bounds-checked). Let the event
+    # propagate to the global handler instead.
+    #
+    # Note: this intentionally differs from the modal path above. Modals trap
+    # outside clicks (`erConsume`) to preserve modal semantics, while ordinary
+    # windows allow outside clicks to reach the global handler (`erContinue`).
+    return erContinue
 
-  # For other events, route to focused window
+  # For non-mouse events, route to the focused window
   let focusedWindow = wm.getFocusedWindow()
   if focusedWindow.isSome():
     return focusedWindow.get().handleWindowEvent(event)

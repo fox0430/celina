@@ -964,6 +964,37 @@ suite "WindowManager Event System Tests":
       not window1HandlerCalled
       window2HandlerCalled
 
+  test "Out-of-bounds mouse does not reach focused window's eventHandler":
+    # A click outside every window must not leak to the focused window's
+    # general `eventHandler` (its `mouseHandler` is already bounds-checked).
+    # The manager returns erContinue so the global handler can run.
+    let wm = newWindowManager()
+    let window = newWindow(rect(10, 10, 20, 10), "Test")
+    let id = wm.addWindow(window)
+    discard wm.focusWindow(id)
+
+    var seenAt = (x: -1, y: -1)
+    window.setEventHandler(
+      proc(w: Window, e: Event): EventResult =
+        if e.kind == EventKind.Mouse:
+          seenAt = (x: e.mouse.x, y: e.mouse.y)
+        return erConsume
+    )
+
+    # Click far outside the only window.
+    let outside = Event(
+      kind: EventKind.Mouse, mouse: MouseEvent(x: 50, y: 50, kind: Press, button: Left)
+    )
+    check wm.handleEvent(outside) == erContinue
+    check seenAt == (x: -1, y: -1) # handler never observed the click
+
+    # A click inside the window still reaches the same handler.
+    let inside = Event(
+      kind: EventKind.Mouse, mouse: MouseEvent(x: 15, y: 15, kind: Press, button: Left)
+    )
+    check wm.handleEvent(inside) == erConsume
+    check seenAt == (x: 15, y: 15)
+
   test "Unhandled event returns erContinue (falls through to global)":
     # A window handler returning erContinue must not consume the event;
     # the manager must propagate erContinue so the app's global handler
