@@ -8,7 +8,7 @@ license = "MIT"
 # Dependencies
 
 requires "nim >= 2.0.2"
-requires "unicodedb"
+requires "unicodedb >= 0.13.2"
 
 task test, "test":
   exec "nim c -d:asyncBackend=none -r tests/all_tests.nim"
