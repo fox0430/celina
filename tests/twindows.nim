@@ -422,6 +422,28 @@ suite "Window Rendering Tests":
     # Should have content
     check destBuffer[5, 5].symbol == "C" # First character of "Content"
 
+  test "Undersized bordered window does not overwrite its border":
+    # Regression: a height-2 window with a full border has no room for content
+    # (top + bottom border consume both rows). The content area must collapse
+    # to empty so written content cannot be drawn over the bottom border.
+    var destBuffer = newBuffer(50, 20)
+    let window = newWindow(rect(5, 5, 20, 2), "", some(defaultBorder()))
+
+    check window.contentArea.height == 0
+
+    # Attempting to write content is a no-op against the empty buffer.
+    window.buffer.setString(0, 0, "Status text")
+    window.render(destBuffer)
+
+    # Top border row intact.
+    check destBuffer[5, 5].symbol == "┌"
+    check destBuffer[24, 5].symbol == "┐"
+    # Bottom border row intact across its whole width — not clobbered by content.
+    check destBuffer[5, 6].symbol == "└"
+    check destBuffer[24, 6].symbol == "┘"
+    for x in 6 .. 23:
+      check destBuffer[x, 6].symbol == "─"
+
   test "Hidden window not rendered":
     var destBuffer = newBuffer(50, 20)
     let window = newWindow(rect(5, 5, 20, 10), "Hidden")
@@ -579,10 +601,12 @@ suite "Content Area Calculation Tests":
       some(defaultBorder()),
     )
 
-    # Even with borders, content area should have minimum size
+    # Too small for both borders plus content: the content area collapses to
+    # an empty (non-negative) rect rather than a 1-cell strip drawn over the
+    # border.
     check:
-      window.contentArea.width >= 1
-      window.contentArea.height >= 1
+      window.contentArea.width == 0
+      window.contentArea.height == 0
 
 suite "Safe API Tests":
   test "getContentBuffer returns (0,0) based buffer":
@@ -1325,8 +1349,9 @@ suite "Window State Edge Cases":
     check:
       window.area.width == 1
       window.area.height == 1
-      window.contentArea.width >= 1
-      window.contentArea.height >= 1
+      # No room for content inside the border: empty, not clamped to 1.
+      window.contentArea.width == 0
+      window.contentArea.height == 0
 
   test "Border changes update content area correctly":
     let window = newWindow(rect(10, 10, 50, 30), "Test", none(WindowBorder))

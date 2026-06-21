@@ -472,22 +472,22 @@ proc updateWindowLayout(fm: FileManagerApp): Future[void] {.async.} =
   let dirWindowOpt = fm.app.getWindow(fm.dirListWindow)
   if dirWindowOpt.isSome():
     let dirWindow = dirWindowOpt.get()
-    dirWindow.resize(size(termSize.width * 2 div 3, termSize.height - 2))
+    dirWindow.resize(size(termSize.width * 2 div 3, termSize.height - 3))
     dirWindow.move(pos(0, 0))
 
   # Update preview window (right side)
   let previewWindowOpt = fm.app.getWindow(fm.previewWindow)
   if previewWindowOpt.isSome():
     let previewWindow = previewWindowOpt.get()
-    previewWindow.resize(size(termSize.width div 3, termSize.height - 2))
+    previewWindow.resize(size(termSize.width div 3, termSize.height - 3))
     previewWindow.move(pos(termSize.width * 2 div 3, 0))
 
   # Update status window (bottom)
   let statusWindowOpt = fm.app.getWindow(fm.statusWindow)
   if statusWindowOpt.isSome():
     let statusWindow = statusWindowOpt.get()
-    statusWindow.resize(size(termSize.width, 2))
-    statusWindow.move(pos(0, termSize.height - 2))
+    statusWindow.resize(size(termSize.width, 3))
+    statusWindow.move(pos(0, termSize.height - 3))
 
   # Mark all windows for update
   fm.updateFlags.directory = true
@@ -500,21 +500,22 @@ proc createFileManagerWindows(fm: FileManagerApp): Future[void] {.async.} =
 
   # Directory list window (left side)
   let dirWindow = newWindow(
-    area = rect(0, 0, termSize.width * 2 div 3, termSize.height - 2),
+    area = rect(0, 0, termSize.width * 2 div 3, termSize.height - 3),
     title = "Directory",
   )
   fm.dirListWindow = fm.app.addWindow(dirWindow)
 
   # Preview window (right side)
   let previewWindow = newWindow(
-    area = rect(termSize.width * 2 div 3, 0, termSize.width div 3, termSize.height - 2),
+    area = rect(termSize.width * 2 div 3, 0, termSize.width div 3, termSize.height - 3),
     title = "Preview",
   )
   fm.previewWindow = fm.app.addWindow(previewWindow)
 
-  # Status window (bottom)
+  # Status window (bottom). Height 3 so the bordered frame keeps one content
+  # row for the status/help text instead of overwriting the bottom border.
   let statusWindow =
-    newWindow(area = rect(0, termSize.height - 2, termSize.width, 2), title = "")
+    newWindow(area = rect(0, termSize.height - 3, termSize.width, 3), title = "")
   fm.statusWindow = fm.app.addWindow(statusWindow)
 
 proc newFileManagerApp(): Future[FileManagerApp] {.async.} =
