@@ -3,7 +3,7 @@
 ## This module provides non-blocking I/O for terminal input/output
 ## that works with both Chronos and std/asyncdispatch.
 
-import std/[options, posix, selectors]
+import std/[options, posix, selectors, deques]
 
 import async_backend
 from ../core/terminal_common import
@@ -199,6 +199,73 @@ proc readStdinAsync*(
 
 # Async Output Functions
 
+# Serialization for concurrent stdout writes.
+#
+# `writeStdoutAsync` yields the event loop (`await sleepMs`) between `write(2)`
+# attempts so it can drain a flow-controlled tty without blocking. That yield is
+# also a window in which a *second* task could start its own write and interleave
+# bytes, splicing two escape sequences together and corrupting terminal state.
+# To prevent that, every `writeStdoutAsync` call holds this single cooperative
+# lock for its whole duration, so one sequence is fully flushed before the next
+# one begins. (The synchronous `writeStdoutBlocking` family and `flushStdoutAsync`
+# do not take this lock — they are for the cleanup/signal path and must not run
+# concurrently with a live async writer.)
+#
+# It is a plain bool + FIFO waiter queue, not chronos' `AsyncLock`: std/asyncdispatch
+# ships no async lock, and chronos' lock has a stricter ownership contract (a
+# separate `acquired` flag, plus a hand-off whose returned future only completes a
+# loop turn later) that does not match the direct synchronous hand-off used here. A
+# hand-rolled FIFO is the one implementation that serves both backends with the
+# same semantics. The loop is single-threaded and cooperative, so the bool
+# test-and-set in `tryAcquireStdoutLockImmediate` crosses no `await` and cannot race
+# another task; release hands the lock straight to the next waiter (the bool stays
+# set) to avoid both a spin-wait and a barge-ahead by a task acquiring in the gap.
+var
+  stdoutWriteLocked = false
+  stdoutWriteWaiters = initDeque[Future[void]]()
+
+# These touch the module-global lock state, which chronos' async macro flags as
+# non-GC-safe; the single-threaded loop makes it safe in fact, and the `{.gcsafe.}`
+# blocks assert that so the helpers stay callable from the gcsafe `writeStdoutAsync`.
+# Splitting the fast path (a plain bool test-and-set, no allocation) from the parked
+# path (which allocates a waiter Future) keeps the common uncontended write
+# allocation-free; neither helper has an `await` of its own, so the test-and-set
+# stays a single uninterrupted step.
+
+proc tryAcquireStdoutLockImmediate(): bool =
+  ## Take the lock without suspending when it is free. Returns true if this call
+  ## now holds it (no Future allocated); false if another writer holds it, in which
+  ## case the caller must `await waitForStdoutLock()`. The bool test-and-set crosses
+  ## no `await`, so it cannot race another task on a single-threaded event loop.
+  {.gcsafe.}:
+    if stdoutWriteLocked:
+      return false
+    stdoutWriteLocked = true
+    return true
+
+proc waitForStdoutLock(): Future[void] =
+  ## Park behind the current holder; the returned future completes once an earlier
+  ## writer hands the lock over in FIFO order. Only called when the lock is held, so
+  ## it allocates exactly one waiter — the contended path, not the common one.
+  result = newFuture[void]("waitForStdoutLock")
+  {.gcsafe.}:
+    stdoutWriteWaiters.addLast(result)
+
+proc releaseStdoutLock() =
+  ## Release the stdout lock. If a writer is waiting, hand the lock straight to the
+  ## next one in FIFO order (keeping `stdoutWriteLocked` set) so no other task can
+  ## barge in during the gap and so no one spin-waits. Skips any waiter whose future
+  ## is already finished (e.g. a write cancelled while parked, whose waiter lingers
+  ## in the queue until it is drained here) to avoid double-completing it. Only when
+  ## the queue holds no live waiter is the lock actually cleared.
+  {.gcsafe.}:
+    while stdoutWriteWaiters.len > 0:
+      let waiter = stdoutWriteWaiters.popFirst()
+      if not waiter.finished:
+        waiter.complete()
+        return
+    stdoutWriteLocked = false
+
 proc writeStdoutAsync*(data: string): Future[int] {.async.} =
   ## Write data to stdout asynchronously.
   ##
@@ -227,19 +294,52 @@ proc writeStdoutAsync*(data: string): Future[int] {.async.} =
   ## frame output through them so a truncated escape sequence can never be
   ## silently swallowed on the live render path.
   ##
-  ## TODO: Multiple concurrent calls can interleave bytes on stdout and corrupt
-  ## terminal state. Serialize all async stdout writes through a single queue or
-  ## lock so escape sequences from different tasks never mix.
+  ## Concurrency: the whole write is serialized through `acquireStdoutLock` /
+  ## `releaseStdoutLock`, so two tasks writing at once can never interleave their
+  ## bytes and splice one escape sequence into another. Each caller's data is
+  ## flushed in full (or to its short-count give-up point) before the next
+  ## queued writer starts, and writes proceed in call order (FIFO). Only
+  ## `writeStdoutAsync` writers are serialized; the synchronous
+  ## `writeStdoutBlocking` family and `flushStdoutAsync` bypass the lock.
+  ##
+  ## A chronos `CancelledError` propagates out of this proc (so a `cancelAndWait`
+  ## shutdown can interrupt a write that is parked on a flow-controlled tty); the
+  ## lock is still released on the way out. Every *other* error is swallowed and
+  ## reported as a short count, as before.
+  ##
+  ## Head-of-line cost: the lock is held for the whole write, including the
+  ## `WriteMaxBlockedWaits` back-off budget (~2s) on a wedged tty, so one stuck
+  ## writer stalls every other queued writer for up to that budget. This is
+  ## deliberate — releasing mid-write would let another task's bytes splice into a
+  ## half-emitted escape sequence, the exact corruption this serialization
+  ## prevents — and the per-write give-up budget bounds the worst-case stall.
+
+  # An empty write does nothing, so skip the lock entirely rather than acquire
+  # (and possibly park behind an in-flight writer) just to emit zero bytes.
+  if data.len == 0:
+    return 0
 
   var
     total = 0
     blockedWaits = 0
+    held = false
   let fd = STDOUT_FILENO.cint
 
-  # An empty `data` never enters the loop, so `result` stays 0; no special case
-  # needed. `unsafeAddr data[total]` is only evaluated once `total < data.len`,
-  # so it is never taken on an empty string.
+  # Hold the lock for the entire write, including every `await` inside the loop,
+  # so no other task can emit between our `write(2)` attempts. Acquire inside the
+  # `try` and set `held` only once it has actually granted, so the `finally`
+  # releases iff this call owns the lock: a writer cancelled while still parked in
+  # the wait queue (CancelledError raised at `await waitForStdoutLock()`) never
+  # releases a lock it never held — its queued waiter is skipped by the next
+  # `releaseStdoutLock`. `unsafeAddr data[total]` is only evaluated once
+  # `total < data.len`, so it is never taken on an empty string.
   try:
+    # Fast path: take a free lock with no Future allocation; only park (allocating
+    # a waiter) when another writer already holds it.
+    if not tryAcquireStdoutLockImmediate():
+      await waitForStdoutLock()
+    held = true
+
     while total < data.len:
       let n = posix.write(fd, unsafeAddr data[total], data.len - total).int
 
@@ -300,10 +400,19 @@ proc writeStdoutAsync*(data: string): Future[int] {.async.} =
               " bytes)"
           )
         break
+  except CancelledError as e:
+    # Let chronos cancellation propagate (the `finally` still releases the lock)
+    # so `cancelAndWait`-based shutdown can tear the write down, instead of the
+    # catch-all below silently swallowing it and finishing the future as a normal
+    # short count. asyncdispatch never raises this type, so this is a no-op there.
+    raise e
   except CatchableError:
-    # Preserve the old contract of never raising out of this proc: report
+    # Preserve the old contract of never raising on ordinary I/O errors: report
     # however many bytes already made it out.
     discard
+  finally:
+    if held:
+      releaseStdoutLock()
 
   result = total
 

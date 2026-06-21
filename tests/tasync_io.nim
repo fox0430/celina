@@ -1,6 +1,6 @@
 # Test suite for async_io module
 #
-import std/[unittest, posix]
+import std/[unittest, posix, deques]
 
 import ../celina/async/async_backend
 import ../celina/async/async_io {.all.}
@@ -91,6 +91,113 @@ suite "Async Output Functions":
 
   test "tryWriteAsync with empty data is a no-op":
     waitFor tryWriteAsync("")
+
+suite "Stdout Write Serialization":
+  # writeStdoutAsync yields the event loop mid-write, so concurrent writers must
+  # be serialized through tryAcquireStdoutLockImmediate/waitForStdoutLock/
+  # releaseStdoutLock or their bytes interleave and corrupt escape sequences.
+  # These exercise the lock directly via the {.all.} import.
+
+  teardown:
+    # Defensive isolation: these tests assert against module-global lock state, so
+    # a failed assertion mid-test must not leak stdoutWriteLocked/waiters into the
+    # next test and cascade spurious failures. Each test still opens with
+    # `check not stdoutWriteLocked` to prove it actually started clean.
+    while stdoutWriteWaiters.len > 0:
+      discard stdoutWriteWaiters.popFirst()
+    stdoutWriteLocked = false
+
+  test "tryAcquireStdoutLockImmediate grants immediately when the lock is free":
+    check not stdoutWriteLocked
+    check tryAcquireStdoutLockImmediate() # free -> granted, no Future allocated
+    check stdoutWriteLocked
+    releaseStdoutLock()
+    check not stdoutWriteLocked
+
+  test "contended acquires park and are handed off in FIFO order":
+    check not stdoutWriteLocked
+    check tryAcquireStdoutLockImmediate() # free -> immediate, holds the lock
+    let f2 = waitForStdoutLock() # held -> parked
+    let f3 = waitForStdoutLock() # held -> parked behind f2
+    check not f2.finished
+    check not f3.finished
+    check stdoutWriteWaiters.len == 2
+
+    releaseStdoutLock() # hands the lock to f2, stays held
+    check f2.finished
+    check not f3.finished
+    check stdoutWriteLocked
+
+    releaseStdoutLock() # hands the lock to f3
+    check f3.finished
+    check stdoutWriteLocked
+
+    releaseStdoutLock() # no waiter left -> lock clears
+    check not stdoutWriteLocked
+    check stdoutWriteWaiters.len == 0
+
+  test "release skips an already-finished (cancelled) waiter":
+    check not stdoutWriteLocked
+    check tryAcquireStdoutLockImmediate() # immediate, holds the lock
+    let dead = waitForStdoutLock() # parked
+    let live = waitForStdoutLock() # parked behind it
+    # A waiter that finished out from under the queue (here via complete(); a real
+    # chronos cancellation is covered by the dedicated test below). Release must
+    # skip it via the `not waiter.finished` guard and hand off to the next live one.
+    dead.complete()
+    check stdoutWriteWaiters.len == 2
+
+    releaseStdoutLock() # skips `dead`, hands to `live`
+    check live.finished
+    check stdoutWriteLocked
+
+    releaseStdoutLock()
+    check not stdoutWriteLocked
+    check stdoutWriteWaiters.len == 0
+
+  test "writes contending for a held lock queue and each flush in full (FIFO)":
+    # Hold the lock first so the writes below cannot grab it synchronously and
+    # must actually park. Otherwise each small write completes in one shot before
+    # the next is even launched, so nothing ever contends and the test would pass
+    # even if the lock were a no-op.
+    check not stdoutWriteLocked
+    check tryAcquireStdoutLockImmediate()
+    check stdoutWriteLocked
+    let payloads = @["aa", "bbb", "cccc"]
+    var futs: seq[Future[int]]
+    for p in payloads:
+      futs.add writeStdoutAsync(p)
+    # All three are now genuinely queued behind the held lock.
+    check stdoutWriteWaiters.len == payloads.len
+    for f in futs:
+      check not f.finished
+    # Release; the queued writers drain in FIFO order, each flushing in full.
+    releaseStdoutLock()
+    for i in 0 ..< futs.len:
+      check (waitFor futs[i]) == payloads[i].len
+    check not stdoutWriteLocked
+    check stdoutWriteWaiters.len == 0
+
+  when hasChronos:
+    test "a writeStdoutAsync cancelled while parked is skipped, never wedging the lock":
+      # Real chronos cancellation (asyncdispatch has none): a parked writer whose
+      # CancelledError fires at `await waitForStdoutLock()` must NOT release a lock
+      # it never held, and the next release must skip its cancelled waiter and
+      # clear the lock rather than deadlock on it.
+      check not stdoutWriteLocked
+      check tryAcquireStdoutLockImmediate() # the test holds the lock
+      let parked = writeStdoutAsync("zz") # parks behind us
+      check stdoutWriteWaiters.len == 1
+      check not parked.finished
+
+      waitFor parked.cancelAndWait()
+      check parked.cancelled()
+      check stdoutWriteLocked # we still hold it; the cancelled writer didn't touch it
+      check stdoutWriteWaiters.len == 1 # cancelled waiter lingers until release
+
+      releaseStdoutLock() # must skip the cancelled waiter and clear the lock
+      check not stdoutWriteLocked
+      check stdoutWriteWaiters.len == 0
 
 suite "Blocking Output Functions":
   test "writeStdoutBlocking writes data":
