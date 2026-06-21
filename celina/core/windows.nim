@@ -185,7 +185,9 @@ proc newWindow*(
   result.contentArea = area
   if border.isSome():
     let b = border.get()
-    # Proper calculation with min size guarantee
+    # Clamp to 0, never 1: when the window is too small to hold both borders
+    # and any content, the content area collapses to an empty rect rather than
+    # a 1-cell strip that would overlap (and be drawn over) the border itself.
     let leftMargin = if b.left: 1 else: 0
     let rightMargin = if b.right: 1 else: 0
     let topMargin = if b.top: 1 else: 0
@@ -194,8 +196,8 @@ proc newWindow*(
     result.contentArea = rect(
       area.x + leftMargin,
       area.y + topMargin,
-      max(1, area.width - leftMargin - rightMargin),
-      max(1, area.height - topMargin - bottomMargin),
+      max(0, area.width - leftMargin - rightMargin),
+      max(0, area.height - topMargin - bottomMargin),
     )
 
   # Create buffer for content area (always use (0,0) origin for window buffers)
@@ -208,7 +210,9 @@ proc calculateContentArea(window: Window): Rect =
   result = window.area
   if window.border.isSome():
     let border = window.border.get()
-    # Correct calculation: shrink by border thickness, not half
+    # Shrink by border thickness, clamping to 0 (not 1) so an undersized
+    # window yields an empty content area instead of one cell laid over the
+    # border. Mirrors the calculation in `newWindow`.
     let leftMargin = if border.left: 1 else: 0
     let rightMargin = if border.right: 1 else: 0
     let topMargin = if border.top: 1 else: 0
@@ -217,8 +221,8 @@ proc calculateContentArea(window: Window): Rect =
     result = rect(
       result.x + leftMargin,
       result.y + topMargin,
-      max(1, result.width - leftMargin - rightMargin),
-      max(1, result.height - topMargin - bottomMargin),
+      max(0, result.width - leftMargin - rightMargin),
+      max(0, result.height - topMargin - bottomMargin),
     )
 
 proc updateContentArea(window: Window) =
