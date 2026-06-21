@@ -458,31 +458,17 @@ proc drawBorder(window: Window, destBuffer: var Buffer) =
   let chars = border.chars
   let style = border.style
 
-  # Draw corners
-  if border.top and border.left:
-    destBuffer.setString(area.x, area.y, chars.topLeft, style)
-  if border.top and border.right:
-    destBuffer.setString(area.right - 1, area.y, chars.topRight, style)
-  if border.bottom and border.left:
-    destBuffer.setString(area.x, area.bottom - 1, chars.bottomLeft, style)
-  if border.bottom and border.right:
-    destBuffer.setString(area.right - 1, area.bottom - 1, chars.bottomRight, style)
-
-  # Draw horizontal borders
-  if border.top:
-    for x in (area.x + 1) ..< (area.right - 1):
-      destBuffer.setString(x, area.y, chars.horizontal, style)
-  if border.bottom:
-    for x in (area.x + 1) ..< (area.right - 1):
-      destBuffer.setString(x, area.bottom - 1, chars.horizontal, style)
-
-  # Draw vertical borders
-  if border.left:
-    for y in (area.y + 1) ..< (area.bottom - 1):
-      destBuffer.setString(area.x, y, chars.vertical, style)
-  if border.right:
-    for y in (area.y + 1) ..< (area.bottom - 1):
-      destBuffer.setString(area.right - 1, y, chars.vertical, style)
+  # Draw the edges and corners via the shared painter (see `borders.drawBox`),
+  # so a window border and a `widgets/panel` border can never diverge.
+  destBuffer.drawBox(
+    area,
+    chars,
+    top = border.top,
+    right = border.right,
+    bottom = border.bottom,
+    left = border.left,
+    style = style,
+  )
 
   # Draw title if present. `maxTitleLen` is a column budget, so compare and
   # truncate by display width — never by byte length — so a multibyte or

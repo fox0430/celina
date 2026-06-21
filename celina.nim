@@ -55,6 +55,7 @@
 ## - `button <celina/widgets/button.html>`_ — Interactive button widget
 ## - `input <celina/widgets/input.html>`_ — Text input widget with cursor and selection
 ## - `list <celina/widgets/list.html>`_ — List widget with scrolling and selection
+## - `panel <celina/widgets/panel.html>`_ — Framing widget with border, title, and padding
 ## - `progress <celina/widgets/progress.html>`_ — Progress bar widget
 ## - `table <celina/widgets/table.html>`_ — Table widget for structured data
 ## - `tabs <celina/widgets/tabs.html>`_ — Tabbed interface widget
