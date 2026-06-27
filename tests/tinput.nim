@@ -18,7 +18,7 @@ suite "Input Widget Tests":
       check input.maxLength == 0
       check input.readOnly == false
       check input.password == false
-      check input.borderStyle == NoBorder
+      check input.borderStyle == bkNone
 
     test "Input with placeholder":
       let input = newInput(placeholder = "Enter text...")
@@ -670,22 +670,22 @@ suite "Input Widget Tests":
 
   suite "Border Style Tests":
     test "Border character retrieval":
-      let single = getBorderChars(SingleBorder)
+      let single = getBorderChars(bkSingle)
       check single.topLeft == "┌"
       check single.horizontal == "─"
       check single.vertical == "│"
 
-      let double = getBorderChars(DoubleBorder)
+      let double = getBorderChars(bkDouble)
       check double.topLeft == "╔"
       check double.horizontal == "═"
       check double.vertical == "║"
 
-      let rounded = getBorderChars(RoundedBorder)
+      let rounded = getBorderChars(bkRounded)
       check rounded.topLeft == "╭"
       check rounded.horizontal == "─"
       check rounded.vertical == "│"
 
-      let none = getBorderChars(NoBorder)
+      let none = getBorderChars(bkNone)
       check none.topLeft == ""
       check none.horizontal == ""
       check none.vertical == ""

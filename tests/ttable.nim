@@ -19,7 +19,7 @@ suite "Table Widget Tests":
       tableWidget.selectedIndices.len == 0
       tableWidget.scrollOffset == 0
       tableWidget.showHeader == true
-      tableWidget.borderStyle == SimpleBorder
+      tableWidget.borderStyle == bkSimple
 
   test "Column creation":
     # Test Column creation
@@ -280,13 +280,13 @@ suite "Table Widget Tests":
 
   test "Border characters":
     # Test getBorderChars function
-    let simple = getBorderChars(SimpleBorder)
+    let simple = getBorderChars(bkSimple)
     check:
       simple.horizontal == "-"
       simple.vertical == "|"
       simple.topLeft == "+"
 
-    let none = getBorderChars(NoBorder)
+    let none = getBorderChars(bkNone)
     check:
       none.horizontal == ""
       none.vertical == ""
@@ -353,7 +353,7 @@ suite "Table Widget Tests":
     let totalAvailableWidth = 30
     let widths = tableWidget.calculateColumnWidths(totalAvailableWidth)
 
-    # With SimpleBorder: 2 borders + 2 separators = 4 chars overhead
+    # With bkSimple: 2 borders + 2 separators = 4 chars overhead
     let expectedContentWidth = totalAvailableWidth - 4
     let actualContentWidth = widths.foldl(a + b, 0)
 
@@ -397,7 +397,7 @@ suite "Table Widget Tests":
     let rows = @[newTableRow(@["content"], some(customRowStyle), true)]
     var tableWidget = newTable(columns, rows)
 
-    tableWidget.borderStyle = SimpleBorder
+    tableWidget.borderStyle = bkSimple
     tableWidget.borderColor = style(color(Green))
     tableWidget.selectedRowStyle = style(color(White), color(Black))
 
@@ -730,7 +730,7 @@ suite "Table Scrollbar Tests":
 
     # Calculate actual table width
     let columnWidths = table.calculateColumnWidths(80)
-    let hasBorders = table.borderStyle != NoBorder
+    let hasBorders = table.borderStyle != bkNone
     let actualTableWidth =
       calculateTotalLineWidth(columnWidths, table.columnSpacing, hasBorders)
 
@@ -742,9 +742,9 @@ suite "Table Scrollbar Tests":
       scrollbarX > 0 # Valid position
 
     # Test with no border
-    table.borderStyle = NoBorder
-    let scrollbarXNoBorder = actualTableWidth - 1
-    check scrollbarXNoBorder == actualTableWidth - 1 # At right edge
+    table.borderStyle = bkNone
+    let scrollbarXbkNone = actualTableWidth - 1
+    check scrollbarXbkNone == actualTableWidth - 1 # At right edge
 
   test "Scrollbar with different border styles":
     # Test scrollbar positioning with each border style
