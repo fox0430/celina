@@ -728,32 +728,45 @@ proc hasVisibleColumnAfter(columnWidths: seq[int], index: int): bool =
 
 proc drawClipped(b: var Buffer, x, y: int, area: Rect, text: string, style: Style) =
   ## Write `text` on row `y`, clipped to `area`. A row outside the vertical span
-  ## `[area.y, area.bottom)` is dropped whole; within a row, runes outside the
-  ## column range `[area.x, area.right)` — and any wide rune straddling an edge —
-  ## are dropped. This keeps the table strictly inside the area it was handed:
-  ## border glyphs, rounding, a collapsed scrollbar position, or a line that
-  ## doesn't fit the remaining height can no longer spill past any edge and
-  ## corrupt the neighbouring widgets that share the screen buffer.
+  ## `[area.y, area.bottom)` is dropped whole; within a row, grapheme clusters
+  ## outside the column range `[area.x, area.right)` — and any wide cluster
+  ## straddling an edge — are dropped. This keeps the table strictly inside the
+  ## area it was handed: border glyphs, rounding, a collapsed scrollbar position,
+  ## or a line that doesn't fit the remaining height can no longer spill past any
+  ## edge and corrupt the neighbouring widgets that share the screen buffer.
+  ##
+  ## Clip by grapheme cluster (not per code point) so the width measured here
+  ## matches how `setString` lays the cluster out — a VS16/ZWJ emoji that renders
+  ## in two columns is counted as two, so it can no longer sneak one column past
+  ## the right edge.
   let leftEdge = area.x
   let rightEdge = area.right
   if text.len == 0 or leftEdge >= rightEdge or x >= rightEdge:
     return
   if y < area.y or y >= area.bottom:
     return
+  # Measure with `clusterMetrics` (no per-cluster string build) to locate the
+  # contiguous run of visible clusters as a rune range, then materialize that
+  # slice once. Clusters left of `leftEdge` and the first cluster that would
+  # spill past `rightEdge` (and everything after it) are excluded.
+  let runes = text.toRunes
   var col = x
   var drawX = -1
-  var visible = ""
-  for r in text.runes:
-    let w = runeWidth(r)
+  var startIdx = -1
+  var endIdx = runes.len
+  for (leadIdx, w) in clusterMetrics(runes):
     if col >= rightEdge or col + w > rightEdge:
-      break # this (possibly wide) rune would spill past the right edge
-    if col >= leftEdge:
-      if drawX < 0:
-        drawX = col
-      visible.add($r)
-    # runes left of (or straddling) leftEdge are dropped
+      endIdx = leadIdx # this cluster would spill past the right edge
+      break
+    if col >= leftEdge and startIdx < 0:
+      drawX = col
+      startIdx = leadIdx
+    # clusters left of (or straddling) leftEdge are dropped
     col += w
-  if drawX >= 0 and visible.len > 0:
+  if startIdx >= 0 and startIdx < endIdx:
+    var visible = ""
+    for j in startIdx ..< endIdx:
+      visible.add($runes[j])
     b.setString(drawX, y, visible, style)
 
 # Table widget methods

@@ -1372,3 +1372,19 @@ suite "Buffer Module Tests":
       check truncateToWidth("日", 1) == ""
       # Narrow prefix fits; following wide character drops
       check truncateToWidth("a日", 2) == "a"
+
+    test "truncateToWidth measures emoji clusters by rendered width":
+      # ▶️ (U+25B6 + VS16) renders in 2 columns, so it must drop at maxWidth=1
+      # rather than being kept as a 1-column base — the result never exceeds the
+      # budget by display width.
+      let play = "▶" & $Rune(0xFE0F)
+      check truncateToWidth(play, 1) == ""
+      check truncateToWidth(play, 2) == play
+      check displayWidth(truncateToWidth(play & "X", 2)) == 2
+
+    test "truncateToWidth keeps ZWJ emoji clusters whole":
+      # Family is one 2-col cluster: dropped whole below 2, kept whole at 2.
+      let family = "👨‍👩‍👧"
+      check truncateToWidth(family, 1) == ""
+      check truncateToWidth(family, 2) == family
+      check truncateToWidth("A" & family, 2) == "A"

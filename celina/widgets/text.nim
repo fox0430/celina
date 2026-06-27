@@ -50,27 +50,31 @@ proc text*(
 # Text processing utilities
 proc wrapByWidth(line: string, maxWidth: int): seq[string] =
   ## Break a string into chunks whose display width each fit within
-  ## `maxWidth`, splitting at any character boundary. A rune wider than
-  ## `maxWidth` (e.g. a wide CJK glyph when maxWidth is 1) cannot fit and is
-  ## dropped, since it can be neither placed nor split.
+  ## `maxWidth`, splitting at grapheme-cluster boundaries. A cluster wider than
+  ## `maxWidth` (e.g. a wide CJK glyph, or a VS16/ZWJ emoji that renders in two
+  ## columns, when maxWidth is 1) cannot fit and is dropped, since it can be
+  ## neither placed nor split.
+  ##
+  ## Measuring and splitting by cluster keeps a multi-rune emoji whole and makes
+  ## the width agree with `displayWidth`, which the caller uses to decide when a
+  ## word needs wrapping at all.
   var chunk = ""
   var w = 0
-  for r in line.runes:
-    let rw = runeWidth(r)
-    if rw > maxWidth:
-      # A single wide character cannot fit; flush and drop it
+  for (_, clusterText, cw) in graphemeClusters(line.toRunes):
+    if cw > maxWidth:
+      # A single wide cluster cannot fit; flush and drop it
       if chunk.len > 0:
         result.add(chunk)
         chunk = ""
         w = 0
       continue
-    if w + rw > maxWidth:
+    if w + cw > maxWidth:
       result.add(chunk)
-      chunk = $r
-      w = rw
+      chunk = clusterText
+      w = cw
     else:
-      chunk.add($r)
-      w += rw
+      chunk.add(clusterText)
+      w += cw
   if chunk.len > 0:
     result.add(chunk)
 
