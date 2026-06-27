@@ -1,6 +1,6 @@
-import std/unittest
+import std/[unittest, strutils]
 
-import ../celina/widgets/text
+import ../celina/widgets/text {.all.}
 import ../celina/core/[buffer, geometry, colors]
 
 # Test suite for Text widget module
@@ -99,6 +99,30 @@ suite "Text Widget Tests":
 
       check line1HasContent
       check line2HasContent
+
+    test "wrapByWidth keeps a ZWJ emoji cluster whole and measures it by cluster":
+      # Regression: the family "👨‍👩‍👧" is one 2-column grapheme cluster. The old
+      # per-code-point width summed it to 6 and split at rune boundaries, so it
+      # could be broken apart between the joined emoji. It must now stay whole and
+      # count as 2 columns, agreeing with the cluster-aware displayWidth the
+      # caller uses to decide when to wrap.
+      let family = "👨‍👩‍👧"
+      let chunks = wrapByWidth("AB" & family & "CD", 3)
+
+      # No chunk overflows the budget, measured by cluster.
+      for chunk in chunks:
+        check chunk.displayWidth <= 3
+      # Reconstructing the chunks reproduces the input exactly (nothing dropped).
+      var joined = ""
+      for chunk in chunks:
+        joined.add(chunk)
+      check joined == "AB" & family & "CD"
+      # The family is never split: it lives intact inside a single chunk.
+      var whole = false
+      for chunk in chunks:
+        if family in chunk:
+          whole = true
+      check whole
 
     test "CharWrap mode wraps at any character":
       let widget = newText("ABCDEFGHIJKLMNOP", wrap = CharWrap)

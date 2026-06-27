@@ -69,11 +69,12 @@ suite "Unicode Support Tests":
       check runesWidth(decomposed) == 1
       check runesWidth("é".toRunes) == 1 # precomposed U+00E9
 
-    test "ZWJ emoji sequence measures by visible glyphs":
-      # Family "👨‍👩‍👧": 3 wide emoji joined by two ZWJ (U+200D). The joiners
-      # are zero-width, so the run measures 3 * 2 = 6 columns.
+    test "ZWJ emoji sequence measures as one cluster":
+      # Family "👨‍👩‍👧": 3 emoji joined by two ZWJ (U+200D) form a single
+      # grapheme cluster that terminals render in 2 columns (verified on
+      # kitty), regardless of how many emoji it joins.
       let family = "👨‍👩‍👧".toRunes
-      check runesWidth(family) == 6
+      check runesWidth(family) == 2
 
     test "displayWidth ignores combining marks and joiners":
       check displayWidth("é") == 1
@@ -200,31 +201,31 @@ suite "Unicode Support Tests":
       check buffer[1, 0].symbol == "" # shadow cell preserved
       check buffer[2, 0].symbol == "X" # lands at column 2, not shifted
 
-    test "ZWJ folds into the preceding emoji, not its own cell":
+    test "ZWJ emoji cluster collapses into one wide cell":
       var buffer = newBuffer(10, 1)
-      # "👨‍👩": man + ZWJ + woman. We fold zero-width runes (the ZWJ) into the
-      # base, but do not collapse the whole cluster — each visible emoji keeps
-      # its own wide cell, matching wcwidth/unicode-width conventions.
+      # "👨‍👩": man + ZWJ + woman is one grapheme cluster terminals draw in 2
+      # columns (kitty). The whole cluster lands in the lead cell with a single
+      # shadow; the next glyph follows at column 2, not 4.
       let zwj = "👨‍👩".toRunes
       buffer.setRunes(0, 0, zwj & @[Rune('!')])
 
-      check buffer[0, 0].symbol == "👨" & $Rune(0x200D) # man + ZWJ
+      check buffer[0, 0].symbol == "👨" & $Rune(0x200D) & "👩" # full cluster
       check buffer[0, 0].width() == 2
-      check buffer[1, 0].symbol == "" # shadow of man's wide cell
-      check buffer[2, 0].symbol == "👩" # woman is a separate base cell
-      check buffer[3, 0].symbol == "" # shadow of woman's wide cell
-      check buffer[4, 0].symbol == "!" # next glyph at column 4
+      check buffer[1, 0].symbol == "" # single shadow cell
+      check buffer[2, 0].symbol == "!" # next glyph at column 2
+      check buffer[3, 0].symbol == " " # untouched blank
 
-    test "emoji + variation selector stays in one cell":
+    test "emoji + VS16 promotes to a wide cell":
       var buffer = newBuffer(8, 1)
-      # U+2764 HEAVY BLACK HEART + U+FE0F emoji presentation selector. The
-      # selector is zero-width, so the next glyph lands right after the heart
-      # (whose own column count is environment-defined — derive it).
-      let heartWidth = runeWidth(Rune(0x2764))
+      # U+2764 HEAVY BLACK HEART (default text presentation, 1 col) + U+FE0F
+      # emoji presentation selector. VS16 promotes the cluster to emoji
+      # presentation = 2 columns (kitty), so the next glyph lands at column 2.
       buffer.setRunes(0, 0, @[Rune(0x2764), Rune(0xFE0F), Rune('A')])
 
       check buffer[0, 0].symbol == $Rune(0x2764) & $Rune(0xFE0F)
-      check buffer[heartWidth, 0].symbol == "A"
+      check buffer[0, 0].width() == 2
+      check buffer[1, 0].symbol == "" # shadow cell
+      check buffer[2, 0].symbol == "A" # next glyph at column 2
 
     test "leading combining mark with no base is dropped":
       var buffer = newBuffer(6, 1)
@@ -240,3 +241,157 @@ suite "Unicode Support Tests":
 
       check buffer[0, 0].symbol == "e" & $Rune(0x0301)
       check buffer[1, 0].symbol == "f"
+
+  suite "Grapheme cluster width":
+    # Width is a property of the whole grapheme cluster, not of any single code
+    # point. VS16 promotes a narrow base to emoji presentation (2 columns); a
+    # ZWJ emoji sequence and a regional-indicator flag are each one 2-column
+    # cluster. Verified against kitty.
+    test "VS16 promotes a narrow pictographic to width 2":
+      # ▶ (U+25B6, default text presentation = 1 col) + VS16 -> 2 cols.
+      check displayWidth("▶" & $Rune(0xFE0F)) == 2
+      check displayWidth("⚠" & $Rune(0xFE0F)) == 2
+      # Without VS16 the bare pictographic keeps its text width.
+      check displayWidth("▶") == 1
+      # VS15 (text presentation) must NOT promote.
+      check displayWidth("▶" & $Rune(0xFE0E)) == 1
+
+    test "a trailing VS15 overrides a preceding VS16 back to text width":
+      # base + VS16 + VS15 is ill-formed, but the last presentation selector
+      # wins: VS15 requests text presentation, so the cluster must report 1 col,
+      # not stay promoted at 2 and desync the renderer with a ghost cell.
+      check displayWidth("⚠" & $Rune(0xFE0F) & $Rune(0xFE0E)) == 1
+      check displayWidth("▶" & $Rune(0xFE0F) & $Rune(0xFE0E)) == 1
+
+    test "VS16 cluster renders as a wide cell with a shadow":
+      var buffer = newBuffer(8, 1)
+      # ⚠ + VS16 + 'X': cluster occupies 2 columns, X lands at column 2.
+      buffer.setRunes(0, 0, "⚠".toRunes & @[Rune(0xFE0F), Rune('X')])
+
+      check buffer[0, 0].symbol == "⚠" & $Rune(0xFE0F)
+      check buffer[0, 0].width() == 2
+      check buffer[1, 0].symbol == "" # shadow cell
+      check buffer[2, 0].symbol == "X"
+
+    test "three-emoji ZWJ family is one width-2 cluster":
+      var buffer = newBuffer(10, 1)
+      let family = "👨‍👩‍👧".toRunes # man ZWJ woman ZWJ girl
+      check runesWidth(family) == 2
+      buffer.setRunes(0, 0, family & @[Rune('!')])
+
+      check buffer[0, 0].width() == 2
+      check buffer[1, 0].symbol == "" # single shadow
+      check buffer[2, 0].symbol == "!" # next glyph at column 2
+
+    test "regional-indicator flag is one width-2 cluster":
+      var buffer = newBuffer(8, 1)
+      let flag = "🇯🇵".toRunes # U+1F1EF U+1F1F5
+      check runesWidth(flag) == 2
+      buffer.setRunes(0, 0, flag & @[Rune('!')])
+
+      check buffer[0, 0].width() == 2
+      check buffer[1, 0].symbol == "" # shadow of the flag glyph
+      check buffer[2, 0].symbol == "!" # next glyph at column 2
+
+    test "emoji modifier (skin tone) promotes a narrow base to width 2":
+      # ☝ (U+261D, default text presentation = 1 col) is an Emoji_Modifier_Base.
+      # Followed by a Fitzpatrick skin-tone modifier it becomes a 2-column emoji
+      # (kitty), even though the modifier is itself a zero-width Extend.
+      check displayWidth("☝" & $Rune(0x1F3FB)) == 2
+      check displayWidth("✌" & $Rune(0x1F3FD)) == 2
+      # A skin-tone modifier after a non-pictographic base must NOT promote.
+      check displayWidth("A" & $Rune(0x1F3FB)) == 1
+
+      var buffer = newBuffer(8, 1)
+      buffer.setRunes(0, 0, ("☝" & $Rune(0x1F3FB)).toRunes & @[Rune('X')])
+      check buffer[0, 0].width() == 2
+      check buffer[1, 0].symbol == "" # shadow cell
+      check buffer[2, 0].symbol == "X" # next glyph at column 2
+
+    test "keycap sequence promotes a narrow digit to width 2":
+      # "1️⃣" = '1' + VS16 + U+20E3 (combining enclosing keycap). The base digit
+      # is narrow and not pictographic, but the enclosing keycap makes terminals
+      # render it in 2 columns (kitty).
+      let keycap = "1" & $Rune(0xFE0F) & $Rune(0x20E3)
+      check displayWidth(keycap) == 2
+      # '#' and '*' are also valid keycap bases.
+      check displayWidth("#" & $Rune(0xFE0F) & $Rune(0x20E3)) == 2
+      # The bare digit, without the enclosing keycap, stays 1 column.
+      check displayWidth("1") == 1
+
+    test "U+20E3 after a non-keycap base does not promote to width 2":
+      # Only digits / '#' / '*' form a keycap. After any other base (here 'A')
+      # U+20E3 is a stray combining mark the terminal draws in one column, so it
+      # must fold as zero-width and NOT promote — promoting would over-count and
+      # leave a ghost cell, the desync this segmentation exists to prevent.
+      check displayWidth("A" & $Rune(0x20E3)) == 1
+
+      var buffer = newBuffer(8, 1)
+      buffer.setRunes(0, 0, ("A" & $Rune(0x20E3)).toRunes & @[Rune('B')])
+      check buffer[0, 0].symbol == "A" & $Rune(0x20E3) # mark folds onto 'A'
+      check buffer[0, 0].width() == 1
+      check buffer[1, 0].symbol == "B" # next glyph at column 1, nothing reserved
+
+    test "keycap cluster renders as a wide cell with a shadow":
+      var buffer = newBuffer(8, 1)
+      let keycap = ("1" & $Rune(0xFE0F) & $Rune(0x20E3)).toRunes
+      buffer.setRunes(0, 0, keycap & @[Rune('X')])
+
+      check buffer[0, 0].width() == 2
+      check buffer[1, 0].symbol == "" # shadow cell
+      check buffer[2, 0].symbol == "X" # next glyph at column 2
+
+    test "combining mark after a tab folds onto the expanded space, not dropped":
+      var buffer = newBuffer(10, 1)
+      # A C0 control (here a tab) is its own cluster, so a combining mark right
+      # after it attaches to the last expanded space cell instead of being
+      # swallowed into the control's cluster and silently dropped.
+      buffer.setRunes(0, 0, @[Rune('\t'), Rune(0x0301)], tabWidth = 4)
+
+      check buffer[3, 0].symbol == " " & $Rune(0x0301) # mark folded onto column 3
+
+    test "ZWJ after a non-emoji base does not swallow the following emoji":
+      # TR29 GB11 only joins `ExtPict ... ZWJ × ExtPict`. A ZWJ after a narrow
+      # non-emoji base (here 'A') must NOT pull the following emoji into the
+      # base's cluster: that collapsed "A ZWJ 👨" to one width-1 cell, so the
+      # buffer reserved 1 column while the terminal draws A(1) + man(2) = 3,
+      # leaving ghost cells. The ZWJ folds onto 'A'; the man opens its own cell.
+      let man = Rune(0x1F468)
+      check displayWidth("A" & $Rune(0x200D) & $man) == 3
+
+      var buffer = newBuffer(10, 1)
+      buffer.setRunes(0, 0, @[Rune('A'), Rune(0x200D), man, Rune('B')])
+      check buffer[0, 0].symbol == "A" & $Rune(0x200D) # ZWJ folds onto 'A'
+      check buffer[0, 0].width() == 1
+      check buffer[1, 0].symbol == $man # man opens its own wide cell
+      check buffer[1, 0].width() == 2
+      check buffer[2, 0].symbol == "" # man's shadow
+      check buffer[3, 0].symbol == "B" # next glyph at column 3, nothing swallowed
+
+  suite "foldZeroWidthRune":
+    # Per-rune setCell callers (one rune at a time, e.g. for per-glyph styling)
+    # must fold width-0 runes into the preceding cell themselves; this helper
+    # does it, stepping back over a wide character's shadow.
+    test "folds a mark onto the previous narrow base":
+      var buffer = newBuffer(6, 1)
+      buffer.setCell(0, 0, Rune('e'), 1)
+      # Cursor advanced to column 1; fold the combining acute into 'e'.
+      buffer.foldZeroWidthRune(1, 0, Rune(0x0301))
+
+      check buffer[0, 0].symbol == "e" & $Rune(0x0301)
+      check buffer[1, 0].symbol == " " # untouched
+
+    test "folds a mark onto a wide base across its shadow":
+      var buffer = newBuffer(6, 1)
+      buffer.setCell(0, 0, "漢".toRunes[0], 2) # lead at 0, shadow at 1
+      # Cursor advanced to column 2; fold across the shadow onto the lead.
+      buffer.foldZeroWidthRune(2, 0, Rune(0x0301))
+
+      check buffer[0, 0].symbol == "漢" & $Rune(0x0301)
+      check buffer[1, 0].symbol == "" # shadow preserved
+
+    test "leading mark with no base to the left is dropped":
+      var buffer = newBuffer(6, 1)
+      buffer.foldZeroWidthRune(0, 0, Rune(0x0301)) # x-1 < 0 -> no-op
+
+      check buffer[0, 0].symbol == " " # untouched

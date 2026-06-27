@@ -5,7 +5,7 @@
 
 import std/[strformat, unicode, sequtils, strutils]
 
-import pkg/unicodedb/[widths, properties]
+import pkg/unicodedb/[widths, properties, segmentation]
 
 import geometry, colors
 
@@ -59,6 +59,19 @@ const
     ## ACUTE ACCENT and the variation selectors U+FE00..U+FE0F), enclosing
     ## marks (Me), and format controls (Cf — e.g. U+200D ZERO WIDTH JOINER,
     ## U+200C ZWNJ, U+200B ZERO WIDTH SPACE).
+
+  VS16 = 0xFE0F
+    ## VARIATION SELECTOR-16: requests emoji presentation for the preceding
+    ## base, promoting an otherwise narrow emoji to two columns.
+  VS15 = 0xFE0E ## VARIATION SELECTOR-15: requests text presentation; never promotes.
+
+  EmojiModifierFirst = 0x1F3FB
+  EmojiModifierLast = 0x1F3FF
+    ## EMOJI MODIFIER FITZPATRICK type 1-6 (skin tones). They only follow an
+    ## Emoji_Modifier_Base, and the resulting modifier sequence takes emoji
+    ## presentation — two columns — even when the base's default presentation is
+    ## narrow (e.g. U+261D ☝). Like VS16, they fold as a zero-width mark but
+    ## promote the whole cluster.
 
 proc cell*(
     symbol: string = " ", style: Style = defaultStyle(), hyperlink: string = ""
@@ -123,10 +136,167 @@ template isC0Control(n: int): bool =
   ## must never reach a cell's `symbol`.
   n < 0x20 or n == 0x7F
 
+template isKeycapBase(r: Rune): bool =
+  ## A base that U+20E3 COMBINING ENCLOSING KEYCAP can enclose into a two-column
+  ## keycap glyph: an ASCII digit 0-9, '#', or '*'. After any other base, U+20E3
+  ## is just an ordinary (one-column) combining mark, so it must not promote.
+  int(r) == 0x23 or int(r) == 0x2A or int(r) in 0x30 .. 0x39
+
+proc clusterAt(runes: openArray[Rune], start: int): tuple[next, width: int] =
+  ## Segment one extended grapheme cluster starting at `start` (which must be a
+  ## valid index). Return the exclusive end index and the cluster's terminal
+  ## column width.
+  ##
+  ## Width is a property of the whole cluster, not of any single code point:
+  ## a base whose default presentation is narrow becomes two columns when an
+  ## emoji-presentation selector (VS16) or a ZWJ join makes it an emoji, and a
+  ## ZWJ emoji sequence (e.g. a multi-person family) renders as a single
+  ## two-column glyph regardless of how many emoji it joins. `runeWidth` stays
+  ## the per-code-point primitive; this is where cluster rules live.
+  let n = runes.len
+  let lead = runes[start]
+  var i = start + 1
+  var w = runeWidth(lead)
+
+  # A C0 control / DEL never combines with following marks (TR29 GB4/GB5): it is
+  # its own cluster, so a trailing combining mark becomes the next cluster and
+  # folds onto the previous base (e.g. a tab's expanded space) instead of being
+  # swallowed here and silently dropped by the control branch of setRunes.
+  if isC0Control(int(lead)):
+    return (i, w)
+
+  # Fast path for a lone rune: with nothing following it, no VS16/ZWJ/keycap
+  # promotion and no regional-indicator pair can apply, so its width is exactly
+  # `runeWidth(lead)`. This skips the `wordBreakProp` lookups for the dominant
+  # single-rune-cell case, which matters because `width(cell)` runs `clusterAt`
+  # inside the `[]=` write primitive (up to twice per cell written).
+  if i >= n:
+    return (i, w)
+
+  let leadProp = wordBreakProp(lead)
+
+  # Regional-indicator pair -> a single flag glyph, two columns. `i < n` is
+  # already guaranteed by the lone-rune fast path above, so `runes[i]` is in
+  # range here.
+  if leadProp == sgwRegionalIndicator and wordBreakProp(runes[i]) == sgwRegionalIndicator:
+    return (i + 1, 2)
+
+  let isEmoji = leadProp == sgwExtendedPictographic
+  var promote = false
+    ## Set by VS16 or a ZWJ join: the cluster takes emoji presentation and
+    ## therefore two columns even when the base alone is narrow.
+  var keycap = false
+    ## Set by U+20E3 COMBINING ENCLOSING KEYCAP: an emoji keycap sequence
+    ## (e.g. "1️⃣" = digit + VS16 + U+20E3) renders in two columns even though
+    ## the base digit is narrow and not itself pictographic.
+
+  while i < n:
+    let r = runes[i]
+    let cp = int(r)
+    # Variation selectors are themselves `sgwExtend` in TR29, so they must be
+    # matched before the generic extend/format fold below.
+    if cp == VS16:
+      if isEmoji:
+        promote = true
+      inc i
+      continue
+    if cp == VS15:
+      # Text-presentation selector: requests the non-emoji glyph (one column).
+      # As the last presentation selector in the cluster it overrides a preceding
+      # VS16, so clear `promote` -- e.g. base + VS16 + VS15 renders as text,
+      # width 1, not the 2 a stale `promote` would report (which would advance the
+      # differential renderer's cursor a column too far and leave a ghost cell).
+      promote = false
+      inc i
+      continue
+    if cp in EmojiModifierFirst .. EmojiModifierLast:
+      # Emoji modifier (skin tone): folds as a zero-width mark but, like VS16,
+      # promotes a narrow Emoji_Modifier_Base (a subset of ExtendedPictographic)
+      # to its two-column emoji presentation. Guarded by `isEmoji` so a stray
+      # modifier after a non-pictographic base does not over-count.
+      if isEmoji:
+        promote = true
+      inc i
+      continue
+    if cp == 0x20E3:
+      # COMBINING ENCLOSING KEYCAP: folds as a zero-width mark but promotes the
+      # whole cluster to a two-column keycap glyph -- only over a valid keycap
+      # base (digit / '#' / '*'). After any other base it is a stray combining
+      # mark the terminal draws in one column, so promoting would over-count and
+      # re-introduce the ghost-cell desync this segmentation exists to prevent.
+      if isKeycapBase(lead):
+        keycap = true
+      inc i
+      continue
+    let p = wordBreakProp(r)
+    if p == sgwZwj:
+      # A ZWJ that joins another emoji collapses the whole sequence into one
+      # two-column cluster; a dangling ZWJ just folds as a zero-width rune.
+      #
+      # TR29 GB11 only suppresses the break for `ExtPict Extend* ZWJ × ExtPict`,
+      # i.e. when the cluster already *is* an emoji (`isEmoji`). A ZWJ after a
+      # non-emoji base (e.g. "A" + ZWJ + emoji) does NOT join: the ZWJ folds
+      # onto the base as a zero-width rune and the following emoji opens its own
+      # cluster. Without the `isEmoji` guard the emoji would be swallowed here
+      # and the cluster kept at the base's narrow width, under-counting the
+      # column the terminal still draws and re-introducing the ghost-cell desync.
+      if isEmoji and i + 1 < n and wordBreakProp(runes[i + 1]) == sgwExtendedPictographic:
+        promote = true
+        i += 2
+        continue
+      inc i
+      continue
+    if p == sgwExtend or p == sgwFormat:
+      inc i
+      continue
+    break
+
+  # `promote` is only ever set under an `isEmoji` guard (VS16 / ZWJ join above),
+  # so it already implies emoji presentation; `keycap` promotes a valid keycap
+  # base independently.
+  if promote or keycap:
+    w = 2
+  (i, w)
+
+iterator clusterMetrics*(runes: openArray[Rune]): tuple[leadIdx, width: int] =
+  ## Segment `runes` into extended grapheme clusters, yielding each cluster's
+  ## lead rune index and terminal column width *without* materializing the
+  ## cluster text. Use this for measurement passes (total width, alignment,
+  ## clipping math) where the cluster string is not needed — it avoids the
+  ## per-cluster string allocation that `graphemeClusters` pays.
+  var i = 0
+  while i < runes.len:
+    let (nxt, w) = clusterAt(runes, i)
+    yield (i, w)
+    i = nxt
+
+iterator graphemeClusters*(
+    runes: openArray[Rune]
+): tuple[leadIdx: int, text: string, width: int] =
+  ## Segment `runes` into extended grapheme clusters, yielding for each the lead
+  ## rune's index, the full cluster text (lead plus folded/joined runes), and
+  ## the cluster's terminal column width. Use this for cell layout so the lead
+  ## cell carries the whole cluster and the cursor advances by `width`. When the
+  ## text is not needed, prefer `clusterMetrics` to skip the string build.
+  var i = 0
+  while i < runes.len:
+    let (nxt, w) = clusterAt(runes, i)
+    var text = ""
+    for j in i ..< nxt:
+      text.add($runes[j])
+    yield (i, text, w)
+    i = nxt
+
+proc clustersWidth*(runes: openArray[Rune]): int =
+  ## Total terminal column width of `runes`, measured by grapheme cluster (so
+  ## VS16-promoted and ZWJ emoji clusters count as two columns, not summed
+  ## per code point). The width counterpart of `graphemeClusters`.
+  for (_, w) in clusterMetrics(runes):
+    result += w
+
 proc runesWidth*(runes: seq[Rune]): int =
-  ## Calculate total display width of a sequence of runes
-  for rune in runes:
-    result += runeWidth(rune)
+  ## Calculate total display width of a sequence of runes, by grapheme cluster.
+  clustersWidth(runes)
 
 proc displayWidth*(s: string): int =
   ## Calculate the display width of a UTF-8 string in terminal columns.
@@ -134,31 +304,59 @@ proc displayWidth*(s: string): int =
   ## Wide characters (CJK, emoji, etc.) count as 2 columns; narrow characters
   ## count as 1. Use this in place of `runeLen` whenever the result feeds into
   ## visual layout (truncation, padding, width reservation, preferred size).
-  for r in s.runes:
-    result += runeWidth(r)
+  # Fast path: a pure-ASCII string has one column per byte (every ASCII code
+  # point is width 1, including C0 controls, matching `runeWidth`), so there is
+  # nothing to segment and no need to materialize a `seq[Rune]`. This covers the
+  # dominant TUI case (plain-text labels) and the hot word-wrap loop, which
+  # calls `displayWidth` once per word.
+  for ch in s:
+    if ch >= '\x80':
+      return clustersWidth(s.toRunes)
+  s.len
 
 proc truncateToWidth*(s: string, maxWidth: int): string =
   ## Return the longest prefix of `s` whose display width does not exceed
-  ## `maxWidth`. Characters are kept whole — a wide character is dropped
-  ## rather than split when only one column remains.
+  ## `maxWidth`. Grapheme clusters are kept whole and measured by cluster, so a
+  ## wide cluster — a CJK character, or a VS16/ZWJ emoji that renders in two
+  ## columns — is dropped rather than split or under-counted when it would not
+  ## fit. The result's `displayWidth` therefore never exceeds `maxWidth`.
   if maxWidth <= 0:
     return ""
-  var w = 0
-  for r in s.runes:
-    let rw = runeWidth(r)
-    if w + rw > maxWidth:
+  # Fast path: a pure-ASCII string is one column per byte, so the longest fitting
+  # prefix is just its first `maxWidth` bytes — no segmentation or `seq[Rune]`.
+  var ascii = true
+  for ch in s:
+    if ch >= '\x80':
+      ascii = false
       break
-    result.add($r)
-    w += rw
+  if ascii:
+    return s[0 ..< min(maxWidth, s.len)]
+  # Measure with `clusterMetrics` (no per-cluster string build) to find the rune
+  # index past the longest fitting prefix, then build the result once.
+  let runes = s.toRunes
+  var w = 0
+  var endIdx = runes.len
+  for (leadIdx, cw) in clusterMetrics(runes):
+    if w + cw > maxWidth:
+      endIdx = leadIdx
+      break
+    w += cw
+  for j in 0 ..< endIdx:
+    result.add($runes[j])
 
 proc width*(cell: Cell): int =
-  ## Get the display width of the cell's symbol
+  ## Get the display width of the cell's symbol.
+  ##
+  ## A cell holds exactly one grapheme cluster, so this is cluster-aware: a
+  ## VS16-promoted or ZWJ emoji lead reports 2, matching `setRunes`/`setString`
+  ## layout. `[]=` relies on this for wide-character shadow cleanup, so it must
+  ## not regress to a per-code-point `runeWidth(runes[0])`.
   if cell.symbol.len == 0:
     return 0
   let runes = cell.symbol.toRunes
   if runes.len == 0:
     return 0
-  return runeWidth(runes[0])
+  return clusterAt(runes, 0).width
 
 proc `==`*(a, b: Cell): bool =
   ## Compare two cells for equality
@@ -396,6 +594,17 @@ proc fill*(buffer: var Buffer, area: Rect, fillCell: Cell) =
   # Mark filled area as dirty
   buffer.markDirtyRect(clippedArea)
 
+proc foldClusterInto*(buffer: var Buffer, baseX, y: int, text: string) {.inline.} =
+  ## Append a zero-width cluster's text onto an existing base cell at
+  ## (baseX, y), keeping the grapheme cluster in a single cell. Direct symbol
+  ## mutation bypasses the wide-char cleanup in `[]=` so the base's shadow cell
+  ## (for a wide base) is preserved. A no-op when `baseX < 0` or out of range,
+  ## so callers can pass a "no base yet" sentinel and have the text dropped —
+  ## mirroring how a leading mark with nothing to attach to is dropped.
+  if baseX >= 0 and buffer.isValidPos(baseX, y):
+    buffer.content[y][baseX].symbol.add(text)
+    buffer.markDirty(baseX, y)
+
 proc setRunes*(
     buffer: var Buffer,
     x, y: int,
@@ -428,8 +637,12 @@ proc setRunes*(
     ## folded into it. `-1` means no base cell yet, so a zero-width rune
     ## leading the run has nothing to attach to and is dropped.
 
-  for rune in runes:
-    let n = int(rune)
+  # Iterate by grapheme cluster, not per rune, so VS16-promoted and ZWJ emoji
+  # clusters occupy a single (possibly wide) cell whose width matches how the
+  # terminal renders them. `text` carries the whole cluster; the C0/tab
+  # branches key off the lead rune and ignore it.
+  for (leadIdx, text, width) in graphemeClusters(runes):
+    let n = int(runes[leadIdx])
     if n == 0x09 and tabWidth > 0:
       # Tab: expand to spaces up to next tab stop relative to startX.
       # Bail out early once we've hit the right edge so that a run of
@@ -457,25 +670,20 @@ proc setRunes*(
       currentX.inc
       continue
 
-    let width = runeWidth(rune)
     if width == 0:
-      # Combining mark / joiner / variation selector: fold it into the base
-      # cell so the grapheme cluster stays in one cell and the cursor still
-      # advances one column per visible glyph. Writing it to its own cell
-      # would desync the differential renderer's cursor tracking, which
-      # assumes one written cell == one column. Direct symbol mutation
-      # bypasses the wide-char cleanup in `[]=` so the base's shadow cell
-      # (for a wide base) is preserved.
-      if lastBaseX >= 0 and buffer.isValidPos(lastBaseX, y):
-        buffer.content[y][lastBaseX].symbol.add($rune)
-        buffer.markDirty(lastBaseX, y)
+      # Zero-width cluster (a leading/orphan combining mark, joiner, or
+      # variation selector with no base of its own): fold it into the last
+      # base cell so the cluster stays in one cell and the cursor still
+      # advances one column per visible glyph. With nothing to attach to
+      # (`lastBaseX < 0`) it drops. See `foldClusterInto`.
+      buffer.foldClusterInto(lastBaseX, y, text)
       continue
 
     if currentX + width > buffer.area.width:
       break
 
     if buffer.isValidPos(currentX, y):
-      buffer[currentX, y] = cell($rune, style, hyperlink)
+      buffer[currentX, y] = cell(text, style, hyperlink)
       # For wide characters, mark the next cell as occupied (empty)
       # Also inherit the hyperlink for proper link region handling
       if width == 2 and buffer.isValidPos(currentX + 1, y):
@@ -544,13 +752,20 @@ proc setString*(
   if text.len == 0 or area.isEmpty:
     return
 
-  # Calculate display width of text (control chars treated as 1 column)
+  let runes = text.toRunes
+
+  # Calculate display width of text by grapheme cluster (control chars treated
+  # as 1 column). `clusterMetrics` measures without building cluster strings;
+  # the layout loop below re-segments with `graphemeClusters` for the (small,
+  # visible) clusters it actually draws. Re-segmenting is deterministic on the
+  # same runes, so the two passes cannot diverge, and we avoid materializing a
+  # cluster string for every off-screen cluster.
   var textWidth = 0
-  for rune in text.runes:
-    if isC0Control(int(rune)):
+  for (leadIdx, width) in clusterMetrics(runes):
+    if isC0Control(int(runes[leadIdx])):
       textWidth.inc
     else:
-      textWidth += runeWidth(rune)
+      textWidth += width
 
   # Calculate x position based on horizontal alignment
   let x =
@@ -575,8 +790,8 @@ proc setString*(
   var currentX = x
   var lastBaseX = -1 # Last base cell written within the area; see `setRunes`.
   try:
-    for rune in text.runes:
-      if isC0Control(int(rune)):
+    for (leadIdx, clusterText, width) in graphemeClusters(runes):
+      if isC0Control(int(runes[leadIdx])):
         # Substitute control char with single space.
         if currentX + 1 <= area.x:
           currentX.inc
@@ -589,21 +804,17 @@ proc setString*(
         currentX.inc
         continue
 
-      let width = runeWidth(rune)
-
-      # Zero-width rune: fold into the base cell rather than giving it a
+      # Zero-width cluster: fold into the base cell rather than giving it a
       # column of its own (see `setRunes`). A leading mark with no base
       # cell in the area is dropped.
       if width == 0:
-        if lastBaseX >= 0 and buffer.isValidPos(lastBaseX, y):
-          buffer.content[y][lastBaseX].symbol.add($rune)
-          buffer.markDirty(lastBaseX, y)
+        buffer.foldClusterInto(lastBaseX, y, clusterText)
         continue
 
-      # Skip characters whose base cell starts before the area. A wide rune
+      # Skip clusters whose base cell starts before the area. A wide cluster
       # straddling the left edge (currentX == area.x - 1) is dropped whole —
       # the right half cannot be drawn without an orphaned lead outside the
-      # area, mirroring how the right edge drops a rune overflowing it below.
+      # area, mirroring how the right edge drops a cluster overflowing it below.
       if currentX < area.x:
         currentX += width
         continue
@@ -615,7 +826,7 @@ proc setString*(
         break
 
       if buffer.isValidPos(currentX, y):
-        buffer[currentX, y] = cell($rune, style, hyperlink)
+        buffer[currentX, y] = cell(clusterText, style, hyperlink)
         if width == 2 and buffer.isValidPos(currentX + 1, y):
           buffer[currentX + 1, y] = cell("", style, hyperlink)
         lastBaseX = currentX
@@ -625,6 +836,26 @@ proc setString*(
     return
   except CatchableError:
     return
+
+proc foldZeroWidthRune*(buffer: var Buffer, x, y: int, rune: Rune) =
+  ## Fold a zero-width rune (combining mark, ZWJ, variation selector) into the
+  ## base cell immediately to the left of column `x`, keeping the grapheme
+  ## cluster in a single cell.
+  ##
+  ## For per-rune `setCell` callers: after writing a base glyph and advancing
+  ## the cursor to `x`, pass the following width-0 rune here. If the cell at
+  ## `x - 1` is the shadow (right half) of a wide character, the rune is folded
+  ## into the wide lead at `x - 2`. It is a no-op (the rune is dropped) when
+  ## there is no base cell to the left or the coordinates are out of range —
+  ## mirroring how `setRunes` drops a leading mark with nothing to attach to.
+  if y < 0 or y >= buffer.area.height:
+    return
+  var bx = x - 1
+  if bx < 0 or bx >= buffer.area.width:
+    return
+  if buffer.content[y][bx].isShadow and bx - 1 >= 0:
+    dec bx
+  buffer.foldClusterInto(bx, y, $rune)
 
 proc setCell*(
     buffer: var Buffer,
@@ -641,6 +872,13 @@ proc setCell*(
   ## Caller is responsible for providing correct width.
   ##
   ## Wide-character consistency is maintained via `[]=` (see its doc).
+  ##
+  ## Unlike `setString`/`setRunes`, this does NOT fold zero-width runes
+  ## (combining marks, ZWJ, variation selectors) into the preceding cell — it
+  ## writes a standalone cell at (x, y). A caller rendering one rune at a time
+  ## (e.g. to give each glyph its own style) must fold width-0 runes itself, or
+  ## use `foldZeroWidthRune`; otherwise the mark lands on the next column and is
+  ## overwritten.
   if x < 0 or x >= buffer.area.width or y < 0 or y >= buffer.area.height:
     return
   if width == 2 and x + 1 >= buffer.area.width:

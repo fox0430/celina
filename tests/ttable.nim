@@ -1,6 +1,6 @@
 ## Unit tests for table widget
 
-import std/[unittest, sequtils, options, strformat]
+import std/[unittest, sequtils, options, strformat, unicode]
 
 import ../celina/core/[geometry, colors, buffer, events]
 import ../celina/widgets/table {.all.}
@@ -506,6 +506,22 @@ suite "Table Widget Tests":
             if x < area.x or x >= area.x + area.width or y < area.y or
                 y >= area.y + area.height:
               check buf[x, y].symbol == " "
+
+  test "drawClipped measures a VS16 emoji by cluster width and never spills past the right edge":
+    # Regression: ⚠️ (U+26A0 + VS16) renders in 2 columns. The old per-code-point
+    # clip counted it as 1 (narrow base 1 + zero-width selector), so the cluster —
+    # and the glyph after it — could be written one column past the area's right
+    # edge into a neighbouring widget. Clipping by grapheme cluster, matching how
+    # setString lays the cluster out, keeps everything strictly inside the area.
+    var buf = newBuffer(10, 1)
+    let area = rect(0, 0, 3, 1) # columns [0, 3)
+    let warn = "⚠" & $Rune(0xFE0F)
+    drawClipped(buf, 0, 0, area, "A" & warn & "B", defaultStyle())
+
+    check buf[0, 0].symbol == "A"
+    check buf[1, 0].symbol == warn # wide cluster lead at columns 1..2
+    check buf[2, 0].symbol == "" # its shadow, still inside the area
+    check buf[3, 0].symbol == " " # 'B' dropped — nothing spilled past area.right
 
   test "Render does not crash when all columns collapse with empty rows":
     # Regression: when the area is too narrow for any column, every column
