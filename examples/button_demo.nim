@@ -11,10 +11,12 @@ proc main() =
   # Create a simple button with better sizing
   var btn = newButton(
     "    Click Here!    ",
-    normalStyle = style(White, Blue),
-    hoveredStyle = style(White, Cyan),
-    pressedStyle = style(Black, White),
-    focusedStyle = style(Yellow, Blue),
+    style = ButtonStyle(
+      normal: style(White, Blue),
+      hovered: style(White, Cyan),
+      pressed: style(Black, White),
+      focused: style(Yellow, Blue),
+    ),
     minWidth = 20,
     padding = 2,
   )

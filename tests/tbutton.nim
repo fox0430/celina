@@ -459,7 +459,7 @@ suite "Button Widget Tests":
 
     test "Button current style":
       let btn = newButton(
-        "Test", normalStyle = style(White, Blue), hoveredStyle = style(White, Cyan)
+        "Test", ButtonStyle(normal: style(White, Blue), hovered: style(White, Cyan))
       )
 
       check btn.getCurrentStyle() == style(White, Blue)
