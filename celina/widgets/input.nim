@@ -21,8 +21,12 @@ export
 type
   ## Text editing APIs (cursor, selection, insert, delete, scroll offset)
   ## operate in rune units, not display width — `runeLen` calls below are
-  ## intentional. Display width is only consulted by `calculateVisibleRange`
-  ## and the renderer, where layout requires column math.
+  ## intentional. Cursor navigation and deletion (arrows, Backspace, Delete)
+  ## snap to grapheme-cluster boundaries so a combining sequence (e + U+0301),
+  ## a VS16/ZWJ emoji, or a CJK character is moved over and removed as one
+  ## unit instead of one code point at a time. Display width (column math) is
+  ## consulted by `calculateVisibleRange` and the renderer, both of which lay
+  ## out by grapheme cluster.
   InputState* = object
     text*: string # The input text
     cursor*: int # Cursor position (in runes)
@@ -224,6 +228,41 @@ proc input*(
     ),
   )
 
+proc snapToClusterBoundary(text: string, idx: int): int =
+  ## Rune index of the grapheme-cluster boundary at or before `idx` (clamped to
+  ## `[0, runeLen]`). Cursor and selection positions are stored as rune indices
+  ## but must rest on a cluster boundary so navigation, deletion, and rendering
+  ## never split a combining sequence (e + U+0301), a VS16/ZWJ emoji, or a CJK
+  ## character. The end of the text is itself a boundary. For pure ASCII every
+  ## rune is its own cluster, so this returns `idx` unchanged.
+  let runes = text.toRunes
+  let clamped = max(0, min(idx, runes.len))
+  if clamped == runes.len:
+    return clamped
+  result = 0
+  for (leadIdx, _) in clusterMetrics(runes):
+    if leadIdx > clamped:
+      break
+    result = leadIdx
+
+proc snapToClusterBoundaryForward(text: string, idx: int): int =
+  ## Rune index of the grapheme-cluster boundary at or *after* `idx` (clamped to
+  ## `[0, runeLen]`). Used to place the cursor after a freshly inserted run: when
+  ## the inserted text merges with the runes that follow it into one cluster
+  ## (e.g. a base typed in front of an already-present isolated combining mark),
+  ## the backward-snapping `snapToClusterBoundary` would park the cursor *before*
+  ## what was just typed, leaving Backspace unable to remove it. Snapping forward
+  ## keeps the cursor past the inserted text. For pure ASCII (every rune its own
+  ## cluster) this returns `idx` unchanged.
+  let runes = text.toRunes
+  let clamped = max(0, min(idx, runes.len))
+  if clamped == runes.len:
+    return clamped
+  for (leadIdx, _) in clusterMetrics(runes):
+    if leadIdx >= clamped:
+      return leadIdx
+  runes.len
+
 # Input state management
 proc setText*(widget: Input, text: string) =
   ## Set the input text
@@ -232,10 +271,9 @@ proc setText*(widget: Input, text: string) =
       text.runeSubStr(0, widget.maxLength)
     else:
       text
-  let textLen = newText.runeLen
 
   widget.state.text = newText
-  widget.state.cursor = min(widget.state.cursor, textLen)
+  widget.state.cursor = snapToClusterBoundary(newText, widget.state.cursor)
   widget.state.selection = (0, 0) # Clear selection
 
   if widget.onTextChanged != nil:
@@ -246,9 +284,9 @@ proc getText*(widget: Input): string =
   widget.state.text
 
 proc setCursor*(widget: Input, pos: int) =
-  ## Set cursor position (in runes)
-  let textLen = widget.state.text.runeLen
-  widget.state.cursor = max(0, min(pos, textLen))
+  ## Set cursor position (in runes). Snapped to a grapheme-cluster boundary so
+  ## the cursor never rests inside a multi-rune cluster.
+  widget.state.cursor = snapToClusterBoundary(widget.state.text, pos)
   widget.state.selection = (0, 0) # Clear selection
 
 proc getCursor*(widget: Input): int =
@@ -321,7 +359,12 @@ proc insertText*(widget: Input, text: string, pos: int = -1) =
       ""
 
   widget.state.text = beforeText & textToInsert & afterText
-  widget.state.cursor = actualPos + textToInsert.runeLen
+  # Snap forward to a cluster boundary: the inserted text may join the runes that
+  # follow it into one cluster (e.g. inserting a base in front of an isolated
+  # combining mark). Snapping forward keeps the cursor after what was just typed;
+  # a backward snap could leave it before the inserted text.
+  widget.state.cursor =
+    snapToClusterBoundaryForward(widget.state.text, actualPos + textToInsert.runeLen)
   widget.state.selection = (0, 0)
 
   if widget.onTextChanged != nil:
@@ -351,7 +394,8 @@ proc deleteText*(widget: Input, start: int, length: int) =
       ""
 
   widget.state.text = beforeText & afterText
-  widget.state.cursor = min(widget.state.cursor, actualStart)
+  widget.state.cursor =
+    snapToClusterBoundary(widget.state.text, min(widget.state.cursor, actualStart))
   widget.state.selection = (0, 0)
 
   if widget.onTextChanged != nil:
@@ -365,13 +409,41 @@ proc deleteSelection*(widget: Input) =
   let selection = widget.getSelection()
   let length = selection.stop - selection.start
   widget.deleteText(selection.start, length)
-  widget.state.cursor = selection.start
+  widget.state.cursor = snapToClusterBoundary(widget.state.text, selection.start)
 
 proc selectAll*(widget: Input) =
   ## Select all text
   let textLen = widget.state.text.runeLen
   widget.state.selection = (0, textLen)
   widget.state.cursor = textLen
+
+# Grapheme-cluster aware cursor navigation
+#
+# Positions stay rune indices (the editing/storage unit), but the cursor must
+# rest on a grapheme-cluster boundary so navigation and deletion never split a
+# cluster — a combining sequence (e + U+0301), a VS16/ZWJ emoji, or a CJK
+# character. For pure ASCII every rune is its own cluster, so these collapse to
+# the previous +/-1-rune behaviour.
+proc prevClusterStart(widget: Input): int =
+  ## Rune index of the cluster boundary immediately before the cursor (the
+  ## start of the cluster the cursor would step left into). Returns 0 when the
+  ## cursor is already at or before the first cluster.
+  let runes = widget.state.text.toRunes
+  result = 0
+  for (leadIdx, _) in clusterMetrics(runes):
+    if leadIdx >= widget.state.cursor:
+      break
+    result = leadIdx
+
+proc nextClusterStart(widget: Input): int =
+  ## Rune index of the cluster boundary immediately after the cursor (the start
+  ## of the next cluster). Returns the text length when the cursor is in the
+  ## last cluster.
+  let runes = widget.state.text.toRunes
+  for (leadIdx, _) in clusterMetrics(runes):
+    if leadIdx > widget.state.cursor:
+      return leadIdx
+  runes.len
 
 # Input event handling
 proc handleKeyEvent*(widget: Input, event: KeyEvent): EventResult =
@@ -424,37 +496,43 @@ proc handleKeyEvent*(widget: Input, event: KeyEvent): EventResult =
       if widget.hasSelection():
         widget.deleteSelection()
       elif widget.state.cursor > 0:
-        widget.deleteText(widget.state.cursor - 1, 1)
+        # Delete the whole grapheme cluster before the cursor, not one rune,
+        # so a combining/ZWJ/VS16 sequence is removed as a unit.
+        let prev = widget.prevClusterStart()
+        widget.deleteText(prev, widget.state.cursor - prev)
       return erConsume
   of Delete:
     if not widget.readOnly:
       if widget.hasSelection():
         widget.deleteSelection()
       else:
-        widget.deleteText(widget.state.cursor, 1)
+        # Delete the whole grapheme cluster at the cursor, not one rune.
+        let nxt = widget.nextClusterStart()
+        widget.deleteText(widget.state.cursor, nxt - widget.state.cursor)
       return erConsume
   of ArrowLeft:
+    let target = widget.prevClusterStart()
     if Shift in event.modifiers:
       # Extend selection
       if not widget.hasSelection():
         widget.state.selection.start = widget.state.cursor
-      widget.state.cursor = max(0, widget.state.cursor - 1)
-      widget.state.selection.stop = widget.state.cursor
+      widget.state.cursor = target
+      widget.state.selection.stop = target
     else:
       widget.clearSelection()
-      widget.state.cursor = max(0, widget.state.cursor - 1)
+      widget.state.cursor = target
     return erConsume
   of ArrowRight:
-    let textLen = widget.state.text.runeLen
+    let target = widget.nextClusterStart()
     if Shift in event.modifiers:
       # Extend selection
       if not widget.hasSelection():
         widget.state.selection.start = widget.state.cursor
-      widget.state.cursor = min(textLen, widget.state.cursor + 1)
-      widget.state.selection.stop = widget.state.cursor
+      widget.state.cursor = target
+      widget.state.selection.stop = target
     else:
       widget.clearSelection()
-      widget.state.cursor = min(textLen, widget.state.cursor + 1)
+      widget.state.cursor = target
     return erConsume
   of Home:
     if Shift in event.modifiers:
@@ -487,82 +565,88 @@ defineKeyDispatch(Input)
 proc calculateVisibleRange(
     widget: Input, width: int
 ): tuple[offset: int, visibleStart: int, visibleEnd: int, cursorX: int] =
-  ## Calculate which part of the text is visible and where the cursor should be drawn
-  ## This now works with display widths instead of rune counts
-  let textLen = widget.state.text.runeLen
-  let cursor = widget.state.cursor
+  ## Calculate which part of the text is visible and where the cursor is drawn.
+  ##
+  ## Column math is summed per grapheme cluster (via `clusterMetrics`), so a
+  ## VS16-promoted or ZWJ emoji counts the columns the terminal actually renders
+  ## rather than the per-code-point sum, and offset / visible boundaries are
+  ## snapped to cluster starts so a wide cluster is never split at either edge.
+  ## Returned indices are rune indices (the editing unit); `cursorX` is a column.
+  let runes = widget.state.text.toRunes
+  let textLen = runes.len
+  let cursor = max(0, min(widget.state.cursor, textLen))
 
   if textLen == 0 or width <= 0:
     return (0, 0, 0, 0)
 
-  # Calculate display width from start to cursor position
-  var cursorDisplayWidth = 0
-  var runeIndex = 0
-  for r in widget.state.text.runes:
-    if runeIndex >= cursor:
-      break
-    cursorDisplayWidth += runeWidth(r)
-    runeIndex += 1
+  # Cluster lead rune indices and their column widths, in document order.
+  var leads, widths: seq[int]
+  for (leadIdx, w) in clusterMetrics(runes):
+    leads.add(leadIdx)
+    widths.add(w)
+  let nClusters = leads.len
 
-  # Ensure cursor is visible - adjust offset based on display width
-  var offset = widget.state.offset
+  # Rune index of the cluster boundary at or before `idx`.
+  proc snapToCluster(idx: int): int =
+    result = 0
+    for k in 0 ..< nClusters:
+      if leads[k] > idx:
+        break
+      result = leads[k]
 
-  # Calculate display width from offset to current view
-  var offsetDisplayWidth = 0
-  runeIndex = 0
-  for r in widget.state.text.runes:
-    if runeIndex >= offset:
-      break
-    offsetDisplayWidth += runeWidth(r)
-    runeIndex += 1
+  # Column width of the clusters whose lead index lies in [fromIdx, toIdx).
+  proc colBetween(fromIdx, toIdx: int): int =
+    for k in 0 ..< nClusters:
+      if leads[k] >= toIdx:
+        break
+      if leads[k] >= fromIdx:
+        result += widths[k]
 
-  # If cursor is beyond the right edge, scroll right
-  let cursorRelativeWidth = cursorDisplayWidth - offsetDisplayWidth
-  if cursorRelativeWidth >= width:
-    # Scroll right until cursor is visible
-    offsetDisplayWidth = cursorDisplayWidth - width + 1
+  let cursorCol = colBetween(0, cursor)
+
+  # Start from the stored offset, snapped to a cluster boundary.
+  var offset = snapToCluster(max(0, min(widget.state.offset, textLen)))
+
+  # If the cursor is past the right edge, scroll right until it fits, keeping
+  # offset on a cluster boundary.
+  if cursorCol - colBetween(0, offset) >= width:
+    let target = cursorCol - width + 1
     offset = 0
     var accWidth = 0
-    for r in widget.state.text.runes:
-      if accWidth >= offsetDisplayWidth:
+    for k in 0 ..< nClusters:
+      if accWidth >= target:
         break
-      accWidth += runeWidth(r)
-      offset += 1
+      accWidth += widths[k]
+      offset =
+        if k + 1 < nClusters:
+          leads[k + 1]
+        else:
+          textLen
 
-  # If cursor is beyond the left edge, scroll left
+  # If the cursor is before the left edge, scroll left to its cluster.
   if cursor < offset:
-    offset = cursor
+    offset = snapToCluster(cursor)
 
-  # Constrain offset to valid range
   offset = max(0, min(offset, textLen))
 
-  # Calculate visible range based on display width
+  # Visible range: include whole clusters that fit within `width` from offset.
   let visibleStart = offset
   var visibleEnd = offset
   var accumulatedWidth = 0
-  runeIndex = 0
-  for r in widget.state.text.runes:
-    if runeIndex < offset:
-      runeIndex += 1
+  for k in 0 ..< nClusters:
+    if leads[k] < offset:
       continue
-    let charWidth = runeWidth(r)
-    if accumulatedWidth + charWidth > width:
+    if accumulatedWidth + widths[k] > width:
       break
-    accumulatedWidth += charWidth
-    visibleEnd += 1
-    runeIndex += 1
+    accumulatedWidth += widths[k]
+    visibleEnd =
+      if k + 1 < nClusters:
+        leads[k + 1]
+      else:
+        textLen
 
-  # Calculate cursor X position in display width
-  var cursorX = 0
-  runeIndex = 0
-  for r in widget.state.text.runes:
-    if runeIndex >= offset and runeIndex < cursor:
-      cursorX += runeWidth(r)
-    elif runeIndex >= cursor:
-      break
-    runeIndex += 1
-
-  # Ensure cursor position is within bounds
+  # Cursor X position (columns from offset to the cursor's cluster boundary).
+  let cursorX = colBetween(offset, cursor)
   let clampedCursorX =
     if width > 0:
       max(0, min(cursorX, width - 1))
@@ -572,21 +656,13 @@ proc calculateVisibleRange(
   widget.state.offset = offset
   return (offset, visibleStart, visibleEnd, clampedCursorX)
 
-proc getDisplayText(widget: Input): string =
-  ## Get the text to display (with password masking if enabled).
-  ##
-  ## Mask each rune with a character of the same display width so the masked
-  ## string has the same rune count *and* column width as the original. This
-  ## keeps it aligned with `calculateVisibleRange`, which indexes by rune over
-  ## the original text but accumulates columns by `runeWidth`.
-  if widget.password and widget.state.text.len > 0:
-    for r in widget.state.text.runes:
-      if runeWidth(r) >= 2:
-        result.add("＊") # FULLWIDTH ASTERISK (2 cols)
-      else:
-        result.add('*') # narrow asterisk (1 col)
+proc passwordMask(clusterWidth: int): string {.inline.} =
+  ## Mask glyph for a grapheme cluster of the given column width, so the mask
+  ## occupies exactly the columns the original cluster did.
+  if clusterWidth >= 2:
+    "＊" # FULLWIDTH ASTERISK (2 cols)
   else:
-    result = widget.state.text
+    "*" # narrow asterisk (1 col)
 
 # Input widget methods
 method render*(widget: Input, area: Rect, buf: var Buffer) =
@@ -631,14 +707,13 @@ method render*(widget: Input, area: Rect, buf: var Buffer) =
         buf.setString(area.x, area.y + y, bc.vertical, borderStyle)
         buf.setString(area.x + area.width - 1, area.y + y, bc.vertical, borderStyle)
 
-  let displayText = widget.getDisplayText()
   let currentStyle =
     if widget.keyboardFocused: widget.focusedStyle else: widget.normalStyle
 
   # Calculate visible text range using content area
   let (_, visStart, visEnd, _) = widget.calculateVisibleRange(contentArea.width)
 
-  if displayText.len == 0:
+  if widget.state.text.len == 0:
     # Show placeholder text - clear with placeholder style background
     let backgroundStyle = Style(
       fg: widget.placeholderStyle.fg, bg: widget.placeholderStyle.bg, modifiers: {}
@@ -658,32 +733,45 @@ method render*(widget: Input, area: Rect, buf: var Buffer) =
     for x in 0 ..< contentArea.width:
       buf.setString(contentArea.x + x, contentArea.y, " ", currentStyle)
 
-    # Render visible text
-    # Render character by character to handle selection
+    # Render visible text grapheme cluster by grapheme cluster so combining
+    # marks / VS16 / ZWJ sequences stay folded into one (possibly wide) cell —
+    # writing the whole cluster via `setString` lets the buffer fold and shadow
+    # it, matching the cluster widths `calculateVisibleRange` laid out with. A
+    # per-rune loop would split clusters: a lone combining mark would be dropped
+    # (no base in its own `setString` call) and a VS16 lead would under-count.
+    #
+    # Iterate the *original* text (not a pre-masked string): `visStart`/`visEnd`
+    # and `selection` are rune indices into the original, and a per-rune password
+    # mask would re-segment into different cluster boundaries — masking inline per
+    # cluster keeps the rune-index space (and column widths) aligned.
+    let runes = widget.state.text.toRunes
     var x = 0
-    for i in visStart ..< visEnd:
-      if x >= contentArea.width:
+    for (leadIdx, clusterText, clusterWidth) in graphemeClusters(runes):
+      if leadIdx < visStart:
+        continue
+      if leadIdx >= visEnd:
         break
-
-      let char = displayText.runeSubStr(i, 1)
-      let charWidth = char.displayWidth()
-
-      # Check if we have enough space for this character
-      if x + charWidth > contentArea.width:
+      # Stop if the cluster would overflow the content area.
+      if x + clusterWidth > contentArea.width:
         break
 
       let charStyle =
         if widget.hasSelection():
           let selection = widget.getSelection()
-          if i >= selection.start and i < selection.stop:
+          if leadIdx >= selection.start and leadIdx < selection.stop:
             widget.selectionStyle
           else:
             currentStyle
         else:
           currentStyle
 
-      buf.setString(contentArea.x + x, contentArea.y, char, charStyle)
-      x += charWidth
+      let drawText =
+        if widget.password:
+          passwordMask(clusterWidth)
+        else:
+          clusterText
+      buf.setString(contentArea.x + x, contentArea.y, drawText, charStyle)
+      x += clusterWidth
 
   # Note: Cursor rendering is handled by the application level
   # The cursor position should be calculated and set by the app
