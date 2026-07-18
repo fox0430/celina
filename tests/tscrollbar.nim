@@ -2,7 +2,7 @@
 
 import std/unittest
 
-import ../celina/core/[geometry, buffer, colors, events]
+import ../celina/core/[geometry, buffer, events]
 import ../celina/widgets/scrollbar
 
 suite "Scrollbar Widget Tests":
