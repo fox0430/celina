@@ -7,7 +7,7 @@ license = "MIT"
 
 # Dependencies
 
-requires "nim >= 2.0.2"
+requires "nim >= 2.0.6"
 requires "unicodedb >= 0.13.2"
 
 task test, "test":
