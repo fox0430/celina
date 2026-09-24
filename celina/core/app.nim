@@ -259,6 +259,9 @@ proc tick(app: App): bool =
       else:
         discard
 
+      # Stamp after dispatch, as for input events.
+      app.timings.lastEventTime = getMonoTime()
+
     # Calculate remaining time until next render (used as poll timeout)
     let remainingTime = app.fpsMonitor.getRemainingFrameTime()
 
@@ -278,9 +281,10 @@ proc tick(app: App): bool =
       let elapsedAfterPoll =
         (getMonoTime() - app.timings.lastEventTime).inMilliseconds.int
       if isTimeoutReached(app.timings.applicationTimeout, elapsedAfterPoll):
-        # Reset timer to prevent busy-loop and enable periodic callbacks
+        let timeoutResult = app.dispatchTimeout()
+        # Reset after the handler so a slow one does not fire again at once.
         app.timings.lastEventTime = getMonoTime()
-        if app.dispatchTimeout() == trQuit:
+        if timeoutResult == trQuit:
           return false
 
     if eventsAvailable:

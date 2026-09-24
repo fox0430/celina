@@ -175,13 +175,14 @@ template defineTimeoutHandlerSetters*(AppT: untyped) =
   ## Generate the sync `onTimeout` setter family for `AppT`.
   ##
   ## Produces 4 overloads mirroring `onTick` but invoked when no input
-  ## events are received within the application timeout period.
+  ## or resize events are received within the application timeout period.
 
   proc onTimeout*(app: AppT, handler: proc(): TickResult) =
     ## Set the timeout handler for the application.
     ##
-    ## The handler is called when no input events are received within
-    ## the application timeout period. Return `trContinue` to keep
+    ## The handler is called when no input or resize events are received
+    ## within the application timeout period, counted from the last event
+    ## or the end of the previous timeout call. Return `trContinue` to keep
     ## running, `trQuit` to exit the loop.
     app.handlers.timeout = wrapHandler(handler):
       proc(app: AppT): TickResult =
@@ -322,13 +323,14 @@ template defineTickHandlerSettersAsync*(AppT: untyped) =
 
 template defineTimeoutHandlerSettersAsync*(AppT: untyped) =
   ## Generate the async `onTimeoutAsync` setter family for `AppT`.
-  ## 4 overloads mirroring `onTickAsync` but invoked on input idle.
+  ## 4 overloads mirroring `onTickAsync` but invoked on input/resize idle.
 
   proc onTimeoutAsync*(app: AppT, handler: proc(): Future[TickResult] {.async.}) =
     ## Set the async timeout handler for the application.
     ##
-    ## The handler is called when no input events are received within
-    ## the application timeout period. Return `trContinue` to keep
+    ## The handler is called when no input or resize events are received
+    ## within the application timeout period, counted from the last event
+    ## or the end of the previous timeout call. Return `trContinue` to keep
     ## running, `trQuit` to exit the loop.
     app.handlers.timeout = wrapHandler(handler):
       proc(app: AppT): Future[TickResult] {.async.} =

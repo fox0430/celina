@@ -916,6 +916,71 @@ suite "App Application Timeout":
       check handlerReturnedAt != default(MonoTime)
       check app.timings.lastEventTime >= handlerReturnedAt
 
+    test "A slow timeout handler does not use up the idle time":
+      let app = newApp(AppConfig(alternateScreen: false, rawMode: false, targetFps: 60))
+      # The handler outlasts the timeout, so stamping before it would make
+      # the next tick fire again at once.
+      app.setApplicationTimeout(150)
+      var handlerReturnedAt: MonoTime
+      var timeoutCalls = 0
+      app.onTimeout proc(): TickResult =
+        timeoutCalls.inc
+        let busyUntil = getMonoTime() + initDuration(milliseconds = 160)
+        while getMonoTime() < busyUntil:
+          discard
+        handlerReturnedAt = getMonoTime()
+        trContinue
+      app.timings.lastEventTime = getMonoTime() - initDuration(milliseconds = 300)
+      proc tickTwice() =
+        discard captureStdout(
+          proc() =
+            let size = getTerminalSizeOrDefault()
+            app.state.resizeState = initResizeState(size.width, size.height)
+            discard app.tick()
+            discard app.tick()
+        )
+
+      withStdinInput("", tickTwice)
+      check handlerReturnedAt != default(MonoTime)
+      check app.timings.lastEventTime >= handlerReturnedAt
+      check timeoutCalls == 1
+
+    test "A slow resize handler does not use up the idle time":
+      let app = newApp(AppConfig(alternateScreen: false, rawMode: false, targetFps: 60))
+      app.setApplicationTimeout(100)
+      var timeoutCalls = 0
+      app.onTimeout proc(): TickResult =
+        timeoutCalls.inc
+        trContinue
+      var handlerReturnedAt: MonoTime
+      app.onEvent proc(event: Event): EventResult =
+        if event.kind == Resize:
+          let busyUntil = getMonoTime() + initDuration(milliseconds = 20)
+          while getMonoTime() < busyUntil:
+            discard
+          handlerReturnedAt = getMonoTime()
+        erContinue
+      # Nearly idle: without the stamp the timeout would fire in this tick.
+      app.timings.lastEventTime = getMonoTime() - initDuration(milliseconds = 90)
+      var ranOnPty = false
+      proc tickOnce() =
+        # The sync `updateSize` needs a tty.
+        ranOnPty = withPtyStdout(
+          20,
+          5,
+          proc() =
+            app.state.resizeState = initResizeState(1, 1)
+            discard app.tick(),
+        )
+
+      withStdinInput("", tickOnce)
+      if not ranOnPty:
+        skip()
+      else:
+        check handlerReturnedAt != default(MonoTime)
+        check app.timings.lastEventTime >= handlerReturnedAt
+        check timeoutCalls == 0
+
 suite "App String Representation":
   test "new app string representation":
     let app = newApp()
