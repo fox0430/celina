@@ -828,6 +828,36 @@ when hasAsyncSupport:
       check (waitFor app.dispatchTimeoutAsync()) == trContinue
       {.pop.}
 
+    when defined(posix):
+      privateAccess(AsyncApp)
+
+      test "resumeAsync restarts the idle clock":
+        # Returning from the suspended program counts as activity, so the
+        # time spent suspended does not fire the timeout right after resume.
+        let app = newAsyncApp()
+        discard captureStdout(
+          proc() =
+            waitFor app.suspendAsync()
+        )
+        app.timings.lastEventTime = getMonoTime() - initDuration(seconds = 10)
+        let beforeResume = getMonoTime()
+        discard captureStdout(
+          proc() =
+            waitFor app.resumeAsync()
+        )
+        check not app.isSuspended()
+        check app.timings.lastEventTime >= beforeResume
+
+      test "resumeAsync without suspend leaves the idle clock alone":
+        let app = newAsyncApp()
+        let idleSince = getMonoTime() - initDuration(seconds = 10)
+        app.timings.lastEventTime = idleSince
+        discard captureStdout(
+          proc() =
+            waitFor app.resumeAsync()
+        )
+        check app.timings.lastEventTime == idleSince
+
   suite "AsyncApp handleWindowEvent":
     test "handleWindowEvent with no window mode returns erContinue":
       let app = newAsyncApp()
