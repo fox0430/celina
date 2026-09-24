@@ -1188,6 +1188,7 @@ when hasAsyncSupport:
           if pid == 0:
             proc appHandler(sig: cint) {.noconv.} =
               exitnow(42)
+
             discard signal(SIGTERM, appHandler)
             var mask, oldMask: Sigset
             discard sigemptyset(mask)

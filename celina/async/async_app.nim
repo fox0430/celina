@@ -513,10 +513,7 @@ proc stopSignal*(app: AsyncApp): cint =
   ##
   ## `runAsync` then usually raises `CancelledError` but can also return
   ## normally; see `exitIfStoppedBySignal`.
-  when hasChronos and defined(posix):
-    app.caughtSignal
-  else:
-    0
+  when hasChronos and defined(posix): app.caughtSignal else: 0
 
 when hasChronos:
   proc shutdownAsync*(app: AsyncApp) {.async.} =
