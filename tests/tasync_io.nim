@@ -199,6 +199,42 @@ suite "Stdout Write Serialization":
       check not stdoutWriteLocked
       check stdoutWriteWaiters.len == 0
 
+    test "a writeStdoutAsync cancelled mid-write sends the abort sequence before releasing the lock":
+      # Fill a non-blocking pipe so the write stops partway on EAGAIN, drain it,
+      # then cancel. The cut-off write must be followed by the abort sequence
+      # before the next writer gets the lock.
+      check not stdoutWriteLocked
+      var fds: array[2, cint]
+      require pipe(fds) == 0
+      for fd in fds:
+        discard fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) or O_NONBLOCK)
+      stdout.flushFile()
+      let saved = dup(STDOUT_FILENO)
+      require saved >= 0
+      var tail = ""
+      var fut: Future[int]
+      try:
+        discard dup2(fds[1], STDOUT_FILENO)
+        fut = writeStdoutAsync(newString(1 shl 20))
+        check not fut.finished
+        var buf = newString(65536)
+        while posix.read(fds[0], addr buf[0], buf.len) > 0:
+          discard
+        fut.cancelSoon()
+        waitFor fut.join()
+        let n = posix.read(fds[0], addr buf[0], buf.len)
+        if n > 0:
+          tail = buf[0 ..< n]
+      finally:
+        discard dup2(saved, STDOUT_FILENO)
+        discard close(saved)
+        discard close(fds[0])
+        discard close(fds[1])
+
+      check fut.cancelled
+      check tail == AbortPartialSeq
+      check not stdoutWriteLocked
+
 suite "Blocking Output Functions":
   test "writeStdoutBlocking writes data":
     let bytesWritten = writeStdoutBlocking(".")

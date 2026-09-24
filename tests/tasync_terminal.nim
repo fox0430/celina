@@ -6,6 +6,9 @@ import ../celina/async/[async_backend, async_buffer]
 import ../celina/core/[geometry, colors, buffer, errors]
 
 import ../celina/async/async_terminal {.all.}
+when hasChronos:
+  import ../celina/async/async_io {.all.}
+  import ./stdout_capture
 import ../celina/core/terminal_common
 
 # Test helpers
@@ -749,6 +752,27 @@ suite "AsyncTerminal emergencyRestore":
     terminal.emergencyRestore()
     check not terminal.alternateScreen
 
+  test "emergencyRestore leaves the mode flags set when the write fails":
+    # A later cleanup must still see the modes a failed reset left enabled.
+    let terminal = createTestTerminal()
+    terminal.enableAlternateScreen()
+    terminal.enableMouse()
+    let savedStdout = posix.dup(STDOUT_FILENO)
+    let roFd = posix.open("/dev/null", O_RDONLY)
+    require savedStdout >= 0
+    require roFd >= 0
+    try:
+      discard posix.dup2(roFd, STDOUT_FILENO)
+      terminal.emergencyRestore()
+    finally:
+      discard posix.dup2(savedStdout, STDOUT_FILENO)
+      discard posix.close(savedStdout)
+      discard posix.close(roFd)
+
+    check terminal.alternateScreen
+    check terminal.mouseEnabled
+    terminal.cleanup()
+
 suite "AsyncTerminal cleanupAsync":
   test "cleanupAsync resets all toggleable flags":
     let terminal = createTestTerminal()
@@ -776,3 +800,107 @@ suite "AsyncTerminal cleanupAsync":
 
     waitFor terminal.cleanupAsync()
     check not terminal.mouseEnabled
+
+  when hasChronos:
+    proc enableAllModes(terminal: AsyncTerminal) =
+      terminal.enableAlternateScreen()
+      terminal.enableMouse()
+      terminal.enableBracketedPaste()
+      terminal.enableFocusEvents()
+      terminal.enableSyncOutput()
+
+    proc checkAllModesOff(terminal: AsyncTerminal) =
+      check not terminal.alternateScreen
+      check not terminal.mouseEnabled
+      check not terminal.bracketedPasteEnabled
+      check not terminal.focusEventsEnabled
+      check not terminal.syncOutputEnabled
+
+    proc allModesOff(terminal: AsyncTerminal): bool =
+      not (
+        terminal.alternateScreen or terminal.mouseEnabled or
+        terminal.bracketedPasteEnabled or terminal.focusEventsEnabled or
+        terminal.syncOutputEnabled
+      )
+
+    proc cancelCleanupWhileParked(
+        terminal: AsyncTerminal, cancels: int, restoredBeforeUnlock: var bool
+    ): Future[void] =
+      ## Start cleanupAsync behind a held stdout lock and request `cancels`
+      ## cancels, letting each land before the next. The first cancel moves it
+      ## to the emergency reset, still parked; a second one makes it restore
+      ## with a blocking write and return while the lock is still held.
+      doAssert tryAcquireStdoutLockImmediate()
+      try:
+        result = terminal.cleanupAsync()
+        for _ in 1 .. cancels:
+          result.cancelSoon()
+          waitFor sleepAsync(1.milliseconds)
+        doAssert result.finished == (cancels >= 2)
+        restoredBeforeUnlock = terminal.allModesOff()
+      finally:
+        releaseStdoutLock()
+      waitFor result.join()
+      # Let a dropped background reset wind down; it must write nothing.
+      waitFor sleepAsync(5.milliseconds)
+
+    proc cancelCleanupWhileParked(
+        cancels: int
+    ): (AsyncTerminal, Future[void], string, bool) =
+      ## Enable every mode, then run the cancelled cleanup with stdout captured.
+      let terminal = createTestTerminal()
+      var fut: Future[void]
+      var restoredBeforeUnlock = false
+      let output = captureStdout(
+        proc() =
+          terminal.enableAllModes()
+          fut = terminal.cancelCleanupWhileParked(cancels, restoredBeforeUnlock)
+      )
+      (terminal, fut, output, restoredBeforeUnlock)
+
+    test "cancelled cleanupAsync restores the terminal and re-raises":
+      # The cancel lands on the cursor write. The remaining steps are replaced
+      # by the emergency reset, and the cancel reaches the caller.
+      let (terminal, fut, output, _) = cancelCleanupWhileParked(1)
+      check fut.cancelled
+      terminal.checkAllModesOff()
+      check output.endsWith(EmergencyResetAltScreenSeq)
+      check output.count(ShowCursorSeq) == 1
+
+    test "a second cancel restores the terminal before returning":
+      # The second cancel lands while the reset is parked. The caller may exit
+      # right away, so cleanupAsync restores with a blocking write first, and
+      # the dropped background reset must not write it again.
+      let (terminal, fut, output, restoredBeforeUnlock) = cancelCleanupWhileParked(2)
+      check restoredBeforeUnlock
+      check fut.cancelled
+      terminal.checkAllModesOff()
+      check output.endsWith(EmergencyResetAltScreenSeq)
+      check output.count(ShowCursorSeq) == 1
+
+    test "a failed emergency reset leaves the mode flags set":
+      # With stdout unwritable the reset cannot go out, so the flags must keep
+      # saying the modes are on for a later cleanup to retry them.
+      let terminal = createTestTerminal()
+      discard captureStdout(
+        proc() =
+          terminal.enableAllModes()
+      )
+      let savedStdout = posix.dup(STDOUT_FILENO)
+      let roFd = posix.open("/dev/null", O_RDONLY)
+      require savedStdout >= 0
+      require roFd >= 0
+      var fut: Future[void]
+      try:
+        discard posix.dup2(roFd, STDOUT_FILENO)
+        var restoredBeforeUnlock: bool
+        fut = terminal.cancelCleanupWhileParked(1, restoredBeforeUnlock)
+      finally:
+        discard posix.dup2(savedStdout, STDOUT_FILENO)
+        discard posix.close(savedStdout)
+        discard posix.close(roFd)
+
+      check fut.cancelled
+      check terminal.alternateScreen
+      check terminal.mouseEnabled
+      check terminal.syncOutputEnabled

@@ -394,8 +394,12 @@ proc cleanupQuietly(app: AsyncApp) {.async.} =
   ## not replace whatever exception (CancelledError, TerminalError, etc.)
   ## the caller is propagating. With `-d:celinaDebug`, the failure is
   ## logged to stderr for diagnostics.
+  ##
+  ## A cancel during cleanup is dropped too: the terminal is restored by then.
   try:
     await app.cleanupAsync()
+  except CancelledError:
+    discard
   except CatchableError as e:
     when defined(celinaDebug):
       try:
