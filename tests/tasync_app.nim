@@ -7,10 +7,12 @@ import ../celina/async/async_backend
 when hasAsyncSupport:
   import std/[strutils, importutils, monotimes]
   from std/times import initDuration, `<`
-  from ../celina/async/async_io import closeAsyncInputReader
+  from ../celina/async/async_io import newAsyncInputReader, closeAsyncInputReader
   import ../celina/async/async_app {.all.}
   import ../celina/async/async_terminal {.all.}
-  import ../celina/core/[geometry, events, windows, buffer, terminal_common]
+  import
+    ../celina/core/[geometry, events, windows, buffer, terminal_common, tick_common]
+  from ../celina/core/terminal import getTerminalSizeOrDefault
 
   when defined(posix):
     import std/posix
@@ -857,6 +859,40 @@ when hasAsyncSupport:
             waitFor app.resumeAsync()
         )
         check app.timings.lastEventTime == idleSince
+
+      test "A slow event handler does not use up the idle time":
+        # The idle clock is stamped after the handler returns, so time spent
+        # in the handler does not count as idle time.
+        let app =
+          newAsyncApp(AppConfig(alternateScreen: false, rawMode: false, targetFps: 60))
+        app.setApplicationTimeout(100)
+        app.onTimeoutAsync proc(): Future[TickResult] {.async.} =
+          return trContinue
+        var handlerReturnedAt: MonoTime
+        app.onEventAsync proc(event: Event): Future[EventResult] {.async.} =
+          let busyUntil = getMonoTime() + initDuration(milliseconds = 20)
+          while getMonoTime() < busyUntil:
+            discard
+          handlerReturnedAt = getMonoTime()
+          return erContinue
+        proc tickOnce() =
+          app.inputReader = newAsyncInputReader()
+          try:
+            discard captureStdout(
+              proc() =
+                # Sync the resize state with the size seen while stdout is
+                # redirected, or the tick reports a spurious resize.
+                let size = getTerminalSizeOrDefault()
+                app.state.resizeState = initResizeState(size.width, size.height)
+                discard waitFor app.tickAsync()
+            )
+          finally:
+            app.inputReader.closeAsyncInputReader()
+            app.inputReader = nil
+
+        withStdinInput("a", tickOnce)
+        check handlerReturnedAt != default(MonoTime)
+        check app.timings.lastEventTime >= handlerReturnedAt
 
   suite "AsyncApp handleWindowEvent":
     test "handleWindowEvent with no window mode returns erContinue":

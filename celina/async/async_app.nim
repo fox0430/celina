@@ -321,9 +321,7 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
     # Poll for events with timeout - blocks until event arrives OR timeout expires
     let eventsAvailable = await app.inputReader.pollEventsAsync(timeout)
 
-    if eventsAvailable:
-      app.timings.lastEventTime = getMonoTime()
-    elif hasTimeout:
+    if not eventsAvailable and hasTimeout:
       # Check if enough idle time has passed to fire timeout handler
       let elapsedAfterPoll =
         (getMonoTime() - app.timings.lastEventTime).inMilliseconds.int
@@ -370,6 +368,10 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
               discard
         else:
           break
+
+      # Stamp after dispatch: a handler that runs longer than the timeout
+      # must not leave the idle clock already expired.
+      app.timings.lastEventTime = getMonoTime()
 
     # Call tick handler between event processing and rendering
     if (await app.dispatchTickAsync()) == trQuit:

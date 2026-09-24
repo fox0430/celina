@@ -5,6 +5,7 @@ import std/[unittest, options, monotimes, times, strutils, importutils]
 import ../celina
 import ../celina/core/app {.all.}
 import ../celina/core/terminal {.all.}
+import ../celina/core/tick_common
 
 when defined(posix):
   import std/posix
@@ -886,6 +887,34 @@ suite "App Application Timeout":
           app.resume()
       )
       check app.timings.lastEventTime == idleSince
+
+    test "A slow event handler does not use up the idle time":
+      # The idle clock is stamped after the handler returns, so time spent in
+      # the handler does not count as idle time.
+      let app = newApp(AppConfig(alternateScreen: false, rawMode: false, targetFps: 60))
+      app.setApplicationTimeout(100)
+      app.onTimeout proc(): TickResult =
+        trContinue
+      var handlerReturnedAt: MonoTime
+      app.onEvent proc(event: Event): EventResult =
+        let busyUntil = getMonoTime() + initDuration(milliseconds = 20)
+        while getMonoTime() < busyUntil:
+          discard
+        handlerReturnedAt = getMonoTime()
+        erContinue
+      proc tickOnce() =
+        discard captureStdout(
+          proc() =
+            # Sync the resize state with the size seen while stdout is
+            # redirected, or the tick reports a spurious resize.
+            let size = getTerminalSizeOrDefault()
+            app.state.resizeState = initResizeState(size.width, size.height)
+            discard app.tick()
+        )
+
+      withStdinInput("a", tickOnce)
+      check handlerReturnedAt != default(MonoTime)
+      check app.timings.lastEventTime >= handlerReturnedAt
 
 suite "App String Representation":
   test "new app string representation":

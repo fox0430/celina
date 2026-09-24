@@ -32,3 +32,22 @@ proc captureStdout*(body: proc()): string =
       result.add buf[0 ..< n]
   finally:
     discard close(fds[0])
+
+proc withStdinInput*(input: string, body: proc()) =
+  ## Run `body` with stdin replaced by a pipe that holds `input`. The write
+  ## end stays open until `body` returns, so once `input` is read, stdin
+  ## has no data (and no EOF) to report.
+  var fds: array[2, cint]
+  doAssert pipe(fds) == 0
+  let saved = dup(STDIN_FILENO)
+  doAssert saved != -1
+  discard dup2(fds[0], STDIN_FILENO)
+  discard close(fds[0])
+  try:
+    if input.len > 0:
+      doAssert posix.write(fds[1], unsafeAddr input[0], input.len) == input.len
+    body()
+  finally:
+    discard dup2(saved, STDIN_FILENO)
+    discard close(saved)
+    discard close(fds[1])
