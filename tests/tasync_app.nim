@@ -979,6 +979,43 @@ when hasAsyncSupport:
       check liveDuringRun == true
       check app.isInputReaderLive() == false
 
+  suite "AsyncApp run lifecycle":
+    privateAccess(AsyncApp)
+
+    test "A quit from the previous run does not end the next run":
+      let config = AppConfig(alternateScreen: true, rawMode: false, targetFps: 60)
+      let app = newAsyncApp(config)
+
+      var ticks = 0
+      app.onTickAsync proc(app: AsyncApp): Future[bool] {.async.} =
+        inc ticks
+        if ticks == 3:
+          app.quit()
+        return true
+
+      waitFor app.runAsync()
+      check ticks == 3
+      check app.state.shouldQuit == false
+
+      # The second run must keep ticking until its own quit.
+      ticks = 0
+      waitFor app.runAsync()
+      check ticks == 3
+
+    test "A quit before runAsync still ends the first run":
+      let config = AppConfig(alternateScreen: true, rawMode: false, targetFps: 60)
+      let app = newAsyncApp(config)
+
+      var ticks = 0
+      app.onTickAsync proc(app: AsyncApp): Future[bool] {.async.} =
+        inc ticks
+        return true
+
+      app.quit()
+      waitFor app.runAsync()
+      check ticks == 1
+      check app.state.shouldQuit == false
+
   when hasChronos:
     import chronos
 
