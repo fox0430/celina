@@ -995,4 +995,71 @@ suite "App run lifecycle":
       check ticks == 1
       check app.state.shouldQuit == false
 
+  test "The first frame of the next run is a full render":
+    if not hasTerminalSize():
+      skip()
+    else:
+      let config = AppConfig(alternateScreen: true, rawMode: false, targetFps: 60)
+      let app = newApp(config)
+
+      # `forceNextRender` is cleared after the frame, so the render handler
+      # sees whether the current frame is forced. Quit after the first frame.
+      var forced: seq[bool]
+      app.onRender proc(buffer: var Buffer, app: App) =
+        forced.add app.state.forceNextRender
+        app.quit()
+
+      app.run()
+      check forced == @[true]
+
+      forced.setLen(0)
+      app.run()
+      check forced == @[true]
+
+  test "Idle time before run does not fire the timeout":
+    if not hasTerminalSize():
+      skip()
+    else:
+      let config = AppConfig(alternateScreen: true, rawMode: false, targetFps: 60)
+      let app = newApp(config)
+      app.setApplicationTimeout(1000)
+
+      var timeouts = 0
+      app.onTimeout proc(): TickResult =
+        inc timeouts
+        trContinue
+
+      var ticks = 0
+      app.onTick proc(app: App): TickResult =
+        inc ticks
+        if ticks == 3:
+          app.quit()
+        trContinue
+
+      # Stand in for a long gap since `newApp` or the previous run.
+      app.timings.lastEventTime = getMonoTime() - initDuration(seconds = 10)
+      app.run()
+      check timeouts == 0
+
+      app.timings.lastEventTime = getMonoTime() - initDuration(seconds = 10)
+      ticks = 0
+      app.run()
+      check timeouts == 0
+
+  test "setup restarts the idle clock":
+    # The run-based test above passes without the reset when stdin is
+    # readable (e.g. /dev/null): each poll then counts as an event. Check
+    # `setup` itself so the result does not depend on stdin.
+    if not hasTerminalSize():
+      skip()
+    else:
+      let config = AppConfig(alternateScreen: true, rawMode: false, targetFps: 60)
+      let app = newApp(config)
+      app.timings.lastEventTime = getMonoTime() - initDuration(seconds = 10)
+      try:
+        app.setup()
+      finally:
+        app.restoreTerminal()
+      check getMonoTime() - app.timings.lastEventTime < initDuration(seconds = 1)
+
 {.pop.}

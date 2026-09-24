@@ -5,7 +5,9 @@ import std/[unittest, options]
 import ../celina/async/async_backend
 
 when hasAsyncSupport:
-  import std/[strutils, importutils]
+  import std/[strutils, importutils, monotimes]
+  from std/times import initDuration, `<`
+  from ../celina/async/async_io import closeAsyncInputReader
   import ../celina/async/async_app {.all.}
   import ../celina/async/async_terminal {.all.}
   import ../celina/core/[geometry, events, windows, buffer, terminal_common]
@@ -1015,6 +1017,66 @@ when hasAsyncSupport:
       waitFor app.runAsync()
       check ticks == 1
       check app.state.shouldQuit == false
+
+    test "The first frame of the next run is a full render":
+      let config = AppConfig(alternateScreen: true, rawMode: false, targetFps: 60)
+      let app = newAsyncApp(config)
+
+      # `forceNextRender` is cleared after the frame, so the render handler
+      # sees whether the current frame is forced. Quit after the first frame.
+      var forced: seq[bool]
+      app.onRenderAsync proc(buffer: var Buffer, app: AsyncApp) =
+        forced.add app.state.forceNextRender
+        app.quit()
+
+      waitFor app.runAsync()
+      check forced == @[true]
+
+      forced.setLen(0)
+      waitFor app.runAsync()
+      check forced == @[true]
+
+    test "Idle time before runAsync does not fire the timeout":
+      let config = AppConfig(alternateScreen: true, rawMode: false, targetFps: 60)
+      let app = newAsyncApp(config)
+      app.setApplicationTimeout(1000)
+
+      var timeouts = 0
+      app.onTimeoutAsync proc(): Future[TickResult] {.async.} =
+        inc timeouts
+        return trContinue
+
+      var ticks = 0
+      app.onTickAsync proc(app: AsyncApp): Future[bool] {.async.} =
+        inc ticks
+        if ticks == 3:
+          app.quit()
+        return true
+
+      # Stand in for a long gap since `newAsyncApp` or the previous run.
+      app.timings.lastEventTime = getMonoTime() - initDuration(seconds = 10)
+      waitFor app.runAsync()
+      check timeouts == 0
+
+      app.timings.lastEventTime = getMonoTime() - initDuration(seconds = 10)
+      ticks = 0
+      waitFor app.runAsync()
+      check timeouts == 0
+
+    test "setupAsync restarts the idle clock":
+      # The run-based test above passes without the reset when stdin is
+      # readable (e.g. /dev/null): each poll then counts as an event. Check
+      # `setupAsync` itself so the result does not depend on stdin.
+      let config = AppConfig(alternateScreen: true, rawMode: false, targetFps: 60)
+      let app = newAsyncApp(config)
+      app.timings.lastEventTime = getMonoTime() - initDuration(seconds = 10)
+      try:
+        waitFor app.setupAsync()
+      finally:
+        waitFor cleanupQuietly(app)
+        app.inputReader.closeAsyncInputReader()
+        app.inputReader = nil
+      check getMonoTime() - app.timings.lastEventTime < initDuration(seconds = 1)
 
   when hasChronos:
     import chronos
