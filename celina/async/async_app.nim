@@ -182,6 +182,12 @@ proc setupAsync(app: AsyncApp) {.async.} =
   await hideCursorAsync()
   await clearScreenAsync()
 
+  # The screen was just cleared, so the first frame must not diff against the
+  # buffer left by a previous run.
+  app.state.forceNextRender = true
+  # Idle time counts from this run's start, not from `new` or a previous run.
+  app.timings.lastEventTime = getMonoTime()
+
 proc cleanupAsync(app: AsyncApp) {.async.} =
   ## Internal async cleanup procedure to restore terminal state.
   ##

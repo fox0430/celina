@@ -146,6 +146,12 @@ proc setup(app: App) =
   terminal.hideCursor()
   terminal.clearScreen()
 
+  # The screen was just cleared, so the first frame must not diff against the
+  # buffer left by a previous run.
+  app.state.forceNextRender = true
+  # Idle time counts from this run's start, not from `new` or a previous run.
+  app.timings.lastEventTime = getMonoTime()
+
 proc handleResize(app: App) =
   ## Handle terminal resize events
   app.terminal.updateSize()
