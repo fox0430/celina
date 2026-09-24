@@ -273,9 +273,7 @@ proc tick(app: App): bool =
     # Poll for events with timeout - blocks until event arrives OR timeout expires
     let eventsAvailable = events.pollEvents(timeout)
 
-    if eventsAvailable:
-      app.timings.lastEventTime = getMonoTime()
-    elif hasTimeout:
+    if not eventsAvailable and hasTimeout:
       # Check if enough idle time has passed to fire timeout handler
       let elapsedAfterPoll =
         (getMonoTime() - app.timings.lastEventTime).inMilliseconds.int
@@ -310,6 +308,10 @@ proc tick(app: App): bool =
               discard
         else:
           break
+
+      # Stamp after dispatch: a handler that runs longer than the timeout
+      # must not leave the idle clock already expired.
+      app.timings.lastEventTime = getMonoTime()
 
     # Call tick handler between event processing and rendering
     if app.dispatchTick() == trQuit:

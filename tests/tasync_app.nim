@@ -7,10 +7,12 @@ import ../celina/async/async_backend
 when hasAsyncSupport:
   import std/[strutils, importutils, monotimes]
   from std/times import initDuration, `<`
-  from ../celina/async/async_io import closeAsyncInputReader
+  from ../celina/async/async_io import newAsyncInputReader, closeAsyncInputReader
   import ../celina/async/async_app {.all.}
   import ../celina/async/async_terminal {.all.}
-  import ../celina/core/[geometry, events, windows, buffer, terminal_common]
+  import
+    ../celina/core/[geometry, events, windows, buffer, terminal_common, tick_common]
+  from ../celina/core/terminal import getTerminalSizeOrDefault
 
   when defined(posix):
     import std/posix
@@ -857,6 +859,43 @@ when hasAsyncSupport:
             waitFor app.resumeAsync()
         )
         check app.timings.lastEventTime == idleSince
+
+      test "A slow event handler does not use up the idle time":
+        # The idle clock starts after the handler returns, so a handler that
+        # runs longer than the timeout does not fire it on the next tick.
+        let app =
+          newAsyncApp(AppConfig(alternateScreen: false, rawMode: false, targetFps: 60))
+        app.setApplicationTimeout(100)
+        var timeouts = 0
+        app.onTimeoutAsync proc(): Future[TickResult] {.async.} =
+          inc timeouts
+          return trContinue
+        var handled = 0
+        app.onEventAsync proc(event: Event): Future[EventResult] {.async.} =
+          inc handled
+          let busyUntil = getMonoTime() + initDuration(milliseconds = 200)
+          while getMonoTime() < busyUntil:
+            discard
+          return erContinue
+        proc tickTwice() =
+          app.inputReader = newAsyncInputReader()
+          try:
+            discard captureStdout(
+              proc() =
+                # Sync the resize state with the size seen while stdout is
+                # redirected, or the first tick reports a spurious resize.
+                let size = getTerminalSizeOrDefault()
+                app.state.resizeState = initResizeState(size.width, size.height)
+                discard waitFor app.tickAsync()
+                discard waitFor app.tickAsync()
+            )
+          finally:
+            app.inputReader.closeAsyncInputReader()
+            app.inputReader = nil
+
+        withStdinInput("a", tickTwice)
+        check handled == 1
+        check timeouts == 0
 
   suite "AsyncApp handleWindowEvent":
     test "handleWindowEvent with no window mode returns erContinue":
