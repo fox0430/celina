@@ -683,7 +683,11 @@ when hasChronos and defined(posix):
       discard
     # Default action first, so a pending signal released by the unblock
     # below does not run an app handler (e.g. setControlCHook) instead.
-    discard signal(sig, SIG_DFL)
+    # sigaction rather than signal: Nim 2.0's posix.signal returns void.
+    var dfl: Sigaction
+    dfl.sa_handler = SIG_DFL
+    discard sigemptyset(dfl.sa_mask)
+    discard sigaction(sig, dfl, nil)
     var mask, oldMask: Sigset
     discard sigemptyset(mask)
     discard sigaddset(mask, sig)
