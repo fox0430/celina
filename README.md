@@ -9,7 +9,7 @@ A CLI library in Nim, inspired by Ratatui.
 - Full Unicode support with proper display width handling
 - Event-driven architecture for keyboard and mouse input
 - Widget system for building interactive components
-- Async programming support with [asyncdispatch](https://nim-lang.org/docs/asyncdispatch.html) or [Chronos](https://github.com/status-im/nim-chronos)
+- Async programming support with [asyncdispatch](https://nim-lang.org/docs/asyncdispatch.html) or [Chronos](https://github.com/status-im/nim-chronos) (4.0 or later)
 
 ## Platform Support
 

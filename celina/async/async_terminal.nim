@@ -21,7 +21,7 @@ import async_backend, async_buffer
 import ../core/[geometry, colors, buffer, terminal_common, errors]
 from async_io import
   AsyncInputReader, clearPendingByteAsync, tryWriteAsync, writeOrRaiseAsync,
-  tryWriteBlocking, writeOrRaiseBlocking
+  writeStdoutAsync, tryWriteBlocking, writeOrRaiseBlocking
 
 type
   AsyncTerminal* = ref object ## Async terminal interface for screen management
@@ -520,8 +520,7 @@ proc setupAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.asyn
     await clearScreenAsync()
     terminal.updateSize()
   except CatchableError as e:
-    # `cleanupAsync` is infallible, but guard it defensively so a cleanup
-    # failure can never mask the original setup error.
+    # Report the setup error, not a cancel from cleanup.
     try:
       await terminal.cleanupAsync(reader)
     except CatchableError:
@@ -584,35 +583,6 @@ proc runDisableSequence(terminal: AsyncTerminal, reader: AsyncInputReader = nil)
   guard:
     terminal.disableAlternateScreen()
 
-proc runDisableSequenceAsync(
-    terminal: AsyncTerminal, reader: AsyncInputReader = nil
-) {.async.} =
-  ## LIFO disable sequence for `cleanupAsync`.
-  ##
-  ## Mirrors `runDisableSequence` but uses async writes so the event loop is not
-  ## blocked while waiting for a flow-controlled terminal to drain. Each step is
-  ## guarded for the same defensive reason as the sync variant: a failure in one
-  ## disable step must not skip the rest of cleanup. A mode added here belongs
-  ## in `EmergencyResetSeq` too.
-  template guard(body: untyped) =
-    try:
-      body
-    except CatchableError:
-      discard
-
-  guard:
-    await terminal.disableSyncOutputAsync()
-  guard:
-    await terminal.disableFocusEventsAsync()
-  guard:
-    await terminal.disableBracketedPasteAsync()
-  guard:
-    await terminal.disableMouseAsync()
-  guard:
-    terminal.disableRawMode(reader)
-  guard:
-    await terminal.disableAlternateScreenAsync()
-
 proc cleanup*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) =
   ## Synchronous cleanup variant for crash handlers and signal hooks.
   ##
@@ -623,24 +593,79 @@ proc cleanup*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) =
   tryWriteBlocking(ShowCursorSeq)
   runDisableSequence(terminal, reader)
 
-proc emergencyRestore*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) =
-  ## Restore the terminal from a signal handler or crash hook, where a frame
-  ## may have been cut off mid-write. See `Terminal.emergencyRestore`.
-  ## Never raises.
-  discard writeAllBlocking(
-    cint(STDOUT_FILENO),
-    if terminal.alternateScreen: EmergencyResetAltScreenSeq else: EmergencyResetSeq,
-  )
+proc clearModeFlags(terminal: AsyncTerminal) =
+  ## Mark the modes `EmergencyResetSeq` turns off as disabled.
   terminal.syncOutputEnabled = false
   terminal.focusEventsEnabled = false
   terminal.bracketedPasteEnabled = false
   terminal.mouseEnabled = false
-  terminal.alternateScreen = false
+
+proc disableRawModeQuietly(terminal: AsyncTerminal, reader: AsyncInputReader) =
   # disableRawMode can raise from its celinaDebug stderr warnings.
   try:
     terminal.disableRawMode(reader)
   except CatchableError:
     discard
+
+proc emergencyRestore*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) =
+  ## Restore the terminal from a signal handler or crash hook, where a frame
+  ## may have been cut off mid-write. See `Terminal.emergencyRestore`.
+  ## Keeps the LIFO order: the modes go off first, then raw mode, then the
+  ## alternate screen. A mode flag is cleared only once its disable went out
+  ## in full, so a later cleanup retries a failed one. Never raises.
+  let fd = cint(STDOUT_FILENO)
+  if writeAllBlocking(fd, EmergencyResetSeq) == EmergencyResetSeq.len:
+    terminal.clearModeFlags()
+  terminal.disableRawModeQuietly(reader)
+  if terminal.alternateScreen:
+    if writeAllBlocking(fd, EmergencyAltScreenTail) == EmergencyAltScreenTail.len:
+      terminal.alternateScreen = false
+
+when hasChronos:
+  proc emergencyRestoreAsync(
+      terminal: AsyncTerminal, reader: AsyncInputReader
+  ) {.async.} =
+    ## `emergencyRestore` through the async stdout lock, for a cancelled
+    ## `cleanupAsync`. Never raises.
+    try:
+      if (await writeStdoutAsync(EmergencyResetSeq)) == EmergencyResetSeq.len:
+        terminal.clearModeFlags()
+    except CatchableError:
+      discard
+    terminal.disableRawModeQuietly(reader)
+    # Rechecked: a blocking fallback in `cleanupAsync` may have left it already.
+    if terminal.alternateScreen:
+      try:
+        if (await writeStdoutAsync(EmergencyAltScreenTail)) == EmergencyAltScreenTail.len:
+          terminal.alternateScreen = false
+      except CatchableError:
+        discard
+
+proc cleanupStepsAsync(terminal: AsyncTerminal, reader: AsyncInputReader) {.async.} =
+  ## The ordered steps of `cleanupAsync`. Each is guarded so a failure cannot
+  ## skip the rest; only `CancelledError` propagates.
+  template step(body: untyped) =
+    try:
+      body
+    except CancelledError as e:
+      raise e
+    except CatchableError:
+      discard
+
+  step:
+    await showCursorAsync()
+  step:
+    await terminal.disableSyncOutputAsync()
+  step:
+    await terminal.disableFocusEventsAsync()
+  step:
+    await terminal.disableBracketedPasteAsync()
+  step:
+    await terminal.disableMouseAsync()
+  step:
+    terminal.disableRawMode(reader)
+  step:
+    await terminal.disableAlternateScreenAsync()
 
 proc cleanupAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.async.} =
   ## Cleanup and restore terminal asynchronously.
@@ -649,15 +674,25 @@ proc cleanupAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.as
   ## restored before leaving the alternate screen so the final `tcsetattr`
   ## runs while the program-mode screen is still active. Mirrors the sync
   ## `terminal.cleanup()` policy — app-level wrappers should delegate here.
+  ## A mode added here belongs in `EmergencyResetSeq` too.
   ##
-  ## This proc is best-effort and never raises: every step is guarded so a
-  ## single failure cannot skip later cleanup steps, matching the infallible
-  ## contract of the synchronous `cleanup`.
-  try:
-    await showCursorAsync()
-    await runDisableSequenceAsync(terminal, reader)
-  except CatchableError:
-    discard
+  ## Raises only on cancellation. A chronos cancel replaces the remaining
+  ## steps with the emergency reset, then re-raises. A second cancel during
+  ## that reset falls back to a blocking write (up to ~2s, bypassing the
+  ## stdout lock), since the caller may exit before a background reset runs.
+  when hasChronos:
+    try:
+      await cleanupStepsAsync(terminal, reader)
+    except CancelledError as e:
+      let restore = terminal.emergencyRestoreAsync(reader)
+      try:
+        await restore.join()
+      except CancelledError:
+        restore.cancelSoon()
+        terminal.emergencyRestore(reader)
+      raise e
+  else:
+    await cleanupStepsAsync(terminal, reader)
 
   # AsyncFD cleanup is handled automatically by Chronos
   # No manual unregistration needed
@@ -923,9 +958,23 @@ proc getArea*(terminal: AsyncTerminal): Rect {.inline.} =
 
 # Async utility templates
 template withAsyncTerminal*(terminal: AsyncTerminal, body: untyped): untyped =
-  ## Template for convenient async terminal usage with automatic cleanup
+  ## Template for convenient async terminal usage with automatic cleanup.
+  ##
+  ## A cancel during cleanup is dropped if the body raised, so it cannot
+  ## replace the body's error; otherwise it propagates, so code after this
+  ## block does not keep running.
   await terminal.setupAsync()
+  var bodyRaised = false
   try:
     body
+  except CatchableError as e:
+    bodyRaised = true
+    raise e
   finally:
-    await terminal.cleanupAsync()
+    if bodyRaised:
+      try:
+        await terminal.cleanupAsync()
+      except CancelledError:
+        discard
+    else:
+      await terminal.cleanupAsync()

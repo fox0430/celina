@@ -139,11 +139,14 @@ const
   Osc8End* = "\e\\"
   Osc8Reset* = "\e]8;;\e\\" # Reset hyperlink (no URL)
 
+  AbortPartialSeq* = "\x18\e\\"
+    ## CAN aborts an escape sequence a write left half-sent; ST closes an
+    ## OSC/DCS string on terminals that ignore CAN there. Harmless in the
+    ## ground state.
+
   EmergencyResetSeq* =
-    "\x18" & # CAN: abort an escape sequence a write left half-sent.
-    "\e\\" & # ST: close an OSC/DCS string on terminals that ignore CAN there.
-    "\e[0m" & Osc8Reset & SyncOutputDisable & FocusEventsDisable & BracketedPasteDisable &
-    MouseSequences[MouseX10][1] & MouseSequences[MouseButton][1] &
+    AbortPartialSeq & "\e[0m" & Osc8Reset & SyncOutputDisable & FocusEventsDisable &
+    BracketedPasteDisable & MouseSequences[MouseX10][1] & MouseSequences[MouseButton][1] &
     MouseSequences[MouseMotion][1] & MouseSequences[MouseAll][1] &
     MouseSequences[MouseSGR][1] & ShowCursorSeq
     ## Everything `cleanup` turns off, plus an SGR and OSC 8 reset, as bytes
@@ -154,9 +157,12 @@ const
     ## ANSI only: raw mode and stdin `O_NONBLOCK` are not restored.
     ## Keep in step with `cleanup` and `suspend`, sync and async.
 
-  EmergencyResetAltScreenSeq* = EmergencyResetSeq & AlternateScreenExit & "\e[0m"
-    ## `EmergencyResetSeq` that also leaves the alternate screen. Leaving it
-    ## restores the saved SGR attributes, hence the trailing reset.
+  EmergencyAltScreenTail* = AlternateScreenExit & "\e[0m"
+    ## Leaves the alternate screen. Leaving it restores the saved SGR
+    ## attributes, hence the trailing reset.
+
+  EmergencyResetAltScreenSeq* = EmergencyResetSeq & EmergencyAltScreenTail
+    ## `EmergencyResetSeq` that also leaves the alternate screen.
 
   # OSC Window Title sequences
   # OSC 0: Set window title and icon name

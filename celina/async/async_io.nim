@@ -8,7 +8,7 @@ import std/[options, posix, selectors, deques]
 import async_backend
 from ../core/terminal_common import
   WriteOutcome, classifyWriteResult, WriteWaitOutcome, pollWritable, WriteBlockedWaitMs,
-  WriteMaxBlockedWaits, writeAllBlocking
+  WriteMaxBlockedWaits, writeAllBlocking, AbortPartialSeq
 
 type
   AsyncIOError* = object of CatchableError
@@ -412,6 +412,10 @@ proc writeStdoutAsync*(data: string): Future[int] {.async.} =
     discard
   finally:
     if held:
+      # Abort an escape sequence a partial write may have cut in half before
+      # the next writer gets the lock.
+      if total > 0 and total < data.len:
+        discard writeAllBlocking(fd, AbortPartialSeq)
       releaseStdoutLock()
 
   result = total
