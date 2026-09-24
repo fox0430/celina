@@ -725,6 +725,30 @@ suite "AsyncTerminal Cleanup":
     terminal.cleanup()
     check not terminal.alternateScreen
 
+suite "AsyncTerminal emergencyRestore":
+  test "emergencyRestore resets all toggleable flags":
+    let terminal = createTestTerminal()
+
+    terminal.enableAlternateScreen()
+    terminal.enableMouse()
+    terminal.enableBracketedPaste()
+    terminal.enableFocusEvents()
+    terminal.enableSyncOutput()
+
+    terminal.emergencyRestore()
+
+    check not terminal.alternateScreen
+    check not terminal.mouseEnabled
+    check not terminal.bracketedPasteEnabled
+    check not terminal.focusEventsEnabled
+    check not terminal.syncOutputEnabled
+
+  test "emergencyRestore on freshly created terminal is safe":
+    let terminal = createTestTerminal()
+    terminal.emergencyRestore()
+    terminal.emergencyRestore()
+    check not terminal.alternateScreen
+
 suite "AsyncTerminal cleanupAsync":
   test "cleanupAsync resets all toggleable flags":
     let terminal = createTestTerminal()

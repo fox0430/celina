@@ -7,6 +7,40 @@ when defined(posix):
 
 import ../celina/core/[terminal, terminal_common, geometry, colors, buffer, errors]
 
+when defined(posix):
+  type StdoutPipe = tuple[saved: cint, rfd: cint]
+
+  proc redirectStdoutToPipe(): StdoutPipe =
+    let saved = dup(STDOUT_FILENO)
+    if saved == -1:
+      return (cint(-1), cint(-1))
+    var fds: array[2, cint]
+    if pipe(fds) != 0:
+      discard close(saved)
+      return (cint(-1), cint(-1))
+    if dup2(fds[1], STDOUT_FILENO) == -1:
+      discard close(saved)
+      discard close(fds[0])
+      discard close(fds[1])
+      return (cint(-1), cint(-1))
+    discard close(fds[1])
+    (saved, fds[0])
+
+  proc restoreStdout(p: StdoutPipe) =
+    if p.saved != -1:
+      discard dup2(p.saved, STDOUT_FILENO)
+      discard close(p.saved)
+    if p.rfd != -1:
+      discard close(p.rfd)
+
+  proc readFromPipe(rfd: cint, maxBytes: int): string =
+    var buf = newString(maxBytes)
+    let n = posix.read(rfd, addr buf[0], maxBytes.cint)
+    if n > 0:
+      result = buf[0 ..< n]
+    else:
+      result = ""
+
 suite "Terminal Module Tests":
   suite "Terminal Creation":
     test "Terminal creation with newTerminal()":
@@ -851,40 +885,6 @@ suite "Terminal Module Tests":
           check not terminal.rawMode
 
   suite "Buffered stdout ordering":
-    when defined(posix):
-      type StdoutPipe = tuple[saved: cint, rfd: cint]
-
-      proc redirectStdoutToPipe(): StdoutPipe =
-        let saved = dup(STDOUT_FILENO)
-        if saved == -1:
-          return (cint(-1), cint(-1))
-        var fds: array[2, cint]
-        if pipe(fds) != 0:
-          discard close(saved)
-          return (cint(-1), cint(-1))
-        if dup2(fds[1], STDOUT_FILENO) == -1:
-          discard close(saved)
-          discard close(fds[0])
-          discard close(fds[1])
-          return (cint(-1), cint(-1))
-        discard close(fds[1])
-        (saved, fds[0])
-
-      proc restoreStdout(p: StdoutPipe) =
-        if p.saved != -1:
-          discard dup2(p.saved, STDOUT_FILENO)
-          discard close(p.saved)
-        if p.rfd != -1:
-          discard close(p.rfd)
-
-      proc readFromPipe(rfd: cint, maxBytes: int): string =
-        var buf = newString(maxBytes)
-        let n = posix.read(rfd, addr buf[0], maxBytes.cint)
-        if n > 0:
-          result = buf[0 ..< n]
-        else:
-          result = ""
-
     test "writeWithRetry flushes buffered stdout before control sequences":
       # Regression: writeWithRetry wrote control sequences directly to the fd
       # and then flushed the C stdio buffer, so buffered stdout.write data could
@@ -903,5 +903,71 @@ suite "Terminal Module Tests":
 
         check output.startsWith("hello")
         check output.contains(ShowCursorSeq)
+      else:
+        skip()
+
+  suite "emergencyRestore":
+    test "writes the reset in one piece and clears every mode flag":
+      when defined(posix):
+        let p = redirectStdoutToPipe()
+        if p.saved == -1:
+          skip()
+        defer:
+          restoreStdout(p)
+
+        let terminal = newTerminal()
+        terminal.enableMouse()
+        terminal.enableBracketedPaste()
+        terminal.enableFocusEvents()
+        terminal.enableSyncOutput()
+        discard readFromPipe(p.rfd, 4096)
+
+        terminal.emergencyRestore()
+        let output = readFromPipe(p.rfd, 4096)
+
+        check output == EmergencyResetSeq
+        check not terminal.mouseEnabled
+        check not terminal.bracketedPasteEnabled
+        check not terminal.focusEventsEnabled
+        check not terminal.syncOutputEnabled
+      else:
+        skip()
+
+    test "leaves the alternate screen when it was entered":
+      when defined(posix):
+        let p = redirectStdoutToPipe()
+        if p.saved == -1:
+          skip()
+        defer:
+          restoreStdout(p)
+
+        let terminal = newTerminal()
+        terminal.enableAlternateScreen()
+        discard readFromPipe(p.rfd, 4096)
+
+        terminal.emergencyRestore()
+        let output = readFromPipe(p.rfd, 4096)
+
+        check output == EmergencyResetAltScreenSeq
+        check not terminal.alternateScreen
+      else:
+        skip()
+
+    test "sends the reset even when no flag is set":
+      # Unlike cleanup, the flags are not consulted: a mode may be on in the
+      # terminal while its write was cut off before the flag was updated.
+      when defined(posix):
+        let p = redirectStdoutToPipe()
+        if p.saved == -1:
+          skip()
+        defer:
+          restoreStdout(p)
+
+        let terminal = newTerminal()
+        terminal.emergencyRestore()
+        terminal.emergencyRestore()
+        let output = readFromPipe(p.rfd, 4096)
+
+        check output == EmergencyResetSeq & EmergencyResetSeq
       else:
         skip()

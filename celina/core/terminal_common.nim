@@ -139,6 +139,25 @@ const
   Osc8End* = "\e\\"
   Osc8Reset* = "\e]8;;\e\\" # Reset hyperlink (no URL)
 
+  EmergencyResetSeq* =
+    "\x18" & # CAN: abort an escape sequence a write left half-sent.
+    "\e\\" & # ST: close an OSC/DCS string on terminals that ignore CAN there.
+    "\e[0m" & Osc8Reset & SyncOutputDisable & FocusEventsDisable & BracketedPasteDisable &
+    MouseSequences[MouseX10][1] & MouseSequences[MouseButton][1] &
+    MouseSequences[MouseMotion][1] & MouseSequences[MouseAll][1] &
+    MouseSequences[MouseSGR][1] & ShowCursorSeq
+    ## Everything `cleanup` turns off, plus an SGR and OSC 8 reset, as bytes
+    ## for a restore without the terminal object. From another thread, stop
+    ## the render thread first or its next frame re-enables the modes.
+    ## Does not leave the alternate screen (`CSI ?1049 l` restores the saved
+    ## cursor even if it was never entered); use `EmergencyResetAltScreenSeq`.
+    ## ANSI only: raw mode and stdin `O_NONBLOCK` are not restored.
+    ## Keep in step with `cleanup` and `suspend`, sync and async.
+
+  EmergencyResetAltScreenSeq* = EmergencyResetSeq & AlternateScreenExit & "\e[0m"
+    ## `EmergencyResetSeq` that also leaves the alternate screen. Leaving it
+    ## restores the saved SGR attributes, hence the trailing reset.
+
   # OSC Window Title sequences
   # OSC 0: Set window title and icon name
   # OSC 1: Set icon name only

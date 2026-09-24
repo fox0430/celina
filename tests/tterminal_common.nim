@@ -1243,3 +1243,45 @@ suite "Terminal Common Module Tests":
       # which must win over any POLLOUT so the caller treats it as a hard error.
       check posix.close(fds[0]) == 0
       check pollWritable(fds[1], 0) == wwError
+
+suite "EmergencyResetSeq":
+  test "Turns off every mode a terminal can be left in":
+    for sequence in [
+      SyncOutputDisable, FocusEventsDisable, BracketedPasteDisable, ShowCursorSeq
+    ]:
+      check sequence in EmergencyResetSeq
+    for (_, disable) in MouseSequences:
+      check disable in EmergencyResetSeq
+
+  test "Resets attributes and closes an open hyperlink":
+    check "\e[0m" in EmergencyResetSeq
+    check Osc8Reset in EmergencyResetSeq
+
+  test "Starts by aborting a half-sent sequence":
+    # CAN aborts an escape sequence; ST closes an OSC/DCS string on terminals
+    # that ignore CAN inside one.
+    check EmergencyResetSeq.startsWith("\x18\e\\")
+
+  test "Enables nothing":
+    for (enable, _) in MouseSequences:
+      check enable notin EmergencyResetAltScreenSeq
+    for sequence in [
+      SyncOutputEnable, FocusEventsEnable, BracketedPasteEnable, AlternateScreenEnter,
+      HideCursorSeq,
+    ]:
+      check sequence notin EmergencyResetAltScreenSeq
+
+  test "Leaves the cursor style alone":
+    # `cleanup` does not reset it, and `\e[0 q` prints a stray `q` on the
+    # Linux console.
+    check CursorStyleDefault notin EmergencyResetAltScreenSeq
+
+  test "Does not leave the alternate screen":
+    # Leaving it restores the saved cursor even if the screen was never entered.
+    check AlternateScreenExit notin EmergencyResetSeq
+
+  test "Alternate screen variant leaves it after the other resets":
+    # Leaving it restores the cursor and SGR attributes saved on entry, so only
+    # an SGR reset may follow.
+    check EmergencyResetAltScreenSeq.startsWith(EmergencyResetSeq)
+    check EmergencyResetAltScreenSeq.endsWith(AlternateScreenExit & "\e[0m")

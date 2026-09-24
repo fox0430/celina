@@ -466,7 +466,8 @@ proc cleanup*(terminal: Terminal) =
   ## before leaving the alternate screen so that the final `tcsetattr` runs
   ## while the program-mode screen is still active. Callers that need a
   ## different order should not reorder these lines piecemeal — the policy
-  ## lives here so app-level wrappers can delegate to it.
+  ## lives here so app-level wrappers can delegate to it. A mode added here
+  ## belongs in `EmergencyResetSeq` too.
   template guard(body: untyped) =
     try:
       body
@@ -487,6 +488,29 @@ proc cleanup*(terminal: Terminal) =
     terminal.disableRawMode()
   guard:
     terminal.disableAlternateScreen()
+
+proc emergencyRestore*(terminal: Terminal) =
+  ## Restore the terminal from a signal handler or crash hook, where a frame
+  ## may have been cut off mid-write.
+  ##
+  ## Unlike `cleanup`, ignores the per-mode flags and writes
+  ## `EmergencyResetSeq` (or `EmergencyResetAltScreenSeq`) straight to the fd
+  ## without flushing stdio, which is not async-signal-safe. Then restores
+  ## raw mode. Never raises.
+  discard writeAllBlocking(
+    cint(STDOUT_FILENO),
+    if terminal.alternateScreen: EmergencyResetAltScreenSeq else: EmergencyResetSeq,
+  )
+  terminal.syncOutputEnabled = false
+  terminal.focusEventsEnabled = false
+  terminal.bracketedPasteEnabled = false
+  terminal.mouseEnabled = false
+  terminal.alternateScreen = false
+  # disableRawMode can raise from its celinaDebug stderr warnings.
+  try:
+    terminal.disableRawMode()
+  except CatchableError:
+    discard
 
 proc setup*(terminal: Terminal) =
   ## Setup terminal for CLI mode.
@@ -571,7 +595,7 @@ proc suspend*(terminal: Terminal) =
   terminal.suspendState.suspendedFocusEvents = terminal.focusEventsEnabled
   terminal.suspendState.suspendedSyncOutput = terminal.syncOutputEnabled
 
-  # Return to shell mode
+  # Return to shell mode. A mode added here belongs in `EmergencyResetSeq` too.
   try:
     showCursor()
   except CatchableError:
