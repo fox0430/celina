@@ -54,12 +54,18 @@ type
       runFuture: Future[void]
         ## Set on runAsync entry, cleared on exit. shutdownAsync targets
         ## this Future via cancelAndWait. nil before/after runAsync.
+      runEnding: bool
+        ## Set once the run starts to end (cleanup or `shutdownAsync`).
+        ## Reset on each `runAsync` entry.
       when defined(posix):
         signalHandles: seq[SignalHandle]
           ## SIGINT/SIGTERM handles registered when
           ## config.installSignalHandler is true. Cleared during runAsync
           ## cleanup so handles do not outlive the AsyncApp instance.
           ## POSIX-only: chronos signal APIs are not available on Windows.
+        caughtSignal: cint
+          ## Signal that started the stop, 0 if none. Read via `stopSignal`.
+          ## Reset on each `runAsync` entry.
 
   AsyncAppError* = object of CatchableError
 
@@ -432,15 +438,18 @@ proc runAsyncInner(app: AsyncApp) {.async.} =
       discard
   finally:
     app.state.running = false
+    when hasChronos:
+      app.runEnding = true
     try:
       await cleanupQuietly(app)
     finally:
-      # Cleared even if the await is cancelled.
+      # Run even if the await is cancelled. Statements placed after this
+      # try are skipped when the outer finally was entered by an exception.
       app.terminalActive = false
-    app.inputReader.closeAsyncInputReader()
-    app.inputReader = nil
-    when hasChronos and defined(posix):
-      removeSignalHandlers(app)
+      app.inputReader.closeAsyncInputReader()
+      app.inputReader = nil
+      when hasChronos and defined(posix):
+        removeSignalHandlers(app)
 
 proc runAsync*(app: AsyncApp) {.async.} =
   ## Run the async application main loop
@@ -457,6 +466,12 @@ proc runAsync*(app: AsyncApp) {.async.} =
   ## as before. Wrap `await app.runAsync()` in a `try`/`except` if you
   ## need to recover or report.
   ##
+  ## With `config.installSignalHandler`, a SIGINT/SIGTERM cancels the run
+  ## through `shutdownAsync`, so it usually ends with `CancelledError`
+  ## after cleanup (it can also return normally; see `stopSignal`).
+  ## `stopSignal` tells which signal it was, and `exitIfStoppedBySignal`
+  ## passes it on to the parent process.
+  ##
   ## Example:
   ## ```nim
   ## var app = newAsyncApp(AppConfig(mouseCapture: true))
@@ -472,6 +487,9 @@ proc runAsync*(app: AsyncApp) {.async.} =
   ## await app.runAsync()
   ## ```
   when hasChronos:
+    app.runEnding = false
+    when defined(posix):
+      app.caughtSignal = 0
     # chronos creates the Future eagerly when runAsyncInner is called, so we
     # can capture it before awaiting. shutdownAsync targets this Future.
     let inner = runAsyncInner(app)
@@ -486,6 +504,17 @@ proc runAsync*(app: AsyncApp) {.async.} =
 proc quit*(app: AsyncApp) =
   ## Signal the async application to quit gracefully
   app.state.shouldQuit = true
+
+proc stopSignal*(app: AsyncApp): cint =
+  ## The SIGINT/SIGTERM whose `installSignalHandler` handler stopped the
+  ## last `runAsync`, or 0 if none. Only the signal that starts the stop is
+  ## recorded; later ones still cancel (a second Ctrl-C can break a stuck
+  ## cleanup) but are not recorded. Valid until the next `runAsync`.
+  ## Always 0 unless built with chronos on POSIX.
+  ##
+  ## `runAsync` then usually raises `CancelledError` but can also return
+  ## normally; see `exitIfStoppedBySignal`.
+  when hasChronos and defined(posix): app.caughtSignal else: 0
 
 when hasChronos:
   proc shutdownAsync*(app: AsyncApp) {.async.} =
@@ -509,6 +538,7 @@ when hasChronos:
     ## Only available with `-d:asyncBackend=chronos`.
     if app.runFuture.isNil or app.runFuture.finished():
       return
+    app.runEnding = true
     await cancelAndWait(app.runFuture)
 
 when hasChronos and defined(posix):
@@ -522,12 +552,13 @@ when hasChronos and defined(posix):
     ## well-defined (chronos would otherwise register multiple callbacks
     ## with no contract over ordering or udata routing).
 
-  proc onShutdownSignal(udata: pointer) {.gcsafe, raises: [].} =
-    ## chronos signal callback. Runs on the dispatcher thread; asyncSpawn
-    ## from here is safe. Matches chronos CallbackFunc signature.
-    if udata.isNil:
-      return
-    let app = cast[AsyncApp](udata)
+  proc onShutdownSignal(app: AsyncApp, sig: cint) {.gcsafe, raises: [].} =
+    ## Shared body of the chronos signal callbacks. Runs on the dispatcher
+    ## thread; asyncSpawn from here is safe. A signal that arrives once the
+    ## run is ending still cancels (a cancelled cleanup falls back to the
+    ## emergency reset) but is not recorded.
+    if not app.runEnding:
+      app.caughtSignal = sig
     if app.runFuture.isNil:
       # Handler registration happens inside runAsyncInner's synchronous
       # prologue (before the first await), so app.runFuture is briefly
@@ -539,17 +570,28 @@ when hasChronos and defined(posix):
       # somehow arrive here, the next tick observes shouldQuit and the
       # loop exits at its boundary instead of silently dropping the
       # request.
+      app.runEnding = true
       app.state.shouldQuit = true
       return
-    if app.runFuture.finished():
-      return
     try:
+      # shutdownAsync sets runEnding before its first await.
       asyncSpawn shutdownAsync(app)
     except CatchableError:
       # asyncSpawn can reject when the dispatcher is shutting down. Fall
       # back to a cooperative quit so the loop still exits at the next
       # tick boundary.
+      app.runEnding = true
       app.state.shouldQuit = true
+
+  proc onSigint(udata: pointer) {.gcsafe, raises: [].} =
+    ## chronos CallbackFunc for SIGINT.
+    if not udata.isNil:
+      onShutdownSignal(cast[AsyncApp](udata), SIGINT)
+
+  proc onSigterm(udata: pointer) {.gcsafe, raises: [].} =
+    ## chronos CallbackFunc for SIGTERM.
+    if not udata.isNil:
+      onShutdownSignal(cast[AsyncApp](udata), SIGTERM)
 
   proc installSignalHandlersIfRequested(app: AsyncApp) {.gcsafe, raises: [].} =
     ## Register SIGINT and SIGTERM handlers if the config opts in.
@@ -581,8 +623,8 @@ when hasChronos and defined(posix):
       {.cast(gcsafe).}:
         # addSignal raises OSError on epoll/kqueue under POSIX. We catch
         # CatchableError to stay backend-agnostic across chronos versions.
-        app.signalHandles.add(addSignal(SIGINT, onShutdownSignal, udata))
-        app.signalHandles.add(addSignal(SIGTERM, onShutdownSignal, udata))
+        app.signalHandles.add(addSignal(SIGINT, onSigint, udata))
+        app.signalHandles.add(addSignal(SIGTERM, onSigterm, udata))
     except CatchableError as e:
       when defined(celinaDebug):
         try:
@@ -611,6 +653,55 @@ when hasChronos and defined(posix):
     {.cast(gcsafe).}:
       if hadHandlers and installedSignalAppCount > 0:
         dec installedSignalAppCount
+
+  proc exitIfStoppedBySignal*(app: AsyncApp) =
+    ## If `stopSignal` is set, end the process by that signal so the
+    ## parent sees it (a shell reports 130 for SIGINT); otherwise return.
+    ## `quit(128 + sig)` cannot do this: Nim clamps POSIX exit codes to 127.
+    ##
+    ## Call it after `runAsync` ends, once nothing else uses the terminal
+    ## (it only checks this app, and returns while `runAsync` owns it).
+    ## stdout and stderr are flushed; exit procs, `finally` and `defer` do
+    ## not run. Falls back to exit status 128 + signal. No-op unless built
+    ## with chronos on POSIX.
+    ##
+    ## ```nim
+    ## try:
+    ##   await app.runAsync()
+    ## except CancelledError as e:
+    ##   if app.stopSignal == 0:
+    ##     raise e
+    ## app.exitIfStoppedBySignal()
+    ## ```
+    let sig = app.caughtSignal
+    if sig == 0 or app.terminalActive:
+      # Dying while runAsync owns the terminal would leave it raw.
+      return
+    try:
+      stdout.flushFile()
+      stderr.flushFile()
+    except IOError:
+      discard
+    # Default action first, so a pending signal released by the unblock
+    # below does not run an app handler (e.g. setControlCHook) instead.
+    # sigaction rather than signal: Nim 2.0's posix.signal returns void.
+    var dfl: Sigaction
+    dfl.sa_handler = SIG_DFL
+    discard sigemptyset(dfl.sa_mask)
+    discard sigaction(sig, dfl, nil)
+    var mask, oldMask: Sigset
+    discard sigemptyset(mask)
+    discard sigaddset(mask, sig)
+    discard pthread_sigmask(SIG_UNBLOCK, mask, oldMask)
+    # To this thread: kill(getpid()) may hand it to another thread and
+    # return before the process dies.
+    discard pthread_kill(pthread_self(), sig)
+    exitnow(128 + sig)
+
+else:
+  proc exitIfStoppedBySignal*(app: AsyncApp) =
+    ## No-op: signals are only handled with chronos on POSIX.
+    discard
 
 proc restoreTerminal*(app: AsyncApp) =
   ## Synchronously restore terminal state for use in crash handlers.
@@ -719,6 +810,10 @@ proc quickRunAsync*(
 ) {.async.} =
   ## Quick way to run a simple async CLI application.
   ##
+  ## With `config.installSignalHandler`, a SIGINT/SIGTERM usually ends it
+  ## with `CancelledError`, and the app is not reachable for `stopSignal`.
+  ## Use `newAsyncApp` + `runAsync` when the signal matters.
+  ##
   ## Example:
   ## ```nim
   ## await quickRunAsync(
@@ -743,6 +838,10 @@ proc quickRunAsync*(
     config: AppConfig = DefaultAppConfig,
 ) {.async.} =
   ## Quick way to run a simple async CLI application with AsyncApp context handlers.
+  ##
+  ## With `config.installSignalHandler`, a SIGINT/SIGTERM usually ends it
+  ## with `CancelledError`; keep the `app` passed to a handler to read
+  ## `stopSignal` or call `exitIfStoppedBySignal` afterwards.
   ##
   ## Both handlers receive the AsyncApp reference, enabling features like
   ## `app.quit()`, `app.withSuspendAsync`, FPS queries, and window state access.

@@ -11,8 +11,9 @@ when not hasAsyncSupport and not hasAsyncDispatch and not hasChronos:
 proc main() {.async.} =
   # Configure the async app. With the chronos backend on POSIX,
   # `installSignalHandler: true` installs SIGINT/SIGTERM handlers that
-  # call `shutdownAsync` and restore the terminal on exit. Ignored
-  # under asyncdispatch and on non-POSIX platforms.
+  # call `shutdownAsync` and restore the terminal on exit; `runAsync`
+  # then raises `CancelledError`. Ignored under asyncdispatch and on
+  # non-POSIX platforms.
   let config = AppConfig(
     title: "Async Hello World",
     alternateScreen: true,
@@ -77,7 +78,14 @@ proc main() {.async.} =
     )
 
   # Run the async application (uses config from newAsyncApp)
-  await app.runAsync()
+  try:
+    await app.runAsync()
+  except CancelledError as e:
+    # Stopped by SIGINT/SIGTERM; anything else is a real cancellation.
+    if app.stopSignal == 0:
+      raise e
+  # The terminal is restored; exit by the signal so the shell sees it.
+  app.exitIfStoppedBySignal()
 
 when isMainModule:
   # Run the async main function
