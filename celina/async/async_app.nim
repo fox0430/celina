@@ -443,12 +443,13 @@ proc runAsyncInner(app: AsyncApp) {.async.} =
     try:
       await cleanupQuietly(app)
     finally:
-      # Cleared even if the await is cancelled.
+      # Run even if the await is cancelled. Statements placed after this
+      # try are skipped when the outer finally was entered by an exception.
       app.terminalActive = false
-    app.inputReader.closeAsyncInputReader()
-    app.inputReader = nil
-    when hasChronos and defined(posix):
-      removeSignalHandlers(app)
+      app.inputReader.closeAsyncInputReader()
+      app.inputReader = nil
+      when hasChronos and defined(posix):
+        removeSignalHandlers(app)
 
 proc runAsync*(app: AsyncApp) {.async.} =
   ## Run the async application main loop

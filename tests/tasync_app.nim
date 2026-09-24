@@ -1189,7 +1189,11 @@ when hasAsyncSupport:
             proc appHandler(sig: cint) {.noconv.} =
               exitnow(42)
 
-            discard signal(SIGTERM, appHandler)
+            # sigaction rather than signal: Nim 2.0's posix.signal returns void.
+            var act: Sigaction
+            act.sa_handler = appHandler
+            discard sigemptyset(act.sa_mask)
+            discard sigaction(SIGTERM, act, nil)
             var mask, oldMask: Sigset
             discard sigemptyset(mask)
             discard sigaddset(mask, SIGTERM)
