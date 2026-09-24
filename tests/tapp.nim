@@ -857,6 +857,36 @@ suite "App Application Timeout":
     check app.dispatchTimeout() == trContinue
     {.pop.}
 
+  when defined(posix):
+    privateAccess(App)
+
+    test "resume restarts the idle clock":
+      # Returning from the suspended program counts as activity, so the
+      # time spent suspended does not fire the timeout right after resume.
+      let app = newApp()
+      discard captureStdout(
+        proc() =
+          app.suspend()
+      )
+      app.timings.lastEventTime = getMonoTime() - initDuration(seconds = 10)
+      let beforeResume = getMonoTime()
+      discard captureStdout(
+        proc() =
+          app.resume()
+      )
+      check not app.isSuspended()
+      check app.timings.lastEventTime >= beforeResume
+
+    test "resume without suspend leaves the idle clock alone":
+      let app = newApp()
+      let idleSince = getMonoTime() - initDuration(seconds = 10)
+      app.timings.lastEventTime = idleSince
+      discard captureStdout(
+        proc() =
+          app.resume()
+      )
+      check app.timings.lastEventTime == idleSince
+
 suite "App String Representation":
   test "new app string representation":
     let app = newApp()

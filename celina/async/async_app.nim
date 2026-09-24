@@ -769,16 +769,26 @@ proc suspendAsync*(app: AsyncApp) {.async.} =
   ## ```
   await app.terminal.suspendAsync(app.inputReader)
 
+proc isSuspended*(app: AsyncApp): bool =
+  ## Check if the application is currently suspended
+  app.terminal.isSuspended
+
 proc resumeAsync*(app: AsyncApp) {.async.} =
   ## Resume the TUI after a `suspendAsync()` call.
   ##
   ## Restores terminal state and forces a full redraw on the next frame.
-  await app.terminal.resumeAsync(app.inputReader)
-  app.state.forceNextRender = true
-
-proc isSuspended*(app: AsyncApp): bool =
-  ## Check if the application is currently suspended
-  app.terminal.isSuspended
+  ## When the app was suspended, also restarts the application-timeout idle
+  ## clock.
+  let wasSuspended = app.isSuspended
+  # Update the app state even when the terminal resume fails partway.
+  try:
+    await app.terminal.resumeAsync(app.inputReader)
+  finally:
+    app.state.forceNextRender = true
+    if wasSuspended:
+      # Returning from the suspended program counts as activity, like the
+      # start of a run.
+      app.timings.lastEventTime = getMonoTime()
 
 template withSuspendAsync*(app: AsyncApp, body: untyped) =
   ## Suspend the TUI, execute body, then resume.
