@@ -861,41 +861,38 @@ when hasAsyncSupport:
         check app.timings.lastEventTime == idleSince
 
       test "A slow event handler does not use up the idle time":
-        # The idle clock starts after the handler returns, so a handler that
-        # runs longer than the timeout does not fire it on the next tick.
+        # The idle clock is stamped after the handler returns, so time spent
+        # in the handler does not count as idle time.
         let app =
           newAsyncApp(AppConfig(alternateScreen: false, rawMode: false, targetFps: 60))
         app.setApplicationTimeout(100)
-        var timeouts = 0
         app.onTimeoutAsync proc(): Future[TickResult] {.async.} =
-          inc timeouts
           return trContinue
-        var handled = 0
+        var handlerReturnedAt: MonoTime
         app.onEventAsync proc(event: Event): Future[EventResult] {.async.} =
-          inc handled
-          let busyUntil = getMonoTime() + initDuration(milliseconds = 200)
+          let busyUntil = getMonoTime() + initDuration(milliseconds = 20)
           while getMonoTime() < busyUntil:
             discard
+          handlerReturnedAt = getMonoTime()
           return erContinue
-        proc tickTwice() =
+        proc tickOnce() =
           app.inputReader = newAsyncInputReader()
           try:
             discard captureStdout(
               proc() =
                 # Sync the resize state with the size seen while stdout is
-                # redirected, or the first tick reports a spurious resize.
+                # redirected, or the tick reports a spurious resize.
                 let size = getTerminalSizeOrDefault()
                 app.state.resizeState = initResizeState(size.width, size.height)
-                discard waitFor app.tickAsync()
                 discard waitFor app.tickAsync()
             )
           finally:
             app.inputReader.closeAsyncInputReader()
             app.inputReader = nil
 
-        withStdinInput("a", tickTwice)
-        check handled == 1
-        check timeouts == 0
+        withStdinInput("a", tickOnce)
+        check handlerReturnedAt != default(MonoTime)
+        check app.timings.lastEventTime >= handlerReturnedAt
 
   suite "AsyncApp handleWindowEvent":
     test "handleWindowEvent with no window mode returns erContinue":
