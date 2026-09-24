@@ -894,6 +894,76 @@ when hasAsyncSupport:
         check handlerReturnedAt != default(MonoTime)
         check app.timings.lastEventTime >= handlerReturnedAt
 
+      test "A slow timeout handler does not use up the idle time":
+        let app =
+          newAsyncApp(AppConfig(alternateScreen: false, rawMode: false, targetFps: 60))
+        # The handler outlasts the timeout, so stamping before it would make
+        # the next tick fire again at once.
+        app.setApplicationTimeout(150)
+        var handlerReturnedAt: MonoTime
+        var timeoutCalls = 0
+        app.onTimeoutAsync proc(): Future[TickResult] {.async.} =
+          timeoutCalls.inc
+          let busyUntil = getMonoTime() + initDuration(milliseconds = 160)
+          while getMonoTime() < busyUntil:
+            discard
+          handlerReturnedAt = getMonoTime()
+          return trContinue
+        app.timings.lastEventTime = getMonoTime() - initDuration(milliseconds = 300)
+        proc tickTwice() =
+          app.inputReader = newAsyncInputReader()
+          try:
+            discard captureStdout(
+              proc() =
+                let size = getTerminalSizeOrDefault()
+                app.state.resizeState = initResizeState(size.width, size.height)
+                discard waitFor app.tickAsync()
+                discard waitFor app.tickAsync()
+            )
+          finally:
+            app.inputReader.closeAsyncInputReader()
+            app.inputReader = nil
+
+        withStdinInput("", tickTwice)
+        check handlerReturnedAt != default(MonoTime)
+        check app.timings.lastEventTime >= handlerReturnedAt
+        check timeoutCalls == 1
+
+      test "A slow resize handler does not use up the idle time":
+        let app =
+          newAsyncApp(AppConfig(alternateScreen: false, rawMode: false, targetFps: 60))
+        app.setApplicationTimeout(100)
+        var timeoutCalls = 0
+        app.onTimeoutAsync proc(): Future[TickResult] {.async.} =
+          timeoutCalls.inc
+          return trContinue
+        var handlerReturnedAt: MonoTime
+        app.onEventAsync proc(event: Event): Future[EventResult] {.async.} =
+          if event.kind == Resize:
+            let busyUntil = getMonoTime() + initDuration(milliseconds = 20)
+            while getMonoTime() < busyUntil:
+              discard
+            handlerReturnedAt = getMonoTime()
+          return erContinue
+        # Nearly idle: without the stamp the timeout would fire in this tick.
+        app.timings.lastEventTime = getMonoTime() - initDuration(milliseconds = 90)
+        proc tickOnce() =
+          app.inputReader = newAsyncInputReader()
+          try:
+            discard captureStdout(
+              proc() =
+                app.state.resizeState = initResizeState(1, 1)
+                discard waitFor app.tickAsync()
+            )
+          finally:
+            app.inputReader.closeAsyncInputReader()
+            app.inputReader = nil
+
+        withStdinInput("", tickOnce)
+        check handlerReturnedAt != default(MonoTime)
+        check app.timings.lastEventTime >= handlerReturnedAt
+        check timeoutCalls == 0
+
   suite "AsyncApp handleWindowEvent":
     test "handleWindowEvent with no window mode returns erContinue":
       let app = newAsyncApp()

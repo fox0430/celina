@@ -306,6 +306,9 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
       else:
         discard
 
+      # Stamp after dispatch, as for input events.
+      app.timings.lastEventTime = getMonoTime()
+
     # Calculate remaining time until next render (used as poll timeout)
     let remainingTime = app.fpsMonitor.getRemainingFrameTime()
 
@@ -326,9 +329,10 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
       let elapsedAfterPoll =
         (getMonoTime() - app.timings.lastEventTime).inMilliseconds.int
       if isTimeoutReached(app.timings.applicationTimeout, elapsedAfterPoll):
-        # Reset timer to prevent busy-loop and enable periodic callbacks
+        let timeoutResult = (await app.dispatchTimeoutAsync())
+        # Reset after the handler so a slow one does not fire again at once.
         app.timings.lastEventTime = getMonoTime()
-        if (await app.dispatchTimeoutAsync()) == trQuit:
+        if timeoutResult == trQuit:
           return false
 
     if eventsAvailable:
