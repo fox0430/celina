@@ -1053,10 +1053,193 @@ when hasAsyncSupport:
           waitFor runFut
         check app.isRunning() == false
 
+      when defined(posix):
+        test "stopSignal reports the signal that cancelled the run":
+          let config = AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+          let app = newAsyncApp(config)
+          let runFut = app.runAsync()
+          waitFor sleepAsync(50.milliseconds)
+
+          onSigint(cast[pointer](app))
+          # A later signal does not replace the first one.
+          onSigterm(cast[pointer](app))
+          expect CancelledError:
+            waitFor runFut
+          check app.isRunning() == false
+          check app.stopSignal == SIGINT
+
+        test "stopSignal is 0 for shutdownAsync and resets on the next run":
+          let config = AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+          let app = newAsyncApp(config)
+          let first = app.runAsync()
+          waitFor sleepAsync(50.milliseconds)
+          onSigterm(cast[pointer](app))
+          expect CancelledError:
+            waitFor first
+          check app.stopSignal == SIGTERM
+
+          let second = app.runAsync()
+          waitFor sleepAsync(50.milliseconds)
+          check app.stopSignal == 0
+          waitFor shutdownAsync(app)
+          expect CancelledError:
+            waitFor second
+          check app.stopSignal == 0
+
+        test "Signal during shutdownAsync is not recorded":
+          let config = AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+          let app = newAsyncApp(config)
+          let runFut = app.runAsync()
+          waitFor sleepAsync(50.milliseconds)
+
+          let shutdown = shutdownAsync(app)
+          onSigint(cast[pointer](app))
+          waitFor shutdown
+          expect CancelledError:
+            waitFor runFut
+          check app.stopSignal == 0
+
+        test "Signal during cleanup is not recorded":
+          privateAccess(AsyncApp)
+          let config = AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+          let app = newAsyncApp(config)
+          let runFut = app.runAsync()
+          waitFor sleepAsync(50.milliseconds)
+
+          # What runAsyncInner's finally sets before cleanup starts.
+          app.runEnding = true
+          # Not recorded, but still cancels (breaks a stuck cleanup).
+          onSigint(cast[pointer](app))
+          expect CancelledError:
+            waitFor runFut
+          check app.stopSignal == 0
+
+        test "exitIfStoppedBySignal returns when no signal was caught":
+          let app = newAsyncApp()
+          app.exitIfStoppedBySignal()
+          check app.stopSignal == 0
+
+        test "exitIfStoppedBySignal ends the process by the signal":
+          privateAccess(AsyncApp)
+          let pid = fork()
+          require pid >= 0
+          if pid == 0:
+            # Blocked, as a leftover chronos mask would leave it.
+            var mask, oldMask: Sigset
+            discard sigemptyset(mask)
+            discard sigaddset(mask, SIGTERM)
+            discard pthread_sigmask(SIG_BLOCK, mask, oldMask)
+            let app = newAsyncApp()
+            app.caughtSignal = SIGTERM
+            app.exitIfStoppedBySignal()
+            exitnow(0) # not reached
+          var status: cint
+          check waitpid(pid, status, 0) == pid
+          check WIFSIGNALED(status)
+          check WTERMSIG(status) == SIGTERM
+
+        test "Signal after app.quit() still stops a stuck tick":
+          var quitTickEntered = false
+          let config = AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+          let app = newAsyncApp(config)
+          # Quit, then stay in the tick so the quit never takes effect.
+          app.onTickAsync proc(app: AsyncApp): Future[bool] {.async.} =
+            if not quitTickEntered:
+              quitTickEntered = true
+              app.quit()
+              await sleepAsync(10.seconds)
+            return true
+          let runFut = app.runAsync()
+          waitFor sleepAsync(50.milliseconds)
+          require quitTickEntered
+
+          onSigint(cast[pointer](app))
+          expect CancelledError:
+            waitFor runFut
+          # Recorded because it is what stopped the run.
+          check app.stopSignal == SIGINT
+
+        test "runAsync marks the run as ending before cleanup":
+          privateAccess(AsyncApp)
+          let config = AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+          let app = newAsyncApp(config)
+          app.onTickAsync proc(app: AsyncApp): Future[bool] {.async.} =
+            app.quit()
+            return true
+          waitFor app.runAsync()
+          check app.runEnding
+
+        test "exitIfStoppedBySignal returns while runAsync owns the terminal":
+          privateAccess(AsyncApp)
+          let config = AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+          let app = newAsyncApp(config)
+          let runFut = app.runAsync()
+          waitFor sleepAsync(50.milliseconds)
+          app.caughtSignal = SIGTERM
+          app.exitIfStoppedBySignal() # must not kill the test process
+          waitFor shutdownAsync(app)
+          expect CancelledError:
+            waitFor runFut
+
+        test "exitIfStoppedBySignal skips the app handler of a pending signal":
+          privateAccess(AsyncApp)
+          let pid = fork()
+          require pid >= 0
+          if pid == 0:
+            proc appHandler(sig: cint) {.noconv.} =
+              exitnow(42)
+            discard signal(SIGTERM, appHandler)
+            var mask, oldMask: Sigset
+            discard sigemptyset(mask)
+            discard sigaddset(mask, SIGTERM)
+            discard pthread_sigmask(SIG_BLOCK, mask, oldMask)
+            # Pending while blocked; released by the helper's unblock.
+            discard kill(getpid(), SIGTERM)
+            let app = newAsyncApp()
+            app.caughtSignal = SIGTERM
+            app.exitIfStoppedBySignal()
+            exitnow(0) # not reached
+          var status: cint
+          check waitpid(pid, status, 0) == pid
+          check WIFSIGNALED(status)
+          check WTERMSIG(status) == SIGTERM
+
+        test "Cooperative fallback keeps the first signal":
+          privateAccess(AsyncApp)
+          # runFuture is nil: the handler falls back to shouldQuit.
+          let app = newAsyncApp()
+          onSigint(cast[pointer](app))
+          onSigterm(cast[pointer](app))
+          check app.caughtSignal == SIGINT
+          check app.state.shouldQuit
+
+        test "A real SIGTERM cancels the run and sets stopSignal":
+          privateAccess(AsyncApp)
+          let config = AppConfig(
+            alternateScreen: false,
+            rawMode: false,
+            targetFps: 60,
+            installSignalHandler: true,
+          )
+          let app = newAsyncApp(config)
+          let runFut = app.runAsync()
+          waitFor sleepAsync(50.milliseconds)
+          # Without a handler, SIGTERM would kill the test binary.
+          require app.signalHandles.len > 0
+
+          check posix.kill(getpid(), SIGTERM) == 0
+          expect CancelledError:
+            waitFor runFut
+          check app.stopSignal == SIGTERM
+          check app.signalHandles.len == 0
+
   when not hasChronos:
     suite "AsyncApp shutdownAsync availability":
       test "shutdownAsync is not declared under non-chronos backends":
         check not declared(shutdownAsync)
+
+      test "stopSignal is always 0 under non-chronos backends":
+        check newAsyncApp().stopSignal == 0
 
   suite "quickRunAsync signature":
     test "quickRunAsync function signature":

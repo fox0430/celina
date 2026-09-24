@@ -17,12 +17,14 @@ type AppConfig* = object ## Application configuration options
   installSignalHandler*: bool
     ## When true and the chronos backend is active on a POSIX platform,
     ## runAsync installs SIGINT/SIGTERM handlers that trigger
-    ## shutdownAsync. Ignored under the sync App, asyncdispatch, and
-    ## `asyncBackend=none` builds, and on non-POSIX platforms (e.g.
-    ## Windows) where the signal-handling code is not compiled because
-    ## chronos signal APIs are unavailable. The sync `App` uses
-    ## `installDefaultCrashGuard` (an explicit function call) instead
-    ## of a config flag for Ctrl-C handling.
+    ## shutdownAsync, so runAsync usually ends with `CancelledError`
+    ## after restoring the terminal (it can also return normally; see
+    ## `stopSignal`). `exitIfStoppedBySignal` passes the signal on. Ignored
+    ## under the sync App, asyncdispatch, and `asyncBackend=none` builds,
+    ## and on non-POSIX platforms (e.g. Windows) where the signal-handling
+    ## code is not compiled because chronos signal APIs are unavailable.
+    ## The sync `App` uses `installDefaultCrashGuard` (an explicit function
+    ## call) instead of a config flag for Ctrl-C handling.
 
 proc `$`*(config: AppConfig): string =
   ## String representation of AppConfig for debugging
