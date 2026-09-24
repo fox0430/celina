@@ -558,7 +558,8 @@ proc setupWithMouseAndPasteAsync*(
   await terminal.enableBracketedPasteAsync()
 
 proc runDisableSequence(terminal: AsyncTerminal, reader: AsyncInputReader = nil) =
-  ## LIFO disable sequence shared by the sync `cleanup`.
+  ## LIFO disable sequence shared by the sync `cleanup`. A mode added here
+  ## belongs in `EmergencyResetSeq` too.
   ##
   ## Each step is guarded individually so one failure cannot skip the rest. The
   ## current disable procs are all best-effort and do not raise, but the guard is
@@ -591,7 +592,8 @@ proc runDisableSequenceAsync(
   ## Mirrors `runDisableSequence` but uses async writes so the event loop is not
   ## blocked while waiting for a flow-controlled terminal to drain. Each step is
   ## guarded for the same defensive reason as the sync variant: a failure in one
-  ## disable step must not skip the rest of cleanup.
+  ## disable step must not skip the rest of cleanup. A mode added here belongs
+  ## in `EmergencyResetSeq` too.
   template guard(body: untyped) =
     try:
       body
@@ -620,6 +622,25 @@ proc cleanup*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) =
   ## needed around the cursor restore.
   tryWriteBlocking(ShowCursorSeq)
   runDisableSequence(terminal, reader)
+
+proc emergencyRestore*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) =
+  ## Restore the terminal from a signal handler or crash hook, where a frame
+  ## may have been cut off mid-write. See `Terminal.emergencyRestore`.
+  ## Never raises.
+  discard writeAllBlocking(
+    cint(STDOUT_FILENO),
+    if terminal.alternateScreen: EmergencyResetAltScreenSeq else: EmergencyResetSeq,
+  )
+  terminal.syncOutputEnabled = false
+  terminal.focusEventsEnabled = false
+  terminal.bracketedPasteEnabled = false
+  terminal.mouseEnabled = false
+  terminal.alternateScreen = false
+  # disableRawMode can raise from its celinaDebug stderr warnings.
+  try:
+    terminal.disableRawMode(reader)
+  except CatchableError:
+    discard
 
 proc cleanupAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.async.} =
   ## Cleanup and restore terminal asynchronously.
@@ -663,7 +684,7 @@ proc suspendAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.as
   # Save current state
   saveSuspendState(terminal)
 
-  # Return to shell mode
+  # Return to shell mode. A mode added here belongs in `EmergencyResetSeq` too.
   await showCursorAsync()
   await terminal.disableSyncOutputAsync()
   await terminal.disableFocusEventsAsync()

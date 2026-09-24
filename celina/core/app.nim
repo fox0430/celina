@@ -54,6 +54,9 @@ type
     handlers: AppHandlers
     timings: AppTimings
     state: AppState
+    terminalActive: bool
+      ## True from `run`'s setup until its final restore. Unlike
+      ## `state.running`, it also covers setup.
 
 # Generated: `$`
 defineShow(App)
@@ -329,21 +332,35 @@ proc tick(app: App): bool =
 proc restoreTerminal*(app: App) =
   ## Best-effort terminal state restoration.
   ##
-  ## Used internally by `run()` on exit and safe to call from crash handlers
-  ## (signal handlers, unhandled exception hooks). Delegates to
+  ## Used internally by `run()` on exit and safe to call from unhandled
+  ## exception hooks. Delegates to
   ## `terminal.cleanup()`, which guards each disable individually and
   ## therefore does not raise. The LIFO disable sequence (synchronized
   ## output, focus events, bracketed paste, mouse, raw mode, alternate
   ## screen) stays defined in one place.
   ##
+  ## From a signal handler, prefer `emergencyRestore`, which also aborts a
+  ## half-written escape sequence.
+  app.terminal.cleanup()
+
+proc emergencyRestore*(app: App) =
+  ## Restore the terminal from a signal handler or crash hook. While `run`
+  ## owns the terminal, delegates to `terminal.emergencyRestore()`;
+  ## otherwise (including while suspended) falls back to `restoreTerminal`
+  ## so the full reset stays out of piped output and a child's screen.
+  ## Never raises.
+  ##
   ## Example:
   ## ```nim
   ## proc onCrash() {.noconv.} =
-  ##   app.restoreTerminal()
+  ##   app.emergencyRestore()
   ##   quit(1)
   ## setControlCHook(onCrash)
   ## ```
-  app.terminal.cleanup()
+  if app.terminalActive and not app.terminal.isSuspended:
+    app.terminal.emergencyRestore()
+  else:
+    app.restoreTerminal()
 
 # Default Ctrl-C terminal guard
 #
@@ -376,10 +393,7 @@ proc onCelinaControlC() {.noconv.} =
   ## during `quit` terminates the process directly.
   {.cast(gcsafe).}:
     if crashGuardApp != nil:
-      try:
-        crashGuardApp.restoreTerminal()
-      except CatchableError:
-        discard
+      crashGuardApp.emergencyRestore()
   quit(1)
 
 proc installDefaultCrashGuard*(app: App) =
@@ -435,6 +449,7 @@ proc run*(app: App) =
       except IOError:
         discard
   try:
+    app.terminalActive = true
     app.setup()
     app.state.running = true
 
@@ -444,6 +459,7 @@ proc run*(app: App) =
   finally:
     app.state.running = false
     app.restoreTerminal()
+    app.terminalActive = false
 
 # Generated: quit + mouse runtime toggles
 defineQuit(App)

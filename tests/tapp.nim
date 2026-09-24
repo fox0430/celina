@@ -1,9 +1,39 @@
 ## Tests for App core functionality
 
-import std/[unittest, options, monotimes, times, strutils]
+import std/[unittest, options, monotimes, times, strutils, importutils]
 
 import ../celina
 import ../celina/core/app {.all.}
+import ../celina/core/terminal {.all.}
+
+when defined(posix):
+  import std/posix
+
+  proc captureStdout(body: proc()): string =
+    ## Run `body` with stdout redirected to a pipe and return what it wrote.
+    ## Returns "" without running `body` if the redirect cannot be set up.
+    stdout.flushFile()
+    let saved = dup(STDOUT_FILENO)
+    if saved == -1:
+      return ""
+    var fds: array[2, cint]
+    if pipe(fds) != 0:
+      discard close(saved)
+      return ""
+    discard dup2(fds[1], STDOUT_FILENO)
+    discard close(fds[1])
+    try:
+      body()
+    finally:
+      discard dup2(saved, STDOUT_FILENO)
+      discard close(saved)
+    var buf = newString(4096)
+    let n = posix.read(fds[0], addr buf[0], buf.len.cint)
+    discard close(fds[0])
+    if n > 0:
+      buf[0 ..< n]
+    else:
+      ""
 
 # Legacy `bool`-returning handler overloads are exercised below to
 # verify backward compatibility; silence their Deprecated warnings.
@@ -898,5 +928,44 @@ suite "App restoreTerminal":
     let app = newApp()
     app.restoreTerminal()
     app.restoreTerminal()
+
+suite "App emergencyRestore":
+  test "emergencyRestore does not crash and can be called multiple times":
+    let app = newApp()
+    app.emergencyRestore()
+    app.emergencyRestore()
+
+  when defined(posix):
+    privateAccess(App)
+    privateAccess(Terminal)
+
+    test "sends the full reset while run owns the terminal":
+      let app = newApp()
+      app.terminalActive = true
+      let output = captureStdout(
+        proc() =
+          app.emergencyRestore()
+      )
+      check output == EmergencyResetSeq
+
+    test "falls back to the flag-gated cleanup outside run":
+      let app = newApp()
+      let output = captureStdout(
+        proc() =
+          app.emergencyRestore()
+      )
+      check output.len > 0
+      check not output.contains(EmergencyResetSeq[0])
+
+    test "falls back to the flag-gated cleanup while suspended":
+      let app = newApp()
+      app.terminalActive = true
+      app.terminal.suspendState.isSuspended = true
+      let output = captureStdout(
+        proc() =
+          app.emergencyRestore()
+      )
+      check output.len > 0
+      check not output.contains(EmergencyResetSeq[0])
 
 {.pop.}

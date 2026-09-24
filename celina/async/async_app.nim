@@ -47,6 +47,9 @@ type
     handlers: AsyncAppHandlers
     timings: AsyncAppTimings
     state: AsyncAppState
+    terminalActive: bool
+      ## True from `runAsync`'s setup until its final restore. Unlike
+      ## `state.running`, it also covers setup.
     when hasChronos:
       runFuture: Future[void]
         ## Set on runAsync entry, cleared on exit. shutdownAsync targets
@@ -416,6 +419,7 @@ proc runAsyncInner(app: AsyncApp) {.async.} =
   when hasChronos and defined(posix):
     installSignalHandlersIfRequested(app)
   try:
+    app.terminalActive = true
     await app.setupAsync()
     app.state.running = true
 
@@ -424,7 +428,11 @@ proc runAsyncInner(app: AsyncApp) {.async.} =
       discard
   finally:
     app.state.running = false
-    await cleanupQuietly(app)
+    try:
+      await cleanupQuietly(app)
+    finally:
+      # Cleared even if the await is cancelled.
+      app.terminalActive = false
     app.inputReader.closeAsyncInputReader()
     app.inputReader = nil
     when hasChronos and defined(posix):
@@ -604,19 +612,33 @@ proc restoreTerminal*(app: AsyncApp) =
   ## Synchronously restore terminal state for use in crash handlers.
   ##
   ## Best-effort, non-async cleanup intended for situations where the async
-  ## event loop is unavailable (e.g., signal handlers, unhandled exception
-  ## hooks). Delegates to `terminal.cleanup()` (the sync variant on
-  ## `AsyncTerminal`) so the disable sequence — and its LIFO ordering —
-  ## stays defined in one place alongside `cleanupAsync`.
+  ## event loop is unavailable (e.g., unhandled exception hooks). Delegates
+  ## to `terminal.cleanup()` (the sync variant on `AsyncTerminal`) so the
+  ## disable sequence — and its LIFO ordering — stays defined in one place
+  ## alongside `cleanupAsync`.
+  ##
+  ## From a signal handler, prefer `emergencyRestore`, which also aborts a
+  ## half-written escape sequence.
+  app.terminal.cleanup()
+
+proc emergencyRestore*(app: AsyncApp) =
+  ## Restore the terminal from a signal handler or crash hook. While
+  ## `runAsync` owns the terminal, delegates to `terminal.emergencyRestore()`;
+  ## otherwise (including while suspended) falls back to `restoreTerminal`
+  ## so the full reset stays out of piped output and a child's screen.
+  ## Never raises.
   ##
   ## Example:
   ## ```nim
   ## proc onCrash() {.noconv.} =
-  ##   app.restoreTerminal()
+  ##   app.emergencyRestore()
   ##   quit(1)
   ## setControlCHook(onCrash)
   ## ```
-  app.terminal.cleanup()
+  if app.terminalActive and not app.terminal.isSuspended:
+    app.terminal.emergencyRestore(app.inputReader)
+  else:
+    app.restoreTerminal()
 
 # Mouse control
 # Generated: mouse runtime toggles
