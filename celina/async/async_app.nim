@@ -445,6 +445,9 @@ proc runAsyncInner(app: AsyncApp) {.async.} =
     finally:
       # Run even if the await is cancelled. Statements placed after this
       # try are skipped when the outer finally was entered by an exception.
+      # Clear on exit, not entry, so a `quit()` before `runAsync` still
+      # counts; after cleanup, so a quit during cleanup belongs to this run.
+      app.state.shouldQuit = false
       app.terminalActive = false
       app.inputReader.closeAsyncInputReader()
       app.inputReader = nil
@@ -458,6 +461,9 @@ proc runAsync*(app: AsyncApp) {.async.} =
   ## 1. Setup terminal state asynchronously using config from newAsyncApp
   ## 2. Enter main async event loop
   ## 3. Cleanup terminal state on exit
+  ##
+  ## A pending `quit()` is dropped on return, so the same app can be run
+  ## again.
   ##
   ## **Behavior change:** an unexpected `CatchableError` raised from
   ## inside the tick loop is now re-raised to the awaiter after
@@ -503,6 +509,9 @@ proc runAsync*(app: AsyncApp) {.async.} =
 
 proc quit*(app: AsyncApp) =
   ## Signal the async application to quit gracefully
+  ##
+  ## Dropped when `runAsync` returns; called between runs, it ends the
+  ## next `runAsync` after its first tick.
   app.state.shouldQuit = true
 
 proc stopSignal*(app: AsyncApp): cint =

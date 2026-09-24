@@ -426,7 +426,8 @@ proc run*(app: App) =
   ## Run the application main loop.
   ##
   ## Returns normally when the app quits via `app.quit()` or when the
-  ## quit handler signals shutdown.
+  ## quit handler signals shutdown. A pending `quit()` is dropped on
+  ## return, so the same app can be run again.
   ##
   ## **Behavior change:** an unexpected `CatchableError` raised from
   ## inside the tick loop (event handler, render, tick callback) is
@@ -458,6 +459,8 @@ proc run*(app: App) =
       discard
   finally:
     app.state.running = false
+    # Clear on exit, not entry, so a `quit()` before `run` still counts.
+    app.state.shouldQuit = false
     app.restoreTerminal()
     app.terminalActive = false
 

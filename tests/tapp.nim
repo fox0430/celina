@@ -943,4 +943,56 @@ suite "App emergencyRestore":
       check output.len > 0
       check not output.contains(EmergencyResetSeq[0])
 
+suite "App run lifecycle":
+  privateAccess(App)
+
+  # `run` needs a real terminal size, so these skip without a terminal. The
+  # alternate screen keeps the main screen's test output intact.
+  proc hasTerminalSize(): bool =
+    try:
+      discard getTerminalSize()
+      true
+    except TerminalError:
+      false
+
+  test "A quit from the previous run does not end the next run":
+    if not hasTerminalSize():
+      skip()
+    else:
+      let config = AppConfig(alternateScreen: true, rawMode: false, targetFps: 60)
+      let app = newApp(config)
+
+      var ticks = 0
+      app.onTick proc(app: App): TickResult =
+        inc ticks
+        if ticks == 3:
+          app.quit()
+        trContinue
+
+      app.run()
+      check ticks == 3
+      check app.state.shouldQuit == false
+
+      # The second run must keep ticking until its own quit.
+      ticks = 0
+      app.run()
+      check ticks == 3
+
+  test "A quit before run still ends the first run":
+    if not hasTerminalSize():
+      skip()
+    else:
+      let config = AppConfig(alternateScreen: true, rawMode: false, targetFps: 60)
+      let app = newApp(config)
+
+      var ticks = 0
+      app.onTick proc(app: App): TickResult =
+        inc ticks
+        trContinue
+
+      app.quit()
+      app.run()
+      check ticks == 1
+      check app.state.shouldQuit == false
+
 {.pop.}

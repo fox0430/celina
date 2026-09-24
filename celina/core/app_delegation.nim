@@ -176,6 +176,9 @@ template defineQuit*(AppT: untyped) =
 
   proc quit*(app: AppT) =
     ## Signal the application to quit gracefully
+    ##
+    ## Dropped when `run` returns; called between runs, it ends the next
+    ## `run` after its first tick.
     app.state.shouldQuit = true
 
 template defineWindowDelegation*(AppT: untyped) =
