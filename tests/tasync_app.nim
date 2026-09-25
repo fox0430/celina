@@ -895,22 +895,22 @@ when hasAsyncSupport:
         check app.timings.lastEventTime >= handlerReturnedAt
 
       test "A slow timeout handler does not use up the idle time":
+        # Checked on the stamp itself rather than on a second tick, which
+        # would depend on how fast the runner is.
         let app =
           newAsyncApp(AppConfig(alternateScreen: false, rawMode: false, targetFps: 60))
-        # The handler outlasts the timeout, so stamping before it would make
-        # the next tick fire again at once.
         app.setApplicationTimeout(150)
         var handlerReturnedAt: MonoTime
         var timeoutCalls = 0
         app.onTimeoutAsync proc(): Future[TickResult] {.async.} =
           timeoutCalls.inc
-          let busyUntil = getMonoTime() + initDuration(milliseconds = 160)
+          let busyUntil = getMonoTime() + initDuration(milliseconds = 20)
           while getMonoTime() < busyUntil:
             discard
           handlerReturnedAt = getMonoTime()
           return trContinue
         app.timings.lastEventTime = getMonoTime() - initDuration(milliseconds = 300)
-        proc tickTwice() =
+        proc tickOnce() =
           app.inputReader = newAsyncInputReader()
           try:
             discard captureStdout(
@@ -918,13 +918,12 @@ when hasAsyncSupport:
                 let size = getTerminalSizeOrDefault()
                 app.state.resizeState = initResizeState(size.width, size.height)
                 discard waitFor app.tickAsync()
-                discard waitFor app.tickAsync()
             )
           finally:
             app.inputReader.closeAsyncInputReader()
             app.inputReader = nil
 
-        withStdinInput("", tickTwice)
+        withStdinInput("", tickOnce)
         check handlerReturnedAt != default(MonoTime)
         check app.timings.lastEventTime >= handlerReturnedAt
         check timeoutCalls == 1
@@ -932,7 +931,9 @@ when hasAsyncSupport:
       test "A slow resize handler does not use up the idle time":
         let app =
           newAsyncApp(AppConfig(alternateScreen: false, rawMode: false, targetFps: 60))
-        app.setApplicationTimeout(100)
+        # A long timeout leaves room for a slow runner; the clock is backdated,
+        # so the test does not wait for it.
+        app.setApplicationTimeout(1000)
         var timeoutCalls = 0
         app.onTimeoutAsync proc(): Future[TickResult] {.async.} =
           timeoutCalls.inc
@@ -946,7 +947,7 @@ when hasAsyncSupport:
             handlerReturnedAt = getMonoTime()
           return erContinue
         # Nearly idle: without the stamp the timeout would fire in this tick.
-        app.timings.lastEventTime = getMonoTime() - initDuration(milliseconds = 90)
+        app.timings.lastEventTime = getMonoTime() - initDuration(milliseconds = 990)
         proc tickOnce() =
           app.inputReader = newAsyncInputReader()
           try:

@@ -917,37 +917,38 @@ suite "App Application Timeout":
       check app.timings.lastEventTime >= handlerReturnedAt
 
     test "A slow timeout handler does not use up the idle time":
+      # Checked on the stamp itself rather than on a second tick, which
+      # would depend on how fast the runner is.
       let app = newApp(AppConfig(alternateScreen: false, rawMode: false, targetFps: 60))
-      # The handler outlasts the timeout, so stamping before it would make
-      # the next tick fire again at once.
       app.setApplicationTimeout(150)
       var handlerReturnedAt: MonoTime
       var timeoutCalls = 0
       app.onTimeout proc(): TickResult =
         timeoutCalls.inc
-        let busyUntil = getMonoTime() + initDuration(milliseconds = 160)
+        let busyUntil = getMonoTime() + initDuration(milliseconds = 20)
         while getMonoTime() < busyUntil:
           discard
         handlerReturnedAt = getMonoTime()
         trContinue
       app.timings.lastEventTime = getMonoTime() - initDuration(milliseconds = 300)
-      proc tickTwice() =
+      proc tickOnce() =
         discard captureStdout(
           proc() =
             let size = getTerminalSizeOrDefault()
             app.state.resizeState = initResizeState(size.width, size.height)
             discard app.tick()
-            discard app.tick()
         )
 
-      withStdinInput("", tickTwice)
+      withStdinInput("", tickOnce)
       check handlerReturnedAt != default(MonoTime)
       check app.timings.lastEventTime >= handlerReturnedAt
       check timeoutCalls == 1
 
     test "A slow resize handler does not use up the idle time":
       let app = newApp(AppConfig(alternateScreen: false, rawMode: false, targetFps: 60))
-      app.setApplicationTimeout(100)
+      # A long timeout leaves room for a slow runner; the clock is backdated,
+      # so the test does not wait for it.
+      app.setApplicationTimeout(1000)
       var timeoutCalls = 0
       app.onTimeout proc(): TickResult =
         timeoutCalls.inc
@@ -961,7 +962,7 @@ suite "App Application Timeout":
           handlerReturnedAt = getMonoTime()
         erContinue
       # Nearly idle: without the stamp the timeout would fire in this tick.
-      app.timings.lastEventTime = getMonoTime() - initDuration(milliseconds = 90)
+      app.timings.lastEventTime = getMonoTime() - initDuration(milliseconds = 990)
       var ranOnPty = false
       proc tickOnce() =
         # The sync `updateSize` needs a tty.
