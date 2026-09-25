@@ -171,6 +171,57 @@ suite "Terminal Common Module Tests":
       check HideCursorSeq in output
       check ShowCursorSeq notin output
 
+    test "A forced buildOutputWithCursor frame draws modifier-only blank cells":
+      var oldBuffer = newBuffer(rect(0, 0, 10, 1))
+      var newBuffer = newBuffer(rect(0, 0, 10, 1))
+      let reversed = Style(modifiers: {Reversed})
+      let underlined = Style(modifiers: {Underline})
+      newBuffer.setString(0, 0, " ", reversed)
+      newBuffer.setString(1, 0, " ", underlined)
+
+      let (output, _) = buildOutputWithCursor(
+        oldBuffer,
+        newBuffer,
+        cursorX = -1,
+        cursorY = -1,
+        cursorVisible = false,
+        lastCursorStyle = CursorStyle.Default,
+        force = true,
+      )
+
+      check reversed.toAnsiSequence() & " " in output
+      check underlined.toAnsiSequence() & " " in output
+
+    test "A full buildOutputWithCursor frame clears the screen and redraws":
+      # Forced, first frame, or resized: the screen may not match `oldBuffer`,
+      # so the frame clears it first and draws the new buffer.
+      var frame = newBuffer(rect(0, 0, 10, 2))
+      frame.setString(0, 0, "A")
+      for (oldBuffer, force) in [
+        (newBuffer(rect(0, 0, 10, 2)), true),
+        (newBuffer(0, 0), false),
+        (newBuffer(rect(0, 0, 5, 1)), false),
+      ]:
+        let (output, _) = buildOutputWithCursor(
+          oldBuffer,
+          frame,
+          cursorX = -1,
+          cursorY = -1,
+          cursorVisible = false,
+          lastCursorStyle = CursorStyle.Default,
+          force = force,
+        )
+        check output.startsWith(ClearScreenSeq)
+        check makeCursorPositionSeq(0, 0) & "A" in output
+        check output.endsWith(HideCursorSeq)
+
+    test "needsFullRender diffs only same-size unforced frames":
+      let frame = newBuffer(rect(0, 0, 10, 2))
+      check not needsFullRender(newBuffer(rect(0, 0, 10, 2)), frame, force = false)
+      check needsFullRender(newBuffer(rect(0, 0, 10, 2)), frame, force = true)
+      check needsFullRender(newBuffer(0, 0), frame, force = false)
+      check needsFullRender(newBuffer(rect(0, 0, 5, 1)), frame, force = false)
+
     test "CursorState field updates":
       var state = CursorState(x: 0, y: 0, visible: false, style: CursorStyle.Default)
 
