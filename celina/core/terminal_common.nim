@@ -545,8 +545,7 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
       # The cleared screen already shows a default blank, so skip it and
       # reposition before the next drawn cell. A blank with any style or a
       # hyperlink is still drawn.
-      if cell.symbol == " " and cell.style == defaultStyle() and
-          cell.hyperlink.len == 0:
+      if cell.symbol == " " and cell.style == defaultStyle() and cell.hyperlink.len == 0:
         continue
 
       if cursorX != x:
