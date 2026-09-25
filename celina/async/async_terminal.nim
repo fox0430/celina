@@ -409,7 +409,26 @@ proc setCursorStyleAsync*(style: CursorStyle) {.async.} =
 proc clearScreenAsync*() {.async.} =
   ## Clear the entire screen asynchronously.
   ## Does not move the cursor (matches the synchronous `clearScreen`).
+  ##
+  ## Does not update an `AsyncTerminal`'s `lastBuffer`, so a later draw diffs
+  ## against content that is gone. Use `terminal.clearScreenAsync()` when
+  ## drawing.
   await writeOrRaiseAsync(ClearScreenSeq)
+  await sleepMs(0)
+
+proc clearScreenAsync*(terminal: AsyncTerminal) {.async.} =
+  ## Clear the entire screen asynchronously and record it as blank, so the
+  ## next draw writes only the cells that are not blank. Resets SGR first.
+  ## Does not move the cursor (matches the synchronous `Terminal.clearScreen`).
+  ##
+  ## Raises IOError if the clear cannot be written in full; the next draw is
+  ## then a full render. A cancel during the write has the same effect.
+  try:
+    await writeOrRaiseAsync(ResetAndClearScreenSeq)
+  except CatchableError as e:
+    terminal.markScreenUnknown()
+    raise e
+  terminal.markScreenCleared()
   await sleepMs(0)
 
 proc clearLineAsync*() {.async.} =
@@ -517,8 +536,9 @@ proc setupAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.asyn
   try:
     await terminal.enableAlternateScreenAsync()
     terminal.enableRawMode(reader)
-    await clearScreenAsync()
+    # Size first: the clear records a blank screen at the current size.
     terminal.updateSize()
+    await terminal.clearScreenAsync()
   except CatchableError as e:
     # Report the setup error, not a cancel from cleanup.
     try:

@@ -8,7 +8,7 @@ import ../celina/core/[geometry, colors, buffer, errors]
 import ../celina/async/async_terminal {.all.}
 when hasChronos:
   import ../celina/async/async_io {.all.}
-  import ./stdout_capture
+import ./stdout_capture
 import ../celina/core/terminal_common
 
 # Test helpers
@@ -235,6 +235,69 @@ suite "AsyncTerminal Control Sequence Writes":
     waitFor setWindowTitleAsync("celina-test")
     waitFor setIconNameAsync("celina")
     waitFor setTitleOnlyAsync("celina-test")
+
+suite "AsyncTerminal.clearScreenAsync":
+  test "resets SGR, clears, and records a blank screen at the current size":
+    let terminal = createTestTerminal()
+    terminal.size = size(10, 3)
+    terminal.lastBuffer = newBuffer(4, 2)
+    terminal.lastBuffer[0, 0] = cell("x")
+
+    let output = captureStdout(
+      proc() =
+        waitFor terminal.clearScreenAsync()
+    )
+
+    check output == ResetAndClearScreenSeq
+    check terminal.lastBuffer == newBuffer(10, 3)
+
+  test "the next draw writes only the cells that are not blank":
+    let terminal = createTestTerminal()
+    terminal.size = size(10, 3)
+    var frame = newBuffer(10, 3)
+    frame[2, 1] = cell("x")
+
+    let output = captureStdout(
+      proc() =
+        waitFor terminal.clearScreenAsync()
+        waitFor terminal.drawAsync(frame)
+    )
+
+    check output ==
+      ResetAndClearScreenSeq &
+      wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), frame))
+
+  test "a failed clear raises and makes the next draw a full render":
+    let terminal = createTestTerminal()
+    terminal.size = size(10, 3)
+    terminal.lastBuffer = newBuffer(10, 3)
+    var frame = newBuffer(10, 3)
+    frame[2, 1] = cell("x")
+
+    # A read-only fd makes the write fail with EBADF.
+    stdout.flushFile()
+    let savedStdout = posix.dup(STDOUT_FILENO)
+    let roFd = posix.open("/dev/null", O_RDONLY)
+    require savedStdout >= 0
+    require roFd >= 0
+    var raised = false
+    try:
+      discard posix.dup2(roFd, STDOUT_FILENO)
+      waitFor terminal.clearScreenAsync()
+    except IOError:
+      raised = true
+    finally:
+      discard posix.dup2(savedStdout, STDOUT_FILENO)
+      discard posix.close(savedStdout)
+      discard posix.close(roFd)
+    check raised
+
+    let output = captureStdout(
+      proc() =
+        waitFor terminal.drawAsync(frame)
+    )
+
+    check output == wrapWithSyncOutput(buildFullRenderOutput(frame))
 
 suite "AsyncTerminal POSIX Platform Support":
   test "Terminal size detection works on POSIX systems":

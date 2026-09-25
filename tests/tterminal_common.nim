@@ -405,8 +405,7 @@ suite "Terminal Common Module Tests":
       batch.addCommand(RenderCommand(kind: RckClearLine))
 
       let output = buildOutputString(batch)
-      check output.contains(ClearScreenSeq)
-      check output.contains(ClearLineSeq)
+      check output == ResetAndClearScreenSeq & ClearLineSeq
 
   suite "Differential Rendering":
     test "buildDifferentialOutput with no changes":

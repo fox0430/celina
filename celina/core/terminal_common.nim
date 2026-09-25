@@ -59,7 +59,7 @@ type
     RckSetPosition
     RckSetStyle
     RckWriteText
-    RckClearScreen
+    RckClearScreen ## Resets SGR, then clears the entire screen
     RckClearLine
 
   RenderCommand* = object ## A single rendering command
@@ -84,6 +84,12 @@ const
   AlternateScreenEnter* = "\e[?1049h"
   AlternateScreenExit* = "\e[?1049l"
   ClearScreenSeq* = "\e[2J"
+  ResetAndClearScreenSeq* = "\e[0m" & ClearScreenSeq
+    ## Resets SGR, then clears. Terminals with background color erase fill the
+    ## cleared screen with the active background, and a write cut off partway
+    ## may have left one set; after the reset, the screen shows default blanks.
+    ## Used by full renders and the terminal `clearScreen` methods, whose result
+    ## later draws rely on.
   ClearLineSeq* = "\e[2K"
   ClearToEndOfLineSeq* = "\e[0K"
   ClearToStartOfLineSeq* = "\e[1K"
@@ -297,7 +303,9 @@ proc addCommand*(batch: var RenderBatch, cmd: RenderCommand) =
     batch.estimatedSize += 20 # Style sequences can vary
   of RckWriteText:
     batch.estimatedSize += cmd.text.len
-  of RckClearScreen, RckClearLine:
+  of RckClearScreen:
+    batch.estimatedSize += ResetAndClearScreenSeq.len
+  of RckClearLine:
     batch.estimatedSize += 5
 
 proc generateRenderBatch*(changes: seq[tuple[pos: Position, cell: Cell]]): RenderBatch =
@@ -392,7 +400,8 @@ proc buildOutputString*(batch: RenderBatch): string =
     of RckWriteText:
       result.add(cmd.text)
     of RckClearScreen:
-      result.add(ClearScreenSeq)
+      # Also resets SGR: a style set before the clear does not carry over.
+      result.add(ResetAndClearScreenSeq)
     of RckClearLine:
       result.add(ClearLineSeq)
 
@@ -522,12 +531,8 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
   ## Supports OSC 8 hyperlinks
   result = newStringOfCap(buffer.area.width * buffer.area.height * 10)
 
-  # Reset SGR before clearing: terminals with background color erase fill the
-  # cleared screen with the active background, and a previous frame cut off
-  # mid-write may have left one set. The loop below also assumes it starts
-  # from the default style.
-  result.add(resetSequence())
-  result.add(ClearScreenSeq)
+  # The loop below relies on the SGR reset: it starts from the default style.
+  result.add(ResetAndClearScreenSeq)
 
   var lastStyle = defaultStyle()
   var lastHyperlink = ""
@@ -919,9 +924,21 @@ template restoreSuspendedFeatures*(terminal: typed) =
   if terminal.suspendState.suspendedSyncOutput:
     terminal.enableSyncOutput()
 
+template markScreenCleared*(terminal: typed) =
+  ## Record that the screen was just cleared: `lastBuffer` becomes blank at the
+  ## current size, so the next draw diffs against blanks and writes only the
+  ## cells that are not blank.
+  terminal.lastBuffer = newBuffer(terminal.size.width, terminal.size.height)
+
+template markScreenUnknown*(terminal: typed) =
+  ## Record that what the screen shows is unknown (e.g. a clear failed
+  ## partway): an empty `lastBuffer` makes `needsFullRender` pick a full render
+  ## for the next draw.
+  terminal.lastBuffer = newBuffer(0, 0)
+
 template clearLastBufferForResume*(terminal: typed) =
   ## Clear lastBuffer to force full redraw after resume
-  terminal.lastBuffer = newBuffer(0, 0)
+  terminal.markScreenUnknown()
   terminal.suspendState.isSuspended = false
 
 template adoptLastBufferImpl*(terminal: typed, buffer: var Buffer) =

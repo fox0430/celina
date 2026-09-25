@@ -372,7 +372,24 @@ proc setCursorStyle*(style: CursorStyle) =
 proc clearScreen*() =
   ## Clear the entire screen
   ## Raises IOError if unable to write to terminal
+  ##
+  ## Does not update a `Terminal`'s `lastBuffer`, so a later `draw` diffs
+  ## against content that is gone. Use `terminal.clearScreen()` when drawing.
   writeOrRaise(ClearScreenSeq)
+
+proc clearScreen*(terminal: Terminal) =
+  ## Clear the entire screen and record it as blank, so the next `draw` writes
+  ## only the cells that are not blank. Resets SGR first. Does not move the
+  ## cursor.
+  ##
+  ## Raises IOError if unable to write to terminal; the next `draw` is then a
+  ## full render.
+  try:
+    writeOrRaise(ResetAndClearScreenSeq)
+  except IOError:
+    terminal.markScreenUnknown()
+    raise
+  terminal.markScreenCleared()
 
 proc clearLine*() =
   ## Clear the current line
@@ -523,8 +540,9 @@ proc setup*(terminal: Terminal) =
   try:
     terminal.enableAlternateScreen()
     terminal.enableRawMode()
-    clearScreen()
+    # Size first: the clear records a blank screen at the current size.
     terminal.updateSize()
+    terminal.clearScreen()
   except CatchableError:
     terminal.cleanup()
     raise
