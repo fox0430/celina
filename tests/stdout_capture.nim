@@ -1,6 +1,6 @@
 ## Shared test helper that captures what a block writes to stdout.
 
-import std/[posix, termios]
+import std/[os, posix, tempfiles, termios]
 
 proc captureStdout*(body: proc()): string =
   ## Run `body` with stdout redirected to a pipe and return what it wrote.
@@ -32,6 +32,65 @@ proc captureStdout*(body: proc()): string =
       result.add buf[0 ..< n]
   finally:
     discard close(fds[0])
+
+proc withFailingStdout*(body: proc()) =
+  ## Run `body` with stdout on a read-only fd, so every write to it fails
+  ## with EBADF.
+  stdout.flushFile()
+  let saved = dup(STDOUT_FILENO)
+  let roFd = open("/dev/null", O_RDONLY)
+  doAssert saved != -1 and roFd != -1
+  discard dup2(roFd, STDOUT_FILENO)
+  discard close(roFd)
+  try:
+    body()
+  finally:
+    discard dup2(saved, STDOUT_FILENO)
+    discard close(saved)
+
+when defined(linux):
+  var RLIMIT_FSIZE {.importc: "RLIMIT_FSIZE", header: "<sys/resource.h>".}: cint
+
+  proc liftFileSizeLimit(sig: cint) {.noconv.} =
+    let savedErrno = errno
+    var limit: RLimit
+    if getrlimit(RLIMIT_FSIZE, limit) == 0:
+      limit.rlim_cur = limit.rlim_max
+      discard setrlimit(RLIMIT_FSIZE, limit)
+    errno = savedErrno
+
+  proc captureCutStdout*(limit: int, body: proc()): string =
+    ## Run `body` with stdout on a file that takes only `limit` bytes, and
+    ## return what reached the file. The write that crosses `limit` stops
+    ## there and the next write fails at once, like a tty that stopped
+    ## draining but with no retry budget to wait out; the SIGXFSZ from that
+    ## failure lifts the limit, so later writes go through. Linux only: other
+    ## systems may refuse the whole crossing write.
+    let (file, path) = createTempFile("celina_cut_stdout_", "")
+    defer:
+      file.close()
+      removeFile(path)
+    stdout.flushFile()
+    var act, oldAct: Sigaction
+    act.sa_handler = liftFileSizeLimit
+    discard sigemptyset(act.sa_mask)
+    doAssert sigaction(SIGXFSZ, act, oldAct) == 0
+    var saved: RLimit
+    doAssert getrlimit(RLIMIT_FSIZE, saved) == 0
+    let savedStdout = dup(STDOUT_FILENO)
+    doAssert savedStdout != -1
+    discard dup2(file.getFileHandle(), STDOUT_FILENO)
+    var limited = saved
+    limited.rlim_cur = limit
+    doAssert setrlimit(RLIMIT_FSIZE, limited) == 0
+    try:
+      body()
+    finally:
+      discard setrlimit(RLIMIT_FSIZE, saved)
+      discard sigaction(SIGXFSZ, oldAct, nil)
+      discard dup2(savedStdout, STDOUT_FILENO)
+      discard close(savedStdout)
+    readFile(path)
 
 proc withStdinInput*(input: string, body: proc()) =
   ## Run `body` with stdin replaced by a pipe that holds `input`. The write

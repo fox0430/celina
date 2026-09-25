@@ -8,7 +8,7 @@ import std/[options, posix, selectors, deques]
 import async_backend
 from ../core/terminal_common import
   WriteOutcome, classifyWriteResult, WriteWaitOutcome, pollWritable, WriteBlockedWaitMs,
-  WriteMaxBlockedWaits, writeAllBlocking, AbortPartialSeq
+  WriteMaxBlockedWaits, writeAllBlocking, writeAllOrAbort, AbortPartialSeq
 
 type
   AsyncIOError* = object of CatchableError
@@ -478,17 +478,18 @@ proc writeOrRaiseAsync*(data: string): Future[void] {.async.} =
 # Synchronous Blocking Output Functions
 
 proc writeStdoutBlocking*(data: string): int =
-  ## Blocking write of `data` to stdout via the shared `writeAllBlocking` loop in
+  ## Blocking write of `data` to stdout via the shared `writeAllOrAbort` loop in
   ## terminal_common (the same loop the sync `writeWithRetry` uses). Instead of
   ## yielding, it blocks in `pollWritable` while stdout is non-writable. Uses
   ## `STDOUT_FILENO` directly so it never goes through the stdio buffer or mixes
   ## ordering with `stdout.write`/`stdout.flushFile`. Returns bytes written (a
-  ## short count means it gave up on a wedged tty); never raises.
+  ## short count means it gave up on a wedged tty, and a write that stopped
+  ## partway is followed by `AbortPartialSeq`); never raises.
   ##
   ## Intended for mode toggles in `AsyncTerminal` that must stay callable from
   ## both async procs and the synchronous `cleanup` fallback used by crash
   ## handlers/signal hooks.
-  writeAllBlocking(STDOUT_FILENO.cint, data)
+  writeAllOrAbort(STDOUT_FILENO.cint, data)
 
 proc tryWriteBlocking*(data: string) =
   ## Best-effort synchronous write for mode toggles and other non-critical
