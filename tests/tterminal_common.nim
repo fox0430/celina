@@ -211,7 +211,7 @@ suite "Terminal Common Module Tests":
           lastCursorStyle = CursorStyle.Default,
           force = force,
         )
-        check output.startsWith(ClearScreenSeq)
+        check output.startsWith(resetSequence() & ClearScreenSeq)
         check makeCursorPositionSeq(0, 0) & "A" in output
         check output.endsWith(HideCursorSeq)
 
@@ -452,11 +452,13 @@ suite "Terminal Common Module Tests":
       check output.count("[0m") == 1
 
   suite "Full Render Output":
-    test "buildFullRenderOutput clears screen first":
+    test "buildFullRenderOutput resets style and clears screen first":
+      # The reset must precede the clear so a stale background SGR is not
+      # used to erase the screen.
       let buffer = newBuffer(3, 2)
       let output = buildFullRenderOutput(buffer)
 
-      check output.startsWith(ClearScreenSeq)
+      check output.startsWith(resetSequence() & ClearScreenSeq)
       # Output may or may not end with reset if no styles were used
       check output.len > 0
 

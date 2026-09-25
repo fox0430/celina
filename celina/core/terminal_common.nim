@@ -522,7 +522,11 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
   ## Supports OSC 8 hyperlinks
   result = newStringOfCap(buffer.area.width * buffer.area.height * 10)
 
-  # Clear screen first
+  # Reset SGR before clearing: terminals with background color erase fill the
+  # cleared screen with the active background, and a previous frame cut off
+  # mid-write may have left one set. The loop below also assumes it starts
+  # from the default style.
+  result.add(resetSequence())
   result.add(ClearScreenSeq)
 
   var lastStyle = defaultStyle()
