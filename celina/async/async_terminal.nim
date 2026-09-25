@@ -425,9 +425,9 @@ proc clearScreenAsync*(terminal: AsyncTerminal) {.async.} =
   ## then a full render. A cancel during the write has the same effect.
   try:
     await writeOrRaiseAsync(ResetAndClearScreenSeq)
-  except CatchableError:
+  except CatchableError as e:
     terminal.markScreenUnknown()
-    raise
+    raise e
   terminal.markScreenCleared()
   await sleepMs(0)
 
