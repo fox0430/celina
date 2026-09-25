@@ -150,6 +150,17 @@ const
     ## OSC/DCS string on terminals that ignore CAN there. Harmless in the
     ## ground state.
 
+  AbortFrameSeq* = AbortPartialSeq & Osc8Reset & SyncOutputDisable
+    ## Sent before the next frame or clear after a failed write, which may
+    ## have stopped partway: aborts a half-sent escape sequence, closes an
+    ## OSC 8 link and ends the synchronized output block a wrapped frame
+    ## opened. The SGR reset comes with the clear (`ResetAndClearScreenSeq`).
+
+  AbortFrameKeepSyncSeq* = AbortPartialSeq & Osc8Reset
+    ## `AbortFrameSeq` without `SyncOutputDisable`, sent instead when the app
+    ## enabled synchronized output itself: frames are then not wrapped, and
+    ## the app's block must stay open.
+
   EmergencyResetSeq* =
     AbortPartialSeq & "\e[0m" & Osc8Reset & SyncOutputDisable & FocusEventsDisable &
     BracketedPasteDisable & MouseSequences[MouseX10][1] & MouseSequences[MouseButton][1] &
@@ -645,18 +656,22 @@ proc pollWritable*(fd: cint, timeoutMs: int): WriteWaitOutcome =
     return wwWritable
   wwNotReady
 
-proc writeAllBlocking*(fd: cint, data: string): int =
+proc writeAllBlocking*(
+    fd: cint, data: string, maxBlockedWaits = WriteMaxBlockedWaits
+): int =
   ## The single shared blocking write loop: loops on `posix.write(fd, ...)` until
-  ## every byte of `data` is written or it gives up after `WriteMaxBlockedWaits`
+  ## every byte of `data` is written or it gives up after `maxBlockedWaits`
   ## consecutive no-progress waits, blocking in `pollWritable` (not yielding)
   ## while the fd is non-writable. Returns the number of bytes actually written
   ## (`data.len` on success, a short count on give-up). Never raises — a short
-  ## count is the signal that output was truncated.
+  ## count is the signal that output was truncated. `maxBlockedWaits = 1` makes
+  ## one try that never waits.
   ##
   ## `writeStdoutBlocking` (async/async_io.nim) and the sync `writeWithRetry`
-  ## (terminal.nim) both delegate here; the async `writeStdoutAsync` stays
-  ## separate because it must `await` rather than block. Uses the shared
-  ## `classifyWriteResult`/`WriteMaxBlockedWaits` policy above.
+  ## (terminal.nim) both delegate here through `writeAllOrAbort`; the async
+  ## `writeStdoutAsync` stays separate because it must `await` rather than
+  ## block. Uses the shared `classifyWriteResult`/`WriteMaxBlockedWaits` policy
+  ## above.
   if data.len == 0:
     return 0
 
@@ -675,16 +690,16 @@ proc writeAllBlocking*(fd: cint, data: string): int =
         # Interrupted before any byte moved. Retry, but count it so a relentless
         # signal storm cannot spin forever.
         inc blockedWaits
-        if blockedWaits >= WriteMaxBlockedWaits:
+        if blockedWaits >= maxBlockedWaits:
           when defined(celinaDebug):
             stderr.writeLine("Warning: writeAllBlocking gave up after repeated EINTR")
           break
       of woWouldBlock:
         # fd's kernel buffer is full. Block in pollWritable until it drains
         # instead of dropping data mid-escape-sequence; give up only after
-        # WriteMaxBlockedWaits consecutive no-progress waits.
+        # maxBlockedWaits consecutive no-progress waits.
         inc blockedWaits
-        if blockedWaits >= WriteMaxBlockedWaits:
+        if blockedWaits >= maxBlockedWaits:
           when defined(celinaDebug):
             stderr.writeLine("Warning: writeAllBlocking gave up after repeated EAGAIN")
           break
@@ -712,6 +727,18 @@ proc writeAllBlocking*(fd: cint, data: string): int =
     discard
 
   result = total
+
+proc writeAllOrAbort*(fd: cint, data: string): int =
+  ## `writeAllBlocking`, followed by `AbortPartialSeq` if the write stopped
+  ## partway, so a half-sent escape sequence cannot swallow the bytes that
+  ## come next. The abort gets one try that never waits: the write has just
+  ## given up, so on a wedged tty another full wait budget would only double the
+  ## stall, and a failed frame or clear marks the screen unknown, so the next
+  ## one starts with the abort anyway (`abortPrefix`). Returns the number of
+  ## bytes of `data` written. Never raises.
+  result = writeAllBlocking(fd, data)
+  if result > 0 and result < data.len:
+    discard writeAllBlocking(fd, AbortPartialSeq, maxBlockedWaits = 1)
 
 proc wrapWithSyncOutput*(output: string): string =
   ## Wrap output string with synchronized output sequences
@@ -929,15 +956,66 @@ template markScreenCleared*(terminal: typed) =
   ## current size, so the next draw diffs against blanks and writes only the
   ## cells that are not blank.
   terminal.lastBuffer = newBuffer(terminal.size.width, terminal.size.height)
+  terminal.screenUnknown = false
 
 template markScreenUnknown*(terminal: typed) =
-  ## Record that what the screen shows is unknown (e.g. a clear failed
-  ## partway): an empty `lastBuffer` makes `needsFullRender` pick a full render
-  ## for the next draw.
-  terminal.lastBuffer = newBuffer(0, 0)
+  ## Record that what the screen shows is unknown: a write failed and may have
+  ## stopped partway, or another program had the terminal. `lastBuffer` is no
+  ## longer used: the next frame is a full render and the next frame or clear
+  ## starts with `abortPrefix`. A frame or clear that is written in full
+  ## makes the screen known again.
+  terminal.screenUnknown = true
+
+template frameForce*(terminal: typed, force: bool): bool =
+  ## The `force` to build the next frame with. While the screen is unknown, a
+  ## diff against `lastBuffer` is wrong, so the frame is a full render.
+  force or terminal.screenUnknown
+
+template abortPrefix*(terminal: typed): string =
+  ## "" while the screen is known. Else `AbortFrameSeq`, or
+  ## `AbortFrameKeepSyncSeq` when the app enabled synchronized output itself.
+  ## Goes first in the next frame or clear.
+  (
+    if not terminal.screenUnknown: ""
+    elif terminal.syncOutputEnabled: AbortFrameKeepSyncSeq
+    else: AbortFrameSeq
+  )
+
+template restorePrefix*(terminal: typed): string =
+  ## Goes first when `cleanup` or `suspend` hands the terminal back to the
+  ## shell. While the screen is unknown, a failed write may have left an
+  ## escape sequence, an OSC 8 link, SGR attributes or a synchronized output
+  ## block open, so this is `abortPrefix` plus an SGR reset; the restore
+  ## sequences that follow are then not swallowed. Else "".
+  block:
+    if terminal.screenUnknown:
+      terminal.abortPrefix & "\e[0m"
+    else:
+      ""
+
+template frameBytes*(terminal: typed, rawOutput: string): string =
+  ## The bytes to write for a frame built as `rawOutput`, or "" when it is
+  ## empty. Wraps it in synchronized output unless the app enabled that mode
+  ## itself. The abort prefix goes before the wrap, so it reaches a sequence
+  ## the failed write left open before anything else does.
+  block:
+    let raw = rawOutput
+    if raw.len == 0:
+      ""
+    elif not terminal.screenUnknown:
+      # No prefix: skip the concat so the frame is not copied again.
+      if terminal.syncOutputEnabled:
+        raw
+      else:
+        wrapWithSyncOutput(raw)
+    elif terminal.syncOutputEnabled:
+      terminal.abortPrefix & raw
+    else:
+      terminal.abortPrefix & wrapWithSyncOutput(raw)
 
 template clearLastBufferForResume*(terminal: typed) =
-  ## Clear lastBuffer to force full redraw after resume
+  ## After resume the screen is unknown (another program had the terminal), so
+  ## the next draw is a full redraw.
   terminal.markScreenUnknown()
   terminal.suspendState.isSuspended = false
 
@@ -954,6 +1032,8 @@ template adoptLastBufferImpl*(terminal: typed, buffer: var Buffer) =
   ## When the areas differ (first frame, after a resize) we fall back to a copy
   ## so the caller is never handed a wrong-sized buffer.
   ##
+  ## Only called once the frame is on screen, so the screen is known again.
+  ##
   ## Shared by the sync (`terminal.nim`) and async (`async_terminal.nim`)
   ## backends so the swap/copy contract lives in exactly one place.
   if terminal.lastBuffer.area == buffer.area:
@@ -961,3 +1041,11 @@ template adoptLastBufferImpl*(terminal: typed, buffer: var Buffer) =
   else:
     terminal.lastBuffer = buffer
   terminal.lastBuffer.clearDirty()
+  terminal.screenUnknown = false
+
+template commitLastBuffer*(terminal: typed, buffer: Buffer) =
+  ## Copy `buffer` into `lastBuffer` once its frame is on screen, so the screen
+  ## is known again. The copying twin of `adoptLastBufferImpl`.
+  terminal.lastBuffer = buffer
+  terminal.lastBuffer.clearDirty()
+  terminal.screenUnknown = false

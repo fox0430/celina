@@ -5,6 +5,7 @@ import std/[unittest, posix, deques]
 import ../celina/async/async_backend
 import ../celina/async/async_io {.all.}
 import ../celina/core/terminal_common
+import ./stdout_capture
 
 suite "AsyncIO Module Import":
   test "module imports successfully":
@@ -260,6 +261,18 @@ suite "Blocking Output Functions":
 
   test "tryWriteBlocking with empty data is a no-op":
     tryWriteBlocking("")
+
+  test "tryWriteBlocking aborts a sequence cut off partway before the next write":
+    when defined(linux):
+      let output = captureCutStdout(
+        4,
+        proc() =
+          tryWriteBlocking("\e[12;34H")
+          tryWriteBlocking("x"),
+      )
+      check output == "\e[12" & AbortPartialSeq & "x"
+    else:
+      skip()
 
 suite "Shared Blocking Write Loop":
   # writeAllBlocking is the loop that writeStdoutBlocking (and the sync

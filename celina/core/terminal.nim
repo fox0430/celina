@@ -31,6 +31,7 @@ type Terminal* = ref object ## Terminal interface for screen management
   focusEventsEnabled*: bool
   syncOutputEnabled*: bool
   lastBuffer*: Buffer
+  screenUnknown*: bool # A write failed; see `markScreenUnknown`
   rawModeEnabled: bool # Track raw mode state internally
   originalTermios: Termios # Store original terminal settings per instance
   originalStdinFlags: cint # Saved stdin descriptor flags (for O_NONBLOCK restore)
@@ -188,8 +189,9 @@ proc writeWithRetry(data: string): bool =
   ##
   ## First flushes the C stdio buffer so any buffered `stdout.write` data is
   ## emitted before this direct fd write, preserving output order. Then delegates
-  ## the retry loop to the shared `writeAllBlocking` in terminal_common (the same
-  ## loop the async-mode `writeStdoutBlocking` uses).
+  ## the retry loop to the shared `writeAllOrAbort` in terminal_common (the same
+  ## loop the async-mode `writeStdoutBlocking` uses), which follows a write that
+  ## stopped partway with `AbortPartialSeq`.
   ## On EAGAIN `writeAllBlocking` waits for stdout to become writable via
   ## `pollWritable` rather than dropping data mid-escape-sequence — stdout can be
   ## non-blocking when fd 0/1 share an open file description and raw mode pinned
@@ -210,7 +212,7 @@ proc writeWithRetry(data: string): bool =
       discard e # Avoid "declared but not used" warning
     return false
 
-  if writeAllBlocking(cint(stdout.getFileHandle()), data) != data.len:
+  if writeAllOrAbort(cint(stdout.getFileHandle()), data) != data.len:
     return false
 
   true
@@ -379,13 +381,13 @@ proc clearScreen*() =
 
 proc clearScreen*(terminal: Terminal) =
   ## Clear the entire screen and record it as blank, so the next `draw` writes
-  ## only the cells that are not blank. Resets SGR first. Does not move the
-  ## cursor.
+  ## only the cells that are not blank. Resets SGR first, and after a failed
+  ## write starts with `abortPrefix`. Does not move the cursor.
   ##
   ## Raises IOError if unable to write to terminal; the next `draw` is then a
   ## full render.
   try:
-    writeOrRaise(ResetAndClearScreenSeq)
+    writeOrRaise(terminal.abortPrefix & ResetAndClearScreenSeq)
   except IOError:
     terminal.markScreenUnknown()
     raise
@@ -434,14 +436,24 @@ proc render*(terminal: Terminal, buffer: Buffer) =
   ## - Custom rendering pipelines with specific error recovery strategies
   ##
   ## For main application loops, use `draw()` which handles transient errors gracefully.
+  ##
+  ## Renders in full while the screen is unknown, e.g. after a failed write:
+  ## a failed render leaves it unknown.
   try:
-    let output = buildDifferentialOutput(terminal.lastBuffer, buffer)
+    let output =
+      if terminal.screenUnknown:
+        terminal.abortPrefix & buildFullRenderOutput(buffer)
+      else:
+        buildDifferentialOutput(terminal.lastBuffer, buffer)
 
     if output.len > 0:
-      writeOrRaise(output)
+      try:
+        writeOrRaise(output)
+      except IOError:
+        terminal.markScreenUnknown()
+        raise
 
-    # Update last buffer
-    terminal.lastBuffer = buffer
+    terminal.commitLastBuffer(buffer)
   except IOError as e:
     raise newTerminalError("Failed to render buffer: " & e.msg)
   except CatchableError as e:
@@ -462,11 +474,17 @@ proc renderFull*(terminal: Terminal, buffer: Buffer) =
   ## - Custom rendering pipelines with specific error recovery strategies
   ##
   ## For main application loops, use `draw()` which handles transient errors gracefully.
+  ##
+  ## A failed render leaves the screen unknown.
   try:
-    let output = buildFullRenderOutput(buffer)
-    writeOrRaise(output)
+    let output = terminal.abortPrefix & buildFullRenderOutput(buffer)
+    try:
+      writeOrRaise(output)
+    except IOError:
+      terminal.markScreenUnknown()
+      raise
 
-    terminal.lastBuffer = buffer
+    terminal.commitLastBuffer(buffer)
   except IOError as e:
     raise newTerminalError("Failed to render full buffer: " & e.msg)
   except CatchableError as e:
@@ -485,12 +503,16 @@ proc cleanup*(terminal: Terminal) =
   ## different order should not reorder these lines piecemeal — the policy
   ## lives here so app-level wrappers can delegate to it. A mode added here
   ## belongs in `EmergencyResetSeq` too.
+  ##
+  ## After a failed write, first sends `restorePrefix`.
   template guard(body: untyped) =
     try:
       body
     except CatchableError:
       discard
 
+  guard:
+    tryWrite(terminal.restorePrefix)
   guard:
     showCursor()
   guard:
@@ -615,6 +637,7 @@ proc suspend*(terminal: Terminal) =
 
   # Return to shell mode. A mode added here belongs in `EmergencyResetSeq` too.
   try:
+    tryWrite(terminal.restorePrefix)
     showCursor()
   except CatchableError:
     discard
@@ -639,7 +662,7 @@ proc resume*(terminal: Terminal) =
   restoreSuspendedFeatures(terminal)
   hideCursor()
 
-  # Clear lastBuffer to force full redraw on next draw()
+  # The screen is unknown now, so the next draw() is a full redraw
   clearLastBufferForResume(terminal)
 
 # High-level rendering interface
@@ -647,27 +670,22 @@ proc tryWriteFrame(terminal: Terminal, buffer: Buffer, force: bool): bool =
   ## Build the differential/full output for `buffer` and write it.
   ##
   ## Returns true when `lastBuffer` may be updated (the write succeeded, or there
-  ## was nothing to write); false when the write failed and the frame should be
-  ## retried next time. I/O errors are swallowed so a transient terminal hiccup
-  ## never crashes the render loop. `buffer` is read-only here (passed by hidden
-  ## reference, no copy), so this stays zero-copy for the adopt path.
+  ## was nothing to write); false when the write failed, which marks the screen
+  ## unknown so the next frame is a full render. I/O errors are swallowed so a
+  ## transient terminal hiccup never crashes the render loop. `buffer` is
+  ## read-only here (passed by hidden reference, no copy), so this stays
+  ## zero-copy for the adopt path.
   try:
     let rawOutput =
-      if needsFullRender(terminal.lastBuffer, buffer, force):
+      if needsFullRender(terminal.lastBuffer, buffer, terminal.frameForce(force)):
         buildFullRenderOutput(buffer)
       else:
         buildDifferentialOutput(terminal.lastBuffer, buffer)
 
-    if rawOutput.len == 0:
+    let output = terminal.frameBytes(rawOutput)
+    if output.len == 0:
       return true # No changes - safe to update lastBuffer
 
-    # Wrap with synchronized output to prevent flickering
-    # Skip wrapping if sync output is already enabled to avoid double-wrapping
-    let output =
-      if terminal.syncOutputEnabled:
-        rawOutput
-      else:
-        wrapWithSyncOutput(rawOutput)
     # Use writeWithRetry for robust I/O handling
     result = writeWithRetry(output)
   except CatchableError as e:
@@ -678,6 +696,9 @@ proc tryWriteFrame(terminal: Terminal, buffer: Buffer, force: bool): bool =
     else:
       discard e # Avoid "declared but not used" warning
     result = false
+
+  if not result:
+    terminal.markScreenUnknown()
 
 proc tryWriteFrameWithCursor(
     terminal: Terminal,
@@ -694,20 +715,22 @@ proc tryWriteFrameWithCursor(
   result = (false, lastCursorStyle)
   try:
     let (rawOutput, newLastCursorStyle) = buildOutputWithCursor(
-      terminal.lastBuffer, buffer, cursorX, cursorY, cursorVisible, cursorStyle,
-      lastCursorStyle, force,
+      terminal.lastBuffer,
+      buffer,
+      cursorX,
+      cursorY,
+      cursorVisible,
+      cursorStyle,
+      lastCursorStyle,
+      terminal.frameForce(force),
     )
     result.style = newLastCursorStyle
 
-    if rawOutput.len == 0:
+    let output = terminal.frameBytes(rawOutput)
+    if output.len == 0:
       result.ok = true # No changes - safe to update lastBuffer
       return
 
-    let output =
-      if terminal.syncOutputEnabled:
-        rawOutput
-      else:
-        wrapWithSyncOutput(rawOutput)
     result.ok = writeWithRetry(output)
   except CatchableError as e:
     when defined(celinaDebug):
@@ -717,8 +740,9 @@ proc tryWriteFrameWithCursor(
     result.ok = false
 
   if not result.ok:
-    # Roll back the tracked style: the terminal never received the new DECSCUSR
-    # sequence, so `lastCursorStyle` must stay unchanged for the next frame.
+    terminal.markScreenUnknown()
+    # Roll back the tracked style: the terminal may not have received the new
+    # DECSCUSR sequence, so the next frame sends it again.
     result.style = lastCursorStyle
 
 proc draw*(terminal: Terminal, buffer: Buffer, force: bool = false) =
@@ -726,8 +750,8 @@ proc draw*(terminal: Terminal, buffer: Buffer, force: bool = false) =
   ##
   ## This is the recommended high-level rendering function for main application loops.
   ## Unlike `render()` and `renderFull()`, this function silently ignores I/O errors
-  ## to prevent crashes from transient terminal issues. Failed renders will be retried
-  ## in the next frame.
+  ## to prevent crashes from transient terminal issues. A failed write may have
+  ## stopped partway, so the next frame is a full render.
   ##
   ## Output is automatically wrapped with synchronized output sequences (DEC mode 2026)
   ## to prevent flickering on supported terminals.
@@ -744,9 +768,7 @@ proc draw*(terminal: Terminal, buffer: Buffer, force: bool = false) =
   ## Note: For rendering with cursor positioning, use `drawWithCursor()` instead.
   ## For low-level rendering with explicit error handling, use `render()` or `renderFull()`.
   if terminal.tryWriteFrame(buffer, force):
-    terminal.lastBuffer = buffer
-    terminal.lastBuffer.clearDirty() # Clear dirty flag after successful render
-  # else: keep lastBuffer unchanged so next frame can retry the diff
+    terminal.commitLastBuffer(buffer)
 
 proc drawAdopt*(terminal: Terminal, buffer: var Buffer, force: bool = false) =
   ## Zero-copy variant of `draw` for renderer-owned buffers.
@@ -759,7 +781,6 @@ proc drawAdopt*(terminal: Terminal, buffer: var Buffer, force: bool = false) =
   ## every frame.
   if terminal.tryWriteFrame(buffer, force):
     terminal.adoptLastBufferImpl(buffer)
-  # else: keep lastBuffer unchanged so next frame can retry the diff
 
 proc drawWithCursor*(
     terminal: Terminal,
@@ -783,15 +804,13 @@ proc drawWithCursor*(
   ## zero-copy renderer-owned hot path, use `drawWithCursorAdopt` instead.
   ##
   ## Note: This procedure silently ignores I/O errors to prevent crashes from transient
-  ## terminal issues. Failed renders will be retried in the next frame.
+  ## terminal issues. After a failed write, the next frame is a full render.
   let (ok, style) = terminal.tryWriteFrameWithCursor(
     buffer, cursorX, cursorY, cursorVisible, cursorStyle, lastCursorStyle, force
   )
   result = style
   if ok:
-    terminal.lastBuffer = buffer
-    terminal.lastBuffer.clearDirty() # Clear dirty flag after successful render
-  # else: keep lastBuffer unchanged so next frame can retry the diff
+    terminal.commitLastBuffer(buffer)
 
 proc drawWithCursorAdopt*(
     terminal: Terminal,
@@ -816,7 +835,6 @@ proc drawWithCursorAdopt*(
   result = style
   if ok:
     terminal.adoptLastBufferImpl(buffer)
-  # else: keep lastBuffer unchanged so next frame can retry the diff
 
 # Utility procedures
 proc withTerminal*[T](terminal: Terminal, body: proc(): T): T =

@@ -33,6 +33,7 @@ type
     focusEventsEnabled*: bool
     syncOutputEnabled*: bool
     lastBuffer*: Buffer
+    screenUnknown*: bool # A write failed; see `markScreenUnknown`
     stdinFd*: AsyncFD
     stdoutFd*: AsyncFD
     rawModeEnabled: bool # Track raw mode state internally
@@ -418,13 +419,14 @@ proc clearScreenAsync*() {.async.} =
 
 proc clearScreenAsync*(terminal: AsyncTerminal) {.async.} =
   ## Clear the entire screen asynchronously and record it as blank, so the
-  ## next draw writes only the cells that are not blank. Resets SGR first.
-  ## Does not move the cursor (matches the synchronous `Terminal.clearScreen`).
+  ## next draw writes only the cells that are not blank. Resets SGR first, and
+  ## after a failed write starts with `abortPrefix`. Does not move the cursor
+  ## (matches the synchronous `Terminal.clearScreen`).
   ##
   ## Raises IOError if the clear cannot be written in full; the next draw is
   ## then a full render. A cancel during the write has the same effect.
   try:
-    await writeOrRaiseAsync(ResetAndClearScreenSeq)
+    await writeOrRaiseAsync(terminal.abortPrefix & ResetAndClearScreenSeq)
   except CatchableError as e:
     terminal.markScreenUnknown()
     raise e
@@ -470,33 +472,40 @@ proc renderCellAsync*(cell: Cell, x, y: int) {.async.} =
   await tryWriteAsync(output)
   await sleepMs(0)
 
+proc writeFrameAsync(terminal: AsyncTerminal, output: string) {.async.} =
+  ## Write the frame bytes `output` for `renderAsync`/`renderFullAsync`,
+  ## raising `TerminalError` if they cannot be written in full. A failed or
+  ## cancelled write may have stopped partway, so it marks the screen unknown.
+  if output.len == 0:
+    return
+  try:
+    await writeOrRaiseAsync(output)
+  except IOError as e:
+    terminal.markScreenUnknown()
+    raise newTerminalError("Failed to render buffer: " & e.msg)
+  except CatchableError as e:
+    terminal.markScreenUnknown()
+    raise e
+
 proc renderAsync*(terminal: AsyncTerminal, buffer: Buffer) {.async.} =
   ## Render a buffer to the terminal asynchronously using differential updates
   ## Output is automatically wrapped with synchronized output sequences (DEC mode 2026)
   ## to prevent flickering on supported terminals.
   ##
   ## Low-level API: raises `TerminalError` if the frame cannot be written in full
-  ## (a truncated frame on a wedged tty), matching the sync `render`. On failure
-  ## `lastBuffer` is left unchanged so the next frame redraws the same diff. The
-  ## high-level `AsyncApp` render path goes through `drawWithCursorAdoptAsync`,
-  ## which catches this and retries instead of propagating.
-  let rawOutput = buildDifferentialOutput(terminal.lastBuffer, buffer)
+  ## (a truncated frame on a wedged tty), matching the sync `render`. A failed
+  ## or cancelled write leaves the screen unknown, and while it is unknown this
+  ## renders in full. The high-level `AsyncApp` render path goes through
+  ## `drawWithCursorAdoptAsync`, which catches this and retries instead of
+  ## propagating.
+  let rawOutput =
+    if terminal.screenUnknown:
+      buildFullRenderOutput(buffer)
+    else:
+      buildDifferentialOutput(terminal.lastBuffer, buffer)
+  await terminal.writeFrameAsync(terminal.frameBytes(rawOutput))
 
-  if rawOutput.len > 0:
-    # Skip wrapping if sync output is already enabled to avoid double-wrapping
-    let output =
-      if terminal.syncOutputEnabled:
-        rawOutput
-      else:
-        wrapWithSyncOutput(rawOutput)
-    try:
-      await writeOrRaiseAsync(output)
-    except IOError as e:
-      raise newTerminalError("Failed to render buffer: " & e.msg)
-
-  # Update last buffer and clear dirty region for next frame
-  terminal.lastBuffer = buffer
-  terminal.lastBuffer.clearDirty()
+  terminal.commitLastBuffer(buffer)
 
 proc renderFullAsync*(terminal: AsyncTerminal, buffer: Buffer) {.async.} =
   ## Force a full async render of the buffer
@@ -504,24 +513,11 @@ proc renderFullAsync*(terminal: AsyncTerminal, buffer: Buffer) {.async.} =
   ## to prevent flickering on supported terminals.
   ##
   ## Low-level API: raises `TerminalError` if the frame cannot be written in full,
-  ## matching the sync `renderFull`. On failure `lastBuffer` is left unchanged so
-  ## the next frame redraws.
-  let rawOutput = buildFullRenderOutput(buffer)
-  # Skip wrapping if sync output is already enabled to avoid double-wrapping
-  let output =
-    if terminal.syncOutputEnabled:
-      rawOutput
-    else:
-      wrapWithSyncOutput(rawOutput)
+  ## matching the sync `renderFull`. A failed or cancelled write leaves the
+  ## screen unknown.
+  await terminal.writeFrameAsync(terminal.frameBytes(buildFullRenderOutput(buffer)))
 
-  try:
-    await writeOrRaiseAsync(output)
-  except IOError as e:
-    raise newTerminalError("Failed to render buffer: " & e.msg)
-
-  # Update last buffer and clear dirty region
-  terminal.lastBuffer = buffer
-  terminal.lastBuffer.clearDirty()
+  terminal.commitLastBuffer(buffer)
 
 # Terminal setup and cleanup
 proc cleanupAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.async.}
@@ -610,6 +606,7 @@ proc cleanup*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) =
   ## the async event loop is unavailable. Uses the sync `runDisableSequence`.
   ## `tryWriteBlocking` is best-effort and never raises, so no `try/except` is
   ## needed around the cursor restore.
+  tryWriteBlocking(terminal.restorePrefix)
   tryWriteBlocking(ShowCursorSeq)
   runDisableSequence(terminal, reader)
 
@@ -673,6 +670,8 @@ proc cleanupStepsAsync(terminal: AsyncTerminal, reader: AsyncInputReader) {.asyn
       discard
 
   step:
+    await tryWriteAsync(terminal.restorePrefix)
+  step:
     await showCursorAsync()
   step:
     await terminal.disableSyncOutputAsync()
@@ -694,7 +693,8 @@ proc cleanupAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.as
   ## restored before leaving the alternate screen so the final `tcsetattr`
   ## runs while the program-mode screen is still active. Mirrors the sync
   ## `terminal.cleanup()` policy — app-level wrappers should delegate here.
-  ## A mode added here belongs in `EmergencyResetSeq` too.
+  ## A mode added here belongs in `EmergencyResetSeq` too. After a failed
+  ## write, first sends `restorePrefix`.
   ##
   ## Raises only on cancellation. A chronos cancel replaces the remaining
   ## steps with the emergency reset, then re-raises. A second cancel during
@@ -740,6 +740,7 @@ proc suspendAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.as
   saveSuspendState(terminal)
 
   # Return to shell mode. A mode added here belongs in `EmergencyResetSeq` too.
+  await tryWriteAsync(terminal.restorePrefix)
   await showCursorAsync()
   await terminal.disableSyncOutputAsync()
   await terminal.disableFocusEventsAsync()
@@ -788,7 +789,7 @@ proc resumeAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.asy
     reader.clearPendingByteAsync()
   await hideCursorAsync()
 
-  # Clear lastBuffer to force full redraw on next drawAsync()
+  # The screen is unknown now, so the next drawAsync() is a full redraw
   clearLastBufferForResume(terminal)
 
 # High-level async rendering interface
@@ -796,7 +797,7 @@ proc drawAsync*(
     terminal: AsyncTerminal, buffer: Buffer, force: bool = false
 ) {.async.} =
   ## Draw a buffer to the terminal asynchronously
-  if needsFullRender(terminal.lastBuffer, buffer, force):
+  if needsFullRender(terminal.lastBuffer, buffer, terminal.frameForce(force)):
     await terminal.renderFullAsync(buffer)
   else:
     await terminal.renderAsync(buffer)
@@ -827,18 +828,17 @@ proc buildCursorFrame(
   ## wrapped, ready-to-write sequence ("" when the frame has no changes); `style`
   ## is the new cursor style. `buffer` is read-only (hidden reference, no copy).
   let (rawOutput, newLastCursorStyle) = buildOutputWithCursor(
-    terminal.lastBuffer, buffer, cursorX, cursorY, cursorVisible, cursorStyle,
-    lastCursorStyle, force,
+    terminal.lastBuffer,
+    buffer,
+    cursorX,
+    cursorY,
+    cursorVisible,
+    cursorStyle,
+    lastCursorStyle,
+    terminal.frameForce(force),
   )
   result.style = newLastCursorStyle
-  if rawOutput.len == 0:
-    result.output = ""
-  elif terminal.syncOutputEnabled:
-    # Skip wrapping if sync output is already enabled to avoid double-wrapping
-    result.output = rawOutput
-  else:
-    # Wrap with synchronized output to prevent flickering
-    result.output = wrapWithSyncOutput(rawOutput)
+  result.output = terminal.frameBytes(rawOutput)
 
 proc drawWithCursorAsync*(
     terminal: AsyncTerminal,
@@ -860,8 +860,8 @@ proc drawWithCursorAsync*(
   ##
   ## A truncated frame on a wedged tty (the `IOError` from `writeOrRaiseAsync`) is
   ## swallowed so a transient hiccup never crashes the async render loop (mirrors
-  ## the sync `Terminal.drawWithCursor`); on failure `lastBuffer` is left
-  ## unchanged so the next frame retries the same diff.
+  ## the sync `Terminal.drawWithCursor`); the write may have stopped partway, so
+  ## it marks the screen unknown and the next frame is a full render.
   ##
   ## Returns the updated lastCursorStyle value on success, or the original
   ## `lastCursorStyle` on failure. Caller is responsible for tracking this state
@@ -880,10 +880,11 @@ proc drawWithCursorAsync*(
         discard e # Avoid "declared but not used" warning
       ok = false
   if ok:
-    terminal.lastBuffer = buffer
-    terminal.lastBuffer.clearDirty()
+    terminal.commitLastBuffer(buffer)
     return style
-  # Write failed: the terminal state is unchanged, so keep lastCursorStyle.
+  terminal.markScreenUnknown()
+  # The terminal may not have received the new DECSCUSR sequence, so keep
+  # lastCursorStyle and send it again next frame.
   return lastCursorStyle
 
 proc drawWithCursorAdoptAsync*(
@@ -912,8 +913,8 @@ proc drawWithCursorAdoptAsync*(
   ## actually emitted. On the steady-state path (areas match) the commit is a
   ## zero-copy swap rolled back if the write fails; on the first frame / right
   ## after a resize (areas differ) `adoptLastBufferImpl` copies anyway, so the
-  ## plain write-then-adopt order is kept (the caller forces a full redraw next
-  ## frame, which masks the rare write-failure window there).
+  ## plain write-then-adopt order is kept. On both paths a failed or cancelled
+  ## write marks the screen unknown, so the next frame is a full render.
   ##
   ## Returns the updated lastCursorStyle value on success, or the original
   ## `lastCursorStyle` on failure.
@@ -937,13 +938,16 @@ proc drawWithCursorAdoptAsync*(
       terminal.lastBuffer.clearDirty()
       try:
         await writeOrRaiseAsync(output)
+        # The frame is on screen: `lastBuffer` holds it.
+        terminal.screenUnknown = false
       except CatchableError as e:
-        # Roll the swap back so a failed frame leaves `lastBuffer` as the frame
-        # still on screen and the next frame retries the same diff.
+        # Roll the swap back: `lastBuffer` holds only frames that went out, and
+        # the caller keeps the grid it rendered.
         swap(terminal.lastBuffer, buffer)
         terminal.lastBuffer.clearDirty()
-        # The terminal never received the new DECSCUSR sequence, so the tracked
-        # cursor style must stay unchanged too.
+        terminal.markScreenUnknown()
+        # The terminal may not have received the new DECSCUSR sequence, so the
+        # tracked cursor style must stay unchanged too.
         result = lastCursorStyle
         when defined(celinaDebug):
           stderr.writeLine("Warning: drawWithCursorAdoptAsync() failed: " & e.msg)
@@ -951,13 +955,13 @@ proc drawWithCursorAdoptAsync*(
           discard e # Avoid "declared but not used" warning
     else:
       # First frame / post-resize: areas differ, so the adopt copies anyway (no
-      # zero-copy to protect) and the caller forces a full redraw next frame.
+      # zero-copy to protect).
       try:
         await writeOrRaiseAsync(output)
         terminal.adoptLastBufferImpl(buffer)
       except CatchableError as e:
-        # Keep lastBuffer unchanged so the next frame can retry the diff.
-        # The cursor style was never applied either.
+        terminal.markScreenUnknown()
+        # The cursor style may not have been applied either.
         result = lastCursorStyle
         when defined(celinaDebug):
           stderr.writeLine("Warning: drawWithCursorAdoptAsync() failed: " & e.msg)
