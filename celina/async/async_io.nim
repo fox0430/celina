@@ -8,7 +8,9 @@ import std/[options, posix, selectors, deques]
 import async_backend
 from ../core/terminal_common import
   WriteOutcome, classifyWriteResult, WriteWaitOutcome, pollWritable, WriteBlockedWaitMs,
-  WriteMaxBlockedWaits, writeAllBlocking, writeAllOrAbort, AbortPartialSeq
+  WriteMaxBlockedWaits, AbortPartialSeq
+from ../core/output_stream import
+  abortPending, clearPendingAbort, abortPartialWrite, writeStream
 
 type
   AsyncIOError* = object of CatchableError
@@ -266,6 +268,15 @@ proc releaseStdoutLock() =
         return
     stdoutWriteLocked = false
 
+when defined(celinaDebug):
+  proc writeProgress(total, dataLen, abortLeft: int): string =
+    ## Bytes of `data` written for the give-up warnings in `writeStdoutAsync`,
+    ## plus the pending abort when the write stopped before it was out.
+    result = $total & "/" & $dataLen & " bytes"
+    if abortLeft > 0:
+      result.add ", pending abort " & $(AbortPartialSeq.len - abortLeft) & "/" &
+        $AbortPartialSeq.len & " bytes"
+
 proc writeStdoutAsync*(data: string): Future[int] {.async.} =
   ## Write data to stdout asynchronously.
   ##
@@ -307,6 +318,11 @@ proc writeStdoutAsync*(data: string): Future[int] {.async.} =
   ## lock is still released on the way out. Every *other* error is swallowed and
   ## reported as a short count, as before.
   ##
+  ## Aborts follow core/output_stream.nim, as in the sync writes: a write that
+  ## stops or is cancelled partway calls `abortPartialWrite` before the lock is
+  ## released, and a pending abort goes out first under the same hold. Until it
+  ## is out in full, `data` is not written, so giving up on it returns 0.
+  ##
   ## Head-of-line cost: the lock is held for the whole write, including the
   ## `WriteMaxBlockedWaits` back-off budget (~2s) on a wedged tty, so one stuck
   ## writer stalls every other queued writer for up to that budget. This is
@@ -323,7 +339,10 @@ proc writeStdoutAsync*(data: string): Future[int] {.async.} =
     total = 0
     blockedWaits = 0
     held = false
-  let fd = STDOUT_FILENO.cint
+    abortLeft = 0 # bytes of a pending abort still to write before `data`
+  let
+    fd = STDOUT_FILENO.cint
+    abortBytes = AbortPartialSeq
 
   # Hold the lock for the entire write, including every `await` inside the loop,
   # so no other task can emit between our `write(2)` attempts. Acquire inside the
@@ -340,12 +359,25 @@ proc writeStdoutAsync*(data: string): Future[int] {.async.} =
       await waitForStdoutLock()
     held = true
 
+    # A pending abort goes first, through the same loop.
+    if abortPending():
+      abortLeft = abortBytes.len
+
     while total < data.len:
-      let n = posix.write(fd, unsafeAddr data[total], data.len - total).int
+      let n =
+        if abortLeft > 0:
+          posix.write(fd, unsafeAddr abortBytes[abortBytes.len - abortLeft], abortLeft).int
+        else:
+          posix.write(fd, unsafeAddr data[total], data.len - total).int
 
       case classifyWriteResult(n)
       of woProgress:
-        total += n
+        if abortLeft > 0:
+          abortLeft -= n
+          if abortLeft == 0:
+            clearPendingAbort()
+        else:
+          total += n
         blockedWaits = 0
       of woInterrupted:
         # Interrupted before writing anything. Yield before retrying so a signal
@@ -356,7 +388,7 @@ proc writeStdoutAsync*(data: string): Future[int] {.async.} =
           when defined(celinaDebug):
             stderr.writeLine(
               "Warning: writeStdoutAsync gave up after " & $WriteMaxBlockedWaits &
-                " interrupted writes (" & $total & "/" & $data.len & " bytes)"
+                " interrupted writes (" & writeProgress(total, data.len, abortLeft) & ")"
             )
           break
         await sleepMs(0)
@@ -373,7 +405,7 @@ proc writeStdoutAsync*(data: string): Future[int] {.async.} =
           when defined(celinaDebug):
             stderr.writeLine(
               "Warning: writeStdoutAsync gave up after " & $WriteMaxBlockedWaits &
-                " blocked writes (" & $total & "/" & $data.len & " bytes)"
+                " blocked writes (" & writeProgress(total, data.len, abortLeft) & ")"
             )
           break
         case pollWritable(fd, 0) # non-blocking probe; never blocks the event loop
@@ -381,8 +413,8 @@ proc writeStdoutAsync*(data: string): Future[int] {.async.} =
           # stdout went away (POLLHUP/POLLERR); stop and report bytes sent.
           when defined(celinaDebug):
             stderr.writeLine(
-              "Warning: writeStdoutAsync stdout error (" & $total & "/" & $data.len &
-                " bytes)"
+              "Warning: writeStdoutAsync stdout error (" &
+                writeProgress(total, data.len, abortLeft) & ")"
             )
           break
         of wwWritable:
@@ -396,8 +428,8 @@ proc writeStdoutAsync*(data: string): Future[int] {.async.} =
         # report how much actually made it out.
         when defined(celinaDebug):
           stderr.writeLine(
-            "Warning: writeStdoutAsync hard error (" & $total & "/" & $data.len &
-              " bytes)"
+            "Warning: writeStdoutAsync hard error (" &
+              writeProgress(total, data.len, abortLeft) & ")"
           )
         break
   except CancelledError as e:
@@ -413,9 +445,10 @@ proc writeStdoutAsync*(data: string): Future[int] {.async.} =
   finally:
     if held:
       # Abort an escape sequence a partial write may have cut in half before
-      # the next writer gets the lock.
+      # the next writer gets the lock. A pending abort cut off partway stays
+      # pending.
       if total > 0 and total < data.len:
-        discard writeAllBlocking(fd, AbortPartialSeq)
+        abortPartialWrite()
       releaseStdoutLock()
 
   result = total
@@ -478,18 +511,18 @@ proc writeOrRaiseAsync*(data: string): Future[void] {.async.} =
 # Synchronous Blocking Output Functions
 
 proc writeStdoutBlocking*(data: string): int =
-  ## Blocking write of `data` to stdout via the shared `writeAllOrAbort` loop in
-  ## terminal_common (the same loop the sync `writeWithRetry` uses). Instead of
-  ## yielding, it blocks in `pollWritable` while stdout is non-writable. Uses
-  ## `STDOUT_FILENO` directly so it never goes through the stdio buffer or mixes
-  ## ordering with `stdout.write`/`stdout.flushFile`. Returns bytes written (a
-  ## short count means it gave up on a wedged tty, and a write that stopped
-  ## partway is followed by `AbortPartialSeq`); never raises.
+  ## Blocking write of `data` to stdout via the shared `writeStream` in
+  ## core/output_stream.nim (the same path the sync `writeWithRetry` uses,
+  ## aborts included). Instead of yielding, it blocks in `pollWritable` while
+  ## stdout is non-writable. Uses `STDOUT_FILENO` directly so it never goes
+  ## through the stdio buffer or mixes ordering with
+  ## `stdout.write`/`stdout.flushFile`. Returns bytes written (a short count
+  ## means it gave up on a wedged tty); never raises.
   ##
   ## Intended for mode toggles in `AsyncTerminal` that must stay callable from
   ## both async procs and the synchronous `cleanup` fallback used by crash
   ## handlers/signal hooks.
-  writeAllOrAbort(STDOUT_FILENO.cint, data)
+  writeStream(data)
 
 proc tryWriteBlocking*(data: string) =
   ## Best-effort synchronous write for mode toggles and other non-critical

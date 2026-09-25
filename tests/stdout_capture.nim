@@ -51,21 +51,30 @@ proc withFailingStdout*(body: proc()) =
 when defined(linux):
   var RLIMIT_FSIZE {.importc: "RLIMIT_FSIZE", header: "<sys/resource.h>".}: cint
 
+  var cutWritesLeft = 0
+    ## Writes still to fail at the limit before `liftFileSizeLimit` lifts it.
+
   proc liftFileSizeLimit(sig: cint) {.noconv.} =
     let savedErrno = errno
-    var limit: RLimit
-    if getrlimit(RLIMIT_FSIZE, limit) == 0:
-      limit.rlim_cur = limit.rlim_max
-      discard setrlimit(RLIMIT_FSIZE, limit)
+    dec cutWritesLeft
+    if cutWritesLeft <= 0:
+      var limit: RLimit
+      if getrlimit(RLIMIT_FSIZE, limit) == 0:
+        limit.rlim_cur = limit.rlim_max
+        discard setrlimit(RLIMIT_FSIZE, limit)
     errno = savedErrno
 
-  proc captureCutStdout*(limit: int, body: proc()): string =
+  proc clearerr(f: File) {.importc, header: "<stdio.h>".}
+
+  proc captureCutStdout*(limit: int, body: proc(), failedWrites = 1): string =
     ## Run `body` with stdout on a file that takes only `limit` bytes, and
     ## return what reached the file. The write that crosses `limit` stops
-    ## there and the next write fails at once, like a tty that stopped
-    ## draining but with no retry budget to wait out; the SIGXFSZ from that
-    ## failure lifts the limit, so later writes go through. Linux only: other
-    ## systems may refuse the whole crossing write.
+    ## there and the next `failedWrites` writes fail at once, like a tty that
+    ## stopped draining but with no retry budget to wait out; the SIGXFSZ from
+    ## the last of them lifts the limit, so later writes go through. Clears
+    ## the stdio error flag a cut `fflush` sets, so a later `stdout.write`
+    ## does not raise. Linux only: other systems may refuse the whole crossing
+    ## write.
     let (file, path) = createTempFile("celina_cut_stdout_", "")
     defer:
       file.close()
@@ -80,6 +89,7 @@ when defined(linux):
     let savedStdout = dup(STDOUT_FILENO)
     doAssert savedStdout != -1
     discard dup2(file.getFileHandle(), STDOUT_FILENO)
+    cutWritesLeft = failedWrites
     var limited = saved
     limited.rlim_cur = limit
     doAssert setrlimit(RLIMIT_FSIZE, limited) == 0
@@ -88,6 +98,7 @@ when defined(linux):
     finally:
       discard setrlimit(RLIMIT_FSIZE, saved)
       discard sigaction(SIGXFSZ, oldAct, nil)
+      clearerr(stdout)
       discard dup2(savedStdout, STDOUT_FILENO)
       discard close(savedStdout)
     readFile(path)

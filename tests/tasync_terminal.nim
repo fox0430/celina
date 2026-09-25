@@ -10,6 +10,7 @@ when hasChronos:
   import ../celina/async/async_io {.all.}
 import ./stdout_capture
 import ../celina/core/terminal_common
+from ../celina/core/output_stream import clearPendingAbort
 
 privateAccess(AsyncTerminal)
 
@@ -296,6 +297,11 @@ suite "AsyncTerminal.clearScreenAsync":
 suite "AsyncTerminal unknown screen state":
   # A write that fails may have stopped partway, so the screen and the
   # terminal's parser state are unknown until a frame or clear goes out.
+  teardown:
+    # A failed check or a resume must not leave an abort pending for the next
+    # test.
+    clearPendingAbort()
+
   test "a failed drawAsync makes the next draw an aborted full render":
     let terminal = createTestTerminal()
     terminal.lastBuffer = newBuffer(10, 3)
@@ -429,6 +435,19 @@ suite "AsyncTerminal unknown screen state":
     )
     check output == AbortFrameSeq & wrapWithSyncOutput(buildFullRenderOutput(frame))
     check not terminal.screenUnknown
+
+  test "resumeAsync sends the abort before its first write":
+    let terminal = createTestTerminal()
+    discard captureStdout(
+      proc() =
+        waitFor terminal.suspendAsync()
+    )
+    # Another program had the terminal and may have left a sequence open.
+    let resumed = captureStdout(
+      proc() =
+        waitFor terminal.resumeAsync()
+    )
+    check resumed == AbortPartialSeq & HideCursorSeq
 
   test "the first draw after resumeAsync is an aborted full render":
     let terminal = createTestTerminal()

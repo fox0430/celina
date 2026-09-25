@@ -150,13 +150,14 @@ const
     ## OSC/DCS string on terminals that ignore CAN there. Harmless in the
     ## ground state.
 
-  AbortFrameSeq* = AbortPartialSeq & Osc8Reset & SyncOutputDisable
+  AbortFrameSeq* = Osc8Reset & SyncOutputDisable
     ## Sent before the next frame or clear after a failed write, which may
-    ## have stopped partway: aborts a half-sent escape sequence, closes an
-    ## OSC 8 link and ends the synchronized output block a wrapped frame
-    ## opened. The SGR reset comes with the clear (`ResetAndClearScreenSeq`).
+    ## have stopped partway: closes an OSC 8 link and ends the synchronized
+    ## output block a wrapped frame opened. The abort comes from the write
+    ## procs (output_stream.nim), the SGR reset from the clear
+    ## (`ResetAndClearScreenSeq`).
 
-  AbortFrameKeepSyncSeq* = AbortPartialSeq & Osc8Reset
+  AbortFrameKeepSyncSeq* = Osc8Reset
     ## `AbortFrameSeq` without `SyncOutputDisable`, sent instead when the app
     ## enabled synchronized output itself: frames are then not wrapped, and
     ## the app's block must stay open.
@@ -668,10 +669,10 @@ proc writeAllBlocking*(
   ## one try that never waits.
   ##
   ## `writeStdoutBlocking` (async/async_io.nim) and the sync `writeWithRetry`
-  ## (terminal.nim) both delegate here through `writeAllOrAbort`; the async
-  ## `writeStdoutAsync` stays separate because it must `await` rather than
-  ## block. Uses the shared `classifyWriteResult`/`WriteMaxBlockedWaits` policy
-  ## above.
+  ## (terminal.nim) both delegate here through `writeStream` in
+  ## output_stream.nim; the async `writeStdoutAsync` stays separate because it
+  ## must `await` rather than block. Uses the shared
+  ## `classifyWriteResult`/`WriteMaxBlockedWaits` policy above.
   if data.len == 0:
     return 0
 
@@ -727,18 +728,6 @@ proc writeAllBlocking*(
     discard
 
   result = total
-
-proc writeAllOrAbort*(fd: cint, data: string): int =
-  ## `writeAllBlocking`, followed by `AbortPartialSeq` if the write stopped
-  ## partway, so a half-sent escape sequence cannot swallow the bytes that
-  ## come next. The abort gets one try that never waits: the write has just
-  ## given up, so on a wedged tty another full wait budget would only double the
-  ## stall, and a failed frame or clear marks the screen unknown, so the next
-  ## one starts with the abort anyway (`abortPrefix`). Returns the number of
-  ## bytes of `data` written. Never raises.
-  result = writeAllBlocking(fd, data)
-  if result > 0 and result < data.len:
-    discard writeAllBlocking(fd, AbortPartialSeq, maxBlockedWaits = 1)
 
 proc wrapWithSyncOutput*(output: string): string =
   ## Wrap output string with synchronized output sequences
@@ -984,9 +973,9 @@ template abortPrefix*(terminal: typed): string =
 template restorePrefix*(terminal: typed): string =
   ## Goes first when `cleanup` or `suspend` hands the terminal back to the
   ## shell. While the screen is unknown, a failed write may have left an
-  ## escape sequence, an OSC 8 link, SGR attributes or a synchronized output
-  ## block open, so this is `abortPrefix` plus an SGR reset; the restore
-  ## sequences that follow are then not swallowed. Else "".
+  ## OSC 8 link, SGR attributes or a synchronized output block open (the write
+  ## procs abort a half-sent escape sequence), so this is `abortPrefix` plus an
+  ## SGR reset. Else "".
   block:
     if terminal.screenUnknown:
       terminal.abortPrefix & "\e[0m"
@@ -996,8 +985,8 @@ template restorePrefix*(terminal: typed): string =
 template frameBytes*(terminal: typed, rawOutput: string): string =
   ## The bytes to write for a frame built as `rawOutput`, or "" when it is
   ## empty. Wraps it in synchronized output unless the app enabled that mode
-  ## itself. The abort prefix goes before the wrap, so it reaches a sequence
-  ## the failed write left open before anything else does.
+  ## itself. The abort prefix goes before the wrap, so it ends the
+  ## synchronized output block the failed write left open, not the new one.
   block:
     let raw = rawOutput
     if raw.len == 0:

@@ -22,6 +22,7 @@ import ../core/[geometry, colors, buffer, terminal_common, errors]
 from async_io import
   AsyncInputReader, clearPendingByteAsync, tryWriteAsync, writeOrRaiseAsync,
   writeStdoutAsync, tryWriteBlocking, writeOrRaiseBlocking
+from ../core/output_stream import setPendingAbort
 
 type
   AsyncTerminal* = ref object ## Async terminal interface for screen management
@@ -778,6 +779,9 @@ proc resumeAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.asy
   ## contract so the pending-byte invariant survives the round trip.
   if not terminal.isSuspended:
     return # Not suspended
+
+  # Another program had the terminal and may have left a sequence open.
+  setPendingAbort()
 
   # Restore saved state. `restoreSuspendedFeaturesAsync` is the async twin of
   # the shared `restoreSuspendedFeatures` template; it cannot thread the reader
