@@ -635,7 +635,7 @@ proc tryWriteFrame(terminal: Terminal, buffer: Buffer, force: bool): bool =
   ## reference, no copy), so this stays zero-copy for the adopt path.
   try:
     let rawOutput =
-      if force or terminal.lastBuffer.area.isEmpty:
+      if needsFullRender(terminal.lastBuffer, buffer, force):
         buildFullRenderOutput(buffer)
       else:
         buildDifferentialOutput(terminal.lastBuffer, buffer)

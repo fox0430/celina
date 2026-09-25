@@ -592,6 +592,14 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
   if lastStyle != defaultStyle():
     result.add(resetSequence())
 
+proc needsFullRender*(oldBuffer, newBuffer: Buffer, force: bool): bool {.inline.} =
+  ## Whether a frame must be a self-contained full render instead of a diff.
+  ## A diff is only valid when `oldBuffer` is what the screen shows. After a
+  ## size change (including the first frame, when `oldBuffer` is empty) the
+  ## terminal may have cropped or reflowed it, so the frame clears and redraws.
+  ## Shared by every draw path so `draw` and `drawWithCursor` agree.
+  force or oldBuffer.area != newBuffer.area
+
 # Low-level write retry policy and classification
 # Shared by the sync (`writeWithRetry` in terminal.nim), the blocking async-mode
 # (`writeStdoutBlocking` in async/async_io.nim) and the async (`writeStdoutAsync`,
@@ -818,35 +826,10 @@ proc buildOutputWithCursor*(
   var updatedLastCursorStyle = lastCursorStyle
 
   # First, build the buffer diff output
-  if force or oldBuffer.area != newBuffer.area:
-    # Use full render for different sizes
-    var currentHyperlink = ""
-    for y in 0 ..< newBuffer.area.height:
-      for x in 0 ..< newBuffer.area.width:
-        let cell = newBuffer[x, y]
-        # Render if cell has non-default symbol, foreground, background, or hyperlink
-        if cell.symbol != " " or cell.style.fg.kind != Default or
-            cell.style.bg.kind != Default or cell.hyperlink.len > 0:
-          output.add(makeCursorPositionSeq(x, y))
-
-          # Handle hyperlink state change
-          if cell.hyperlink != currentHyperlink:
-            if currentHyperlink.len > 0:
-              output.add(Osc8Reset)
-            if cell.hyperlink.len > 0:
-              output.add(makeHyperlinkStartSeq(cell.hyperlink))
-            currentHyperlink = cell.hyperlink
-
-          let styleSeq = cell.style.toAnsiSequence()
-          if styleSeq.len > 0:
-            output.add(styleSeq)
-          output.add(cell.symbol)
-          if styleSeq.len > 0:
-            output.add(resetSequence())
-
-    # Close any open hyperlink
-    if currentHyperlink.len > 0:
-      output.add(Osc8Reset)
+  if needsFullRender(oldBuffer, newBuffer, force):
+    # Same full render as `draw`: it clears the screen itself, so it does not
+    # depend on what the screen showed before.
+    output.add(buildFullRenderOutput(newBuffer))
   else:
     # Use differential rendering
     output.add(buildDifferentialOutput(oldBuffer, newBuffer))

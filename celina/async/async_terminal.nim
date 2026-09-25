@@ -776,7 +776,7 @@ proc drawAsync*(
     terminal: AsyncTerminal, buffer: Buffer, force: bool = false
 ) {.async.} =
   ## Draw a buffer to the terminal asynchronously
-  if force or terminal.lastBuffer.area.isEmpty:
+  if needsFullRender(terminal.lastBuffer, buffer, force):
     await terminal.renderFullAsync(buffer)
   else:
     await terminal.renderAsync(buffer)
