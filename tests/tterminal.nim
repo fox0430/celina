@@ -971,3 +971,87 @@ suite "Terminal Module Tests":
         check output == EmergencyResetSeq & EmergencyResetSeq
       else:
         skip()
+
+  suite "Terminal.clearScreen":
+    test "resets SGR, clears, and records a blank screen at the current size":
+      when defined(posix):
+        let p = redirectStdoutToPipe()
+        if p.saved == -1:
+          skip()
+        defer:
+          restoreStdout(p)
+
+        let terminal = newTerminal()
+        terminal.size = size(10, 3)
+        terminal.lastBuffer = newBuffer(4, 2)
+        terminal.lastBuffer[0, 0] = cell("x")
+
+        terminal.clearScreen()
+
+        check readFromPipe(p.rfd, 4096) == ResetAndClearScreenSeq
+        check terminal.lastBuffer == newBuffer(10, 3)
+      else:
+        skip()
+
+    test "the next draw writes only the cells that are not blank":
+      when defined(posix):
+        let p = redirectStdoutToPipe()
+        if p.saved == -1:
+          skip()
+        defer:
+          restoreStdout(p)
+
+        let terminal = newTerminal()
+        terminal.size = size(10, 3)
+        terminal.clearScreen()
+        discard readFromPipe(p.rfd, 4096)
+
+        var frame = newBuffer(10, 3)
+        frame[2, 1] = cell("x")
+        terminal.draw(frame)
+        let output = readFromPipe(p.rfd, 4096)
+
+        check output ==
+          wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), frame))
+        check not output.contains(ClearScreenSeq)
+      else:
+        skip()
+
+    test "a failed clear raises and makes the next draw a full render":
+      when defined(posix):
+        let terminal = newTerminal()
+        terminal.size = size(10, 3)
+        terminal.lastBuffer = newBuffer(10, 3)
+
+        # A read-only fd makes the write fail with EBADF.
+        stdout.flushFile()
+        let savedStdout = dup(STDOUT_FILENO)
+        let roFd = posix.open("/dev/null", O_RDONLY)
+        require savedStdout >= 0
+        require roFd >= 0
+        var raised = false
+        try:
+          discard dup2(roFd, STDOUT_FILENO)
+          terminal.clearScreen()
+        except IOError:
+          raised = true
+        finally:
+          discard dup2(savedStdout, STDOUT_FILENO)
+          discard close(savedStdout)
+          discard close(roFd)
+        check raised
+
+        let p = redirectStdoutToPipe()
+        if p.saved == -1:
+          skip()
+        defer:
+          restoreStdout(p)
+
+        var frame = newBuffer(10, 3)
+        frame[2, 1] = cell("x")
+        terminal.draw(frame)
+
+        check readFromPipe(p.rfd, 4096) ==
+          wrapWithSyncOutput(buildFullRenderOutput(frame))
+      else:
+        skip()

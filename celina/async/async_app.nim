@@ -180,10 +180,10 @@ proc setupAsync(app: AsyncApp) {.async.} =
     await app.terminal.enableFocusEventsAsync()
 
   await hideCursorAsync()
-  await clearScreenAsync()
+  await app.terminal.clearScreenAsync()
 
-  # The screen was just cleared, so the first frame must not diff against the
-  # buffer left by a previous run.
+  # Redundant: clearScreen recorded the blank screen, so a diff would suffice.
+  # The forced frame clears the screen again until forceNextRender is removed.
   app.state.forceNextRender = true
   # Idle time counts from this run's start, not from `new` or a previous run.
   app.timings.lastEventTime = getMonoTime()
@@ -202,8 +202,8 @@ proc handleResizeAsync(app: AsyncApp) {.async.} =
   app.terminal.updateSize()
   app.renderer.resize()
   # Clear screen to avoid artifacts from old content
-  await clearScreenAsync()
-  # Force full render on next frame to ensure clean redraw
+  await app.terminal.clearScreenAsync()
+  # Redundant with clearScreen, as in setup
   app.state.forceNextRender = true
 
 proc dispatchEventAsync*(app: AsyncApp, event: Event): Future[EventResult] {.async.} =

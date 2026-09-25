@@ -144,10 +144,10 @@ proc setup(app: App) =
     app.terminal.enableFocusEvents()
 
   terminal.hideCursor()
-  terminal.clearScreen()
+  app.terminal.clearScreen()
 
-  # The screen was just cleared, so the first frame must not diff against the
-  # buffer left by a previous run.
+  # Redundant: clearScreen recorded the blank screen, so a diff would suffice.
+  # The forced frame clears the screen again until forceNextRender is removed.
   app.state.forceNextRender = true
   # Idle time counts from this run's start, not from `new` or a previous run.
   app.timings.lastEventTime = getMonoTime()
@@ -157,8 +157,8 @@ proc handleResize(app: App) =
   app.terminal.updateSize()
   app.renderer.resize()
   # Clear screen to avoid artifacts from old content
-  terminal.clearScreen()
-  # Force full render on next frame to ensure clean redraw
+  app.terminal.clearScreen()
+  # Redundant with clearScreen, as in setup
   app.state.forceNextRender = true
 
 proc dispatchEvent*(app: App, event: Event): EventResult =
