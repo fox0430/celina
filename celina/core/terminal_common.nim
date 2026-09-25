@@ -527,29 +527,9 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
 
   var lastStyle = defaultStyle()
   var lastHyperlink = ""
-  var lastNonEmptyX = -1
 
   for y in 0 ..< buffer.area.height:
-    var lineHasContent = false
-    var lineBuffer = ""
-    lastNonEmptyX = -1
-
-    # Check if line has any content
-    for x in 0 ..< buffer.area.width:
-      let cell = buffer[x, y]
-      if not cell.isEmpty or cell.style != defaultStyle() or cell.hyperlink.len > 0:
-        lineHasContent = true
-        break
-
-    if not lineHasContent:
-      # For empty lines, still need to clear them if they had content before
-      # Add minimal clear sequence for the line
-      result.add(makeCursorPositionSeq(buffer.area.x, buffer.area.y + y))
-      result.add(ClearToEndOfLineSeq)
-      continue
-
-    # Position cursor at start of line
-    result.add(makeCursorPositionSeq(buffer.area.x, buffer.area.y + y))
+    var cursorX = -1 # Column the cursor is at on this line; -1 = not positioned
 
     for x in 0 ..< buffer.area.width:
       let cell = buffer[x, y]
@@ -558,31 +538,40 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
       # glyph already advanced the cursor two columns. A space here would shift
       # the rest of the line right. (Blanks hold " ", so they skip this.)
       if cell.isShadow:
+        if cursorX == x:
+          cursorX = x + 1
         continue
 
-      # Update hyperlink if changed
+      # The cleared screen already shows a default blank, so skip it and
+      # reposition before the next drawn cell. A blank with any style or a
+      # hyperlink is still drawn.
+      if cell.symbol == " " and cell.style == defaultStyle() and
+          cell.hyperlink.len == 0:
+        continue
+
+      if cursorX != x:
+        result.add(makeCursorPositionSeq(buffer.area.x + x, buffer.area.y + y))
+
+      # Update hyperlink if changed. Skipped cells are never written, so an
+      # open hyperlink or style carried across a cursor jump does not reach them.
       if cell.hyperlink != lastHyperlink:
         if lastHyperlink.len > 0:
-          lineBuffer.add(Osc8Reset)
+          result.add(Osc8Reset)
         if cell.hyperlink.len > 0:
-          lineBuffer.add(makeHyperlinkStartSeq(cell.hyperlink))
+          result.add(makeHyperlinkStartSeq(cell.hyperlink))
         lastHyperlink = cell.hyperlink
 
       # Update style if changed
       if cell.style != lastStyle:
         if lastStyle != defaultStyle():
-          lineBuffer.add(resetSequence())
+          result.add(resetSequence())
         if cell.style != defaultStyle():
-          lineBuffer.add(cell.style.toAnsiSequence())
+          result.add(cell.style.toAnsiSequence())
         lastStyle = cell.style
 
       # Add the character
-      lineBuffer.add(cell.symbol)
-      lastNonEmptyX = x
-
-    # Add line to result
-    if lastNonEmptyX >= 0:
-      result.add(lineBuffer)
+      result.add(cell.symbol)
+      cursorX = x + 1
 
   # Close any open hyperlink at the end
   if lastHyperlink.len > 0:

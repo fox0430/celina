@@ -495,6 +495,45 @@ suite "Terminal Common Module Tests":
       let output = buildFullRenderOutput(buffer)
       check output.contains("あいC")
 
+    test "buildFullRenderOutput skips default blank cells":
+      # The screen was just cleared, so default blanks need no output; the
+      # cursor jumps over them to the next drawn cell.
+      var buffer = newBuffer(10, 3)
+      buffer[0, 0] = cell("A", defaultStyle())
+      buffer[5, 2] = cell("B", defaultStyle())
+
+      let output = buildFullRenderOutput(buffer)
+      check output.endsWith(
+        makeCursorPositionSeq(0, 0) & "A" & makeCursorPositionSeq(5, 2) & "B"
+      )
+      check " " notin output
+
+    test "buildFullRenderOutput repositions only across skipped blanks":
+      # "あ" spans columns 0-1, so "B" follows without a cursor move; the
+      # blank at column 3 is skipped, so "C" needs one.
+      var buffer = newBuffer(8, 1)
+      buffer.setString(0, 0, "あB")
+      buffer.setString(4, 0, "C")
+
+      let output = buildFullRenderOutput(buffer)
+      check output.endsWith(
+        makeCursorPositionSeq(0, 0) & "あB" & makeCursorPositionSeq(4, 0) & "C"
+      )
+
+    test "buildFullRenderOutput draws styled and linked blank cells":
+      var buffer = newBuffer(10, 1)
+      let background = Style(bg: color(Color.Blue))
+      let underlined = Style(modifiers: {Underline})
+      buffer[1, 0] = cell(" ", background)
+      buffer[2, 0] = cell(" ", underlined)
+      buffer[4, 0] = cell(" ", defaultStyle(), "https://example.com")
+
+      let output = buildFullRenderOutput(buffer)
+      check makeCursorPositionSeq(1, 0) & background.toAnsiSequence() & " " in output
+      check underlined.toAnsiSequence() & " " in output
+      check makeCursorPositionSeq(4, 0) & makeHyperlinkStartSeq("https://example.com") in
+        output
+
   suite "Utility Functions":
     test "isTerminalInteractive detection":
       # This may vary in CI/test environments
