@@ -69,6 +69,12 @@ jobs:
       - name: Install chronos
         run: nimble install chronos -y
 
+      - name: Check the debug build
+        run: |
+          for backend in none asyncdispatch chronos; do
+            nim check -d:celinaDebug -d:asyncBackend=$backend tests/all_tests.nim
+          done
+
       - name: Run tests
         run: nimble test -y
 

@@ -110,7 +110,7 @@ suite "Stdout Write Serialization":
     while stdoutWriteWaiters.len > 0:
       discard stdoutWriteWaiters.popFirst()
     stdoutWriteLocked = false
-    clearPendingAbort()
+    clearPendingReset()
 
   test "tryAcquireStdoutLockImmediate grants immediately when the lock is free":
     check not stdoutWriteLocked
@@ -266,7 +266,7 @@ suite "Stdout Write Serialization":
         fut.cancelSoon()
         waitFor fut.join()
         elapsed = epochTime() - start
-        pendingAfterCancel = abortPending()
+        pendingAfterCancel = resetPending()
         var buf = newString(65536)
         while posix.read(fds[0], addr buf[0], buf.len) > 0:
           discard
@@ -285,7 +285,7 @@ suite "Stdout Write Serialization":
       check pendingAfterCancel
       check n == 1
       check tail == AbortPartialSeq & "x"
-      check not abortPending()
+      check not resetPending()
       check not stdoutWriteLocked
 
 suite "Blocking Output Functions":
@@ -326,24 +326,24 @@ suite "Blocking Output Functions":
     else:
       skip()
 
-suite "Pending abort":
-  # A write cut off partway whose abort could not go out either leaves the
-  # abort pending in output_stream; the next write of any kind sends it first.
+suite "Pending reset":
+  # A write cut off partway whose reset could not go out either leaves the reset
+  # pending in output_stream; the next write of any kind sends it first.
 
   teardown:
-    clearPendingAbort()
+    clearPendingReset()
 
-  test "writeStdoutAsync sends a pending abort before its data":
+  test "writeStdoutAsync sends a pending reset before its data":
     when defined(linux):
       var
-        n = 0
-        m = 0
+        n = -1
+        m = -1
         pendingAfterCut = false
       let output = captureCutStdout(
         4,
         proc() =
           n = waitFor writeStdoutAsync("\e[12;34H")
-          pendingAfterCut = abortPending()
+          pendingAfterCut = resetPending()
           m = waitFor writeStdoutAsync("x"),
         failedWrites = 2,
       )
@@ -351,19 +351,19 @@ suite "Pending abort":
       check pendingAfterCut
       check m == 1
       check output == "\e[12" & AbortPartialSeq & "x"
-      check not abortPending()
+      check not resetPending()
     else:
       skip()
 
-  test "writeStdoutAsync writes nothing while the pending abort cannot go out":
+  test "writeStdoutAsync writes nothing while the pending reset cannot go out":
     var n = -1
     withFailingStdout(
       proc() =
-        abortPartialWrite()
+        markPartialWrite({})
         n = waitFor writeStdoutAsync("x")
     )
     check n == 0
-    check abortPending()
+    check resetPending()
 
     var m = -1
     let output = captureStdout(
@@ -372,9 +372,9 @@ suite "Pending abort":
     )
     check m == 1
     check output == AbortPartialSeq & "y"
-    check not abortPending()
+    check not resetPending()
 
-  test "the blocking writes send an abort a cut async write left pending":
+  test "the blocking writes send a reset a cut async write left pending":
     when defined(linux):
       let output = captureCutStdout(
         4,
@@ -384,7 +384,7 @@ suite "Pending abort":
         failedWrites = 2,
       )
       check output == "\e[12" & AbortPartialSeq & "x"
-      check not abortPending()
+      check not resetPending()
     else:
       skip()
 

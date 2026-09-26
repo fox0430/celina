@@ -148,19 +148,9 @@ const
   AbortPartialSeq* = "\x18\e\\"
     ## CAN aborts an escape sequence a write left half-sent; ST closes an
     ## OSC/DCS string on terminals that ignore CAN there. Harmless in the
-    ## ground state.
-
-  AbortFrameSeq* = Osc8Reset & SyncOutputDisable
-    ## Sent before the next frame or clear after a failed write, which may
-    ## have stopped partway: closes an OSC 8 link and ends the synchronized
-    ## output block a wrapped frame opened. The abort comes from the write
-    ## procs (output_stream.nim), the SGR reset from the clear
-    ## (`ResetAndClearScreenSeq`).
-
-  AbortFrameKeepSyncSeq* = Osc8Reset
-    ## `AbortFrameSeq` without `SyncOutputDisable`, sent instead when the app
-    ## enabled synchronized output itself: frames are then not wrapped, and
-    ## the app's block must stay open.
+    ## ground state. Part of every reset that the output stream marks for a cut
+    ## write (core/output_stream.nim); a reset a caller names for itself does
+    ## not have to include it.
 
   EmergencyResetSeq* =
     AbortPartialSeq & "\e[0m" & Osc8Reset & SyncOutputDisable & FocusEventsDisable &
@@ -821,6 +811,31 @@ proc isTerminalInteractive*(): bool =
 
 # Cursor-aware rendering functions
 
+proc appendCursorCommands*(
+    output: var string,
+    cursorX, cursorY: int,
+    cursorVisible: bool,
+    cursorStyle: CursorStyle,
+    lastCursorStyle: CursorStyle,
+): CursorStyle =
+  ## Append the cursor commands to `output` and return the cursor style the
+  ## terminal now shows: `lastCursorStyle`, unless a new DECSCUSR went out (so
+  ## it is sent again after a frame that did not go out in full).
+  ##
+  ## Shared by `buildOutputWithCursor` and the screen state's `planFrame`, so
+  ## the cursor bytes are built in one place. Appending keeps them inside a
+  ## synchronized output block when the caller wrapped `output` first.
+  result = lastCursorStyle
+  if cursorVisible and cursorX >= 0 and cursorY >= 0:
+    # Only apply cursor style if it has changed to avoid interrupting blinking
+    if cursorStyle != lastCursorStyle:
+      output.add(getCursorStyleSeq(cursorStyle))
+      result = cursorStyle
+    output.add(ShowCursorSeq)
+    output.add(makeCursorPositionSeq(cursorX, cursorY))
+  else:
+    output.add(HideCursorSeq)
+
 proc buildOutputWithCursor*(
     oldBuffer, newBuffer: Buffer,
     cursorX, cursorY: int,
@@ -835,30 +850,21 @@ proc buildOutputWithCursor*(
   ##
   ## Returns a tuple with the output string and the updated cursor style.
   ## Caller is responsible for tracking the lastCursorStyle state.
-  var output = ""
-  var updatedLastCursorStyle = lastCursorStyle
-
+  ## The high-level draw paths plan their frame in screen_state.nim instead;
+  ## this stays the standalone low-level builder.
   # First, build the buffer diff output
   if needsFullRender(oldBuffer, newBuffer, force):
     # Same full render as `draw`: it clears the screen itself, so it does not
     # depend on what the screen showed before.
-    output.add(buildFullRenderOutput(newBuffer))
+    result.output = buildFullRenderOutput(newBuffer)
   else:
     # Use differential rendering
-    output.add(buildDifferentialOutput(oldBuffer, newBuffer))
+    result.output = buildDifferentialOutput(oldBuffer, newBuffer)
 
   # Then append cursor commands to the same output string
-  if cursorVisible and cursorX >= 0 and cursorY >= 0:
-    # Only apply cursor style if it has changed to avoid interrupting blinking
-    if cursorStyle != updatedLastCursorStyle:
-      output.add(getCursorStyleSeq(cursorStyle))
-      updatedLastCursorStyle = cursorStyle
-    output.add(ShowCursorSeq)
-    output.add(makeCursorPositionSeq(cursorX, cursorY))
-  else:
-    output.add(HideCursorSeq)
-
-  result = (output: output, newLastCursorStyle: updatedLastCursorStyle)
+  result.newLastCursorStyle = appendCursorCommands(
+    result.output, cursorX, cursorY, cursorVisible, cursorStyle, lastCursorStyle
+  )
 
 proc supportsAnsi*(): bool =
   ## Check if terminal supports ANSI escape sequences
@@ -939,102 +945,3 @@ template restoreSuspendedFeatures*(terminal: typed) =
     terminal.enableFocusEvents()
   if terminal.suspendState.suspendedSyncOutput:
     terminal.enableSyncOutput()
-
-template markScreenCleared*(terminal: typed) =
-  ## Record that the screen was just cleared: `lastBuffer` becomes blank at the
-  ## current size, so the next draw diffs against blanks and writes only the
-  ## cells that are not blank.
-  terminal.lastBuffer = newBuffer(terminal.size.width, terminal.size.height)
-  terminal.screenUnknown = false
-
-template markScreenUnknown*(terminal: typed) =
-  ## Record that what the screen shows is unknown: a write failed and may have
-  ## stopped partway, or another program had the terminal. `lastBuffer` is no
-  ## longer used: the next frame is a full render and the next frame or clear
-  ## starts with `abortPrefix`. A frame or clear that is written in full
-  ## makes the screen known again.
-  terminal.screenUnknown = true
-
-template frameForce*(terminal: typed, force: bool): bool =
-  ## The `force` to build the next frame with. While the screen is unknown, a
-  ## diff against `lastBuffer` is wrong, so the frame is a full render.
-  force or terminal.screenUnknown
-
-template abortPrefix*(terminal: typed): string =
-  ## "" while the screen is known. Else `AbortFrameSeq`, or
-  ## `AbortFrameKeepSyncSeq` when the app enabled synchronized output itself.
-  ## Goes first in the next frame or clear.
-  (
-    if not terminal.screenUnknown: ""
-    elif terminal.syncOutputEnabled: AbortFrameKeepSyncSeq
-    else: AbortFrameSeq
-  )
-
-template restorePrefix*(terminal: typed): string =
-  ## Goes first when `cleanup` or `suspend` hands the terminal back to the
-  ## shell. While the screen is unknown, a failed write may have left an
-  ## OSC 8 link, SGR attributes or a synchronized output block open (the write
-  ## procs abort a half-sent escape sequence), so this is `abortPrefix` plus an
-  ## SGR reset. Else "".
-  block:
-    if terminal.screenUnknown:
-      terminal.abortPrefix & "\e[0m"
-    else:
-      ""
-
-template frameBytes*(terminal: typed, rawOutput: string): string =
-  ## The bytes to write for a frame built as `rawOutput`, or "" when it is
-  ## empty. Wraps it in synchronized output unless the app enabled that mode
-  ## itself. The abort prefix goes before the wrap, so it ends the
-  ## synchronized output block the failed write left open, not the new one.
-  block:
-    let raw = rawOutput
-    if raw.len == 0:
-      ""
-    elif not terminal.screenUnknown:
-      # No prefix: skip the concat so the frame is not copied again.
-      if terminal.syncOutputEnabled:
-        raw
-      else:
-        wrapWithSyncOutput(raw)
-    elif terminal.syncOutputEnabled:
-      terminal.abortPrefix & raw
-    else:
-      terminal.abortPrefix & wrapWithSyncOutput(raw)
-
-template clearLastBufferForResume*(terminal: typed) =
-  ## After resume the screen is unknown (another program had the terminal), so
-  ## the next draw is a full redraw.
-  terminal.markScreenUnknown()
-  terminal.suspendState.isSuspended = false
-
-template adoptLastBufferImpl*(terminal: typed, buffer: var Buffer) =
-  ## Adopt `buffer` as the new `lastBuffer` without the per-frame deep copy.
-  ##
-  ## In steady state both buffers cover the same area, so we `swap` (zero-copy):
-  ## `lastBuffer` takes the freshly rendered content and the caller's `buffer`
-  ## receives the previous frame's storage (recycling the allocation). This is
-  ## only safe when the caller fully re-fills `buffer` before the next render,
-  ## so it is reserved for renderer-owned buffers (the `*Adopt` draw variants);
-  ## the public `draw`/`drawWithCursor` keep copy semantics and never call this.
-  ##
-  ## When the areas differ (first frame, after a resize) we fall back to a copy
-  ## so the caller is never handed a wrong-sized buffer.
-  ##
-  ## Only called once the frame is on screen, so the screen is known again.
-  ##
-  ## Shared by the sync (`terminal.nim`) and async (`async_terminal.nim`)
-  ## backends so the swap/copy contract lives in exactly one place.
-  if terminal.lastBuffer.area == buffer.area:
-    swap(terminal.lastBuffer, buffer)
-  else:
-    terminal.lastBuffer = buffer
-  terminal.lastBuffer.clearDirty()
-  terminal.screenUnknown = false
-
-template commitLastBuffer*(terminal: typed, buffer: Buffer) =
-  ## Copy `buffer` into `lastBuffer` once its frame is on screen, so the screen
-  ## is known again. The copying twin of `adoptLastBufferImpl`.
-  terminal.lastBuffer = buffer
-  terminal.lastBuffer.clearDirty()
-  terminal.screenUnknown = false
