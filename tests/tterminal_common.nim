@@ -4,7 +4,6 @@ import std/[unittest, strutils, times, posix]
 
 import ../celina/core/terminal_common
 import ../celina/core/[geometry, colors, buffer]
-import ./stdout_capture
 
 suite "Terminal Common Module Tests":
   suite "ANSI Sequence Constants":
@@ -1336,38 +1335,9 @@ suite "Terminal Common Module Tests":
       check posix.close(fds[0]) == 0
       check pollWritable(fds[1], 0) == wwError
 
-    test "writeAllOrAbort follows a write that stopped partway with the abort":
-      when defined(linux):
-        var n = 0
-        let output = captureCutStdout(
-          4,
-          proc() =
-            n = writeAllOrAbort(STDOUT_FILENO.cint, "\e[12;34H")
-            discard writeAllOrAbort(STDOUT_FILENO.cint, "x"),
-        )
-        check n == 4
-        # The abort goes out before the next write, so "x" is not swallowed
-        # by the half-sent CSI.
-        check output == "\e[12" & AbortPartialSeq & "x"
-      else:
-        skip()
-
-    test "writeAllOrAbort adds nothing to a full write or a write that sent nothing":
-      let output = captureStdout(
-        proc() =
-          discard writeAllOrAbort(STDOUT_FILENO.cint, "abc")
-      )
-      check output == "abc"
-
-      let roFd = posix.open("/dev/null", O_RDONLY)
-      check roFd >= 0
-      defer:
-        discard posix.close(roFd)
-      check writeAllOrAbort(roFd.cint, "abc") == 0
-
     test "writeAllBlocking with maxBlockedWaits = 1 gives up on a full fd without waiting":
-      # writeAllOrAbort sends its abort this way, so a wedged tty does not get
-      # a second ~2s wait budget.
+      # abortPartialWrite (output_stream) sends its abort this way, so a wedged
+      # tty does not get a second ~2s wait budget.
       var fds: array[2, cint]
       check posix.pipe(fds) == 0
       defer:

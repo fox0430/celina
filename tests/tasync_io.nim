@@ -4,8 +4,11 @@ import std/[unittest, posix, deques]
 
 import ../celina/async/async_backend
 import ../celina/async/async_io {.all.}
-import ../celina/core/terminal_common
+import ../celina/core/[terminal_common, output_stream]
 import ./stdout_capture
+
+when hasChronos:
+  import std/times
 
 suite "AsyncIO Module Import":
   test "module imports successfully":
@@ -107,6 +110,7 @@ suite "Stdout Write Serialization":
     while stdoutWriteWaiters.len > 0:
       discard stdoutWriteWaiters.popFirst()
     stdoutWriteLocked = false
+    clearPendingAbort()
 
   test "tryAcquireStdoutLockImmediate grants immediately when the lock is free":
     check not stdoutWriteLocked
@@ -236,6 +240,54 @@ suite "Stdout Write Serialization":
       check tail == AbortPartialSeq
       check not stdoutWriteLocked
 
+    test "a writeStdoutAsync cancelled on a full pipe leaves the abort pending without waiting":
+      # The pipe stays full, so the abort after the cut write cannot go out. It
+      # gets one try that never waits instead of another ~2s budget that would
+      # block the loop, and the next write sends it first.
+      check not stdoutWriteLocked
+      var fds: array[2, cint]
+      require pipe(fds) == 0
+      for fd in fds:
+        discard fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) or O_NONBLOCK)
+      stdout.flushFile()
+      let saved = dup(STDOUT_FILENO)
+      require saved >= 0
+      var
+        tail = ""
+        elapsed = 0.0
+        pendingAfterCancel = false
+        n = -1
+        fut: Future[int]
+      try:
+        discard dup2(fds[1], STDOUT_FILENO)
+        fut = writeStdoutAsync(newString(1 shl 20))
+        check not fut.finished
+        let start = epochTime()
+        fut.cancelSoon()
+        waitFor fut.join()
+        elapsed = epochTime() - start
+        pendingAfterCancel = abortPending()
+        var buf = newString(65536)
+        while posix.read(fds[0], addr buf[0], buf.len) > 0:
+          discard
+        n = waitFor writeStdoutAsync("x")
+        let r = posix.read(fds[0], addr buf[0], buf.len)
+        if r > 0:
+          tail = buf[0 ..< r]
+      finally:
+        discard dup2(saved, STDOUT_FILENO)
+        discard close(saved)
+        discard close(fds[0])
+        discard close(fds[1])
+
+      check fut.cancelled
+      check elapsed < 1.0
+      check pendingAfterCancel
+      check n == 1
+      check tail == AbortPartialSeq & "x"
+      check not abortPending()
+      check not stdoutWriteLocked
+
 suite "Blocking Output Functions":
   test "writeStdoutBlocking writes data":
     let bytesWritten = writeStdoutBlocking(".")
@@ -271,6 +323,68 @@ suite "Blocking Output Functions":
           tryWriteBlocking("x"),
       )
       check output == "\e[12" & AbortPartialSeq & "x"
+    else:
+      skip()
+
+suite "Pending abort":
+  # A write cut off partway whose abort could not go out either leaves the
+  # abort pending in output_stream; the next write of any kind sends it first.
+
+  teardown:
+    clearPendingAbort()
+
+  test "writeStdoutAsync sends a pending abort before its data":
+    when defined(linux):
+      var
+        n = 0
+        m = 0
+        pendingAfterCut = false
+      let output = captureCutStdout(
+        4,
+        proc() =
+          n = waitFor writeStdoutAsync("\e[12;34H")
+          pendingAfterCut = abortPending()
+          m = waitFor writeStdoutAsync("x"),
+        failedWrites = 2,
+      )
+      check n == 4
+      check pendingAfterCut
+      check m == 1
+      check output == "\e[12" & AbortPartialSeq & "x"
+      check not abortPending()
+    else:
+      skip()
+
+  test "writeStdoutAsync writes nothing while the pending abort cannot go out":
+    var n = -1
+    withFailingStdout(
+      proc() =
+        abortPartialWrite()
+        n = waitFor writeStdoutAsync("x")
+    )
+    check n == 0
+    check abortPending()
+
+    var m = -1
+    let output = captureStdout(
+      proc() =
+        m = waitFor writeStdoutAsync("y")
+    )
+    check m == 1
+    check output == AbortPartialSeq & "y"
+    check not abortPending()
+
+  test "the blocking writes send an abort a cut async write left pending":
+    when defined(linux):
+      let output = captureCutStdout(
+        4,
+        proc() =
+          discard waitFor writeStdoutAsync("\e[12;34H")
+          tryWriteBlocking("x"),
+        failedWrites = 2,
+      )
+      check output == "\e[12" & AbortPartialSeq & "x"
+      check not abortPending()
     else:
       skip()
 

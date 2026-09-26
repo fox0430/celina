@@ -4,7 +4,7 @@ import
   tapp, tapp_windows, tcelina, terror_handling, tterminal_common, tbutton, ttable,
   ttabs, tprogress, tcursor, tfps, trenderer, ttext, tlist, tinput, tpanel, tscrollbar,
   tescape_sequence_logic, tkey_logic, tmouse_logic, tutf8_utils, tconfig, tpaste,
-  ttick_common, twidget_dispatch, tfps_render_control, twith_builders
+  ttick_common, twidget_dispatch, tfps_render_control, twith_builders, toutput_stream
 
 import ../celina/async/async_backend
 

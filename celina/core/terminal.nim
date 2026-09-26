@@ -18,6 +18,8 @@
 import std/[termios, posix]
 
 import geometry, colors, buffer, errors, terminal_common
+from output_stream import
+  sendPendingAbort, abortPartialWrite, writeStream, setPendingAbort
 from events import clearPendingByte, setStdinNonBlockingPinned
 
 export errors.TerminalError
@@ -181,17 +183,23 @@ proc disableRawMode*(terminal: Terminal) =
   terminal.rawModeEnabled = false
   clearPendingByte()
 
+proc c_fflush(f: File): cint {.importc: "fflush", header: "<stdio.h>".}
+  ## `flushFile` discards the result, so a failed flush would go unnoticed.
+
+proc c_clearerr(f: File) {.importc: "clearerr", header: "<stdio.h>".}
+
 # Safe write helper that handles EAGAIN
 proc writeWithRetry(data: string): bool =
   ## Write data with retry logic for EAGAIN/EINTR errors.
   ## Returns true once every byte is written, false if it gives up.
   ## This is a low-level helper that handles transient I/O errors.
   ##
-  ## First flushes the C stdio buffer so any buffered `stdout.write` data is
-  ## emitted before this direct fd write, preserving output order. Then delegates
-  ## the retry loop to the shared `writeAllOrAbort` in terminal_common (the same
-  ## loop the async-mode `writeStdoutBlocking` uses), which follows a write that
-  ## stopped partway with `AbortPartialSeq`.
+  ## Writes, in order: a pending abort (output_stream.nim), the C stdio buffer,
+  ## then `data`. Buffered `stdout.write` data came after the write that left
+  ## the abort pending and before this call, so it goes between the two. A
+  ## failed flush may have stopped inside a buffered escape sequence, so it is
+  ## followed by an abort too. `data` goes through the shared `writeStream`, as
+  ## in the async-mode `writeStdoutBlocking`.
   ## On EAGAIN `writeAllBlocking` waits for stdout to become writable via
   ## `pollWritable` rather than dropping data mid-escape-sequence — stdout can be
   ## non-blocking when fd 0/1 share an open file description and raw mode pinned
@@ -203,19 +211,19 @@ proc writeWithRetry(data: string): bool =
     # Early return for empty data
     return true
 
-  try:
-    stdout.flushFile()
-  except CatchableError as e:
+  if not sendPendingAbort():
+    return false
+
+  if c_fflush(stdout) != 0:
+    # stdio does not say how much went out; the abort is harmless if nothing did.
     when defined(celinaDebug):
-      stderr.writeLine("Warning: writeWithRetry flush failed: " & e.msg)
-    else:
-      discard e # Avoid "declared but not used" warning
-    return false
+      stderr.writeLine("Warning: writeWithRetry flush failed")
+    # The failure is handled here, so the app's next `stdout.write` must not
+    # raise on the error flag it left set.
+    c_clearerr(stdout)
+    abortPartialWrite()
 
-  if writeAllOrAbort(cint(stdout.getFileHandle()), data) != data.len:
-    return false
-
-  true
+  writeStream(data) == data.len
 
 proc tryWrite(data: string) =
   ## Try to write data, ignoring transient errors
@@ -657,6 +665,9 @@ proc resume*(terminal: Terminal) =
   ## After resume, call `draw(buffer, force = true)` to redraw the screen.
   if not terminal.isSuspended:
     return # Not suspended
+
+  # Another program had the terminal and may have left a sequence open.
+  setPendingAbort()
 
   # Restore saved state
   restoreSuspendedFeatures(terminal)

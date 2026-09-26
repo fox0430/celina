@@ -7,6 +7,7 @@ when defined(posix):
   import ./stdout_capture
 
 import ../celina/core/[terminal, terminal_common, geometry, colors, buffer, errors]
+import ../celina/core/output_stream
 
 when defined(posix):
   type StdoutPipe = tuple[saved: cint, rfd: cint]
@@ -908,6 +909,10 @@ suite "Terminal Module Tests":
         skip()
 
   suite "Writes cut off partway":
+    teardown:
+      # A failed check must not leave an abort pending for the next test.
+      clearPendingAbort()
+
     test "a control sequence cut off partway is aborted before the next write":
       when defined(linux):
         let output = captureCutStdout(
@@ -917,6 +922,49 @@ suite "Terminal Module Tests":
             hideCursor(),
         )
         check output == "\e[12" & AbortPartialSeq & HideCursorSeq
+      else:
+        skip()
+
+    test "a buffered escape sequence the stdio flush cut off is aborted":
+      when defined(linux):
+        let output = captureCutStdout(
+          4,
+          proc() =
+            stdout.write("\e[38;5;1m")
+            hideCursor(),
+        )
+        check output == "\e[38" & AbortPartialSeq & HideCursorSeq
+      else:
+        skip()
+
+    test "a stdio flush that failed does not make the next stdout.write raise":
+      when defined(linux):
+        let output = captureCutStdout(
+          4,
+          proc() =
+            stdout.write("\e[38;5;1m")
+            hideCursor()
+            stdout.write("s")
+            stdout.flushFile(),
+        )
+        check output == "\e[38" & AbortPartialSeq & HideCursorSeq & "s"
+      else:
+        skip()
+
+    test "an abort that could not go out goes before buffered stdout output":
+      when defined(linux):
+        # The abort after the cut write fails too, so it stays pending. "s" is
+        # buffered after the cut write, so the next write sends the abort
+        # before it flushes stdio.
+        let output = captureCutStdout(
+          4,
+          proc() =
+            setCursorPosition(33, 11)
+            stdout.write("s")
+            hideCursor(),
+          failedWrites = 2,
+        )
+        check output == "\e[12" & AbortPartialSeq & "s" & HideCursorSeq
       else:
         skip()
 
@@ -1061,6 +1109,11 @@ suite "Terminal Module Tests":
   suite "Unknown screen state":
     # A write that fails may have stopped partway, so the screen and the
     # terminal's parser state are unknown until a frame or clear goes out.
+    teardown:
+      # A failed check or a resume must not leave an abort pending for the
+      # next test.
+      clearPendingAbort()
+
     test "the screen state templates work outside the terminal module":
       # They are exported from terminal_common, so they must not need the
       # terminal module's private fields.
@@ -1210,6 +1263,23 @@ suite "Terminal Module Tests":
             terminal.render(next)
         )
         check diff == buildDifferentialOutput(frame, next)
+      else:
+        skip()
+
+    test "resume sends the abort before its first write":
+      when defined(posix):
+        let terminal = newTerminal()
+        discard captureStdout(
+          proc() =
+            terminal.suspend()
+        )
+        # Another program had the terminal and may have left a sequence open.
+        let resumed = captureStdout(
+          proc() =
+            terminal.resume()
+        )
+        check resumed == AbortPartialSeq & HideCursorSeq
+        check not abortPending()
       else:
         skip()
 
