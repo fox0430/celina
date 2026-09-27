@@ -69,6 +69,9 @@ jobs:
       - name: Install chronos
         run: nimble install chronos -y
 
+      - name: Install celina's dependencies
+        run: nimble install --depsOnly -y
+
       - name: Check the debug build
         run: |
           for backend in none asyncdispatch chronos; do
