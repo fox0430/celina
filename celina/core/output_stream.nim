@@ -120,7 +120,9 @@ when hasAsyncSupport:
     ## Async `writeStream` with the lock already held. Same reset/empty/stop
     ## contract, but yields (`await sleepMs`) instead of blocking and gives up
     ## after `WriteMaxBlockedWaits` no-progress attempts. Single proc to avoid
-    ## a per-write Future. Cancel propagates as `swPartial`; other errors are
+    ## a per-write Future. A chronos cancel is re-raised instead of swallowed,
+    ## so a caller's `finally` can record the stopped write (the frame paths
+    ## start their outcome at `swPartial` for exactly that); other errors are
     ## swallowed as a short count.
     if data.len == 0:
       return 0
