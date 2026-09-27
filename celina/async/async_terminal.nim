@@ -35,7 +35,7 @@ type
     bracketedPasteEnabled*: bool
     focusEventsEnabled*: bool
     syncOutputEnabled*: bool
-    screen*: ScreenState ## what the screen shows; see screen_state.nim
+    screen: ScreenState ## what the screen shows; see screen_state.nim
     stdinFd*: AsyncFD
     stdoutFd*: AsyncFD
     rawModeEnabled: bool # Track raw mode state internally
@@ -530,7 +530,9 @@ proc presentFrameAdopt(
   ## before the write (a `swap` in the steady state) and handed back to
   ## `asyncBuffer` on failure, so a task that mutates the grid during a
   ## flow-controlled write cannot desync `lastBuffer` from the bytes that went
-  ## out.
+  ## out. A staged write that sent nothing is handed back too, but counts as a
+  ## failure for the screen state: the grid was in play during the write, so
+  ## the next frame is a full render.
   var
     outcome = swPartial # a cancel mid-write counts as a partial write
     style = cursor.lastStyle
@@ -978,9 +980,9 @@ proc drawWithCursorAdoptAsync*(
   ## The frame is adopted before the write and handed back on a partial or
   ## cancelled write, so a concurrent task that mutates `asyncBuffer` during a
   ## flow-controlled write can no longer desync `lastBuffer` from the bytes
-  ## actually emitted. A write that stopped partway or was cancelled marks the
-  ## screen unknown, so the next frame is a full render; one that sent nothing
-  ## keeps it known.
+  ## actually emitted. A write that stopped partway, was cancelled, or sent
+  ## nothing marks the screen unknown, so the next frame is a full render (for
+  ## a write that sent nothing, the grid was in play during the write).
   ##
   ## Returns the updated lastCursorStyle value on success, or the original
   ## `lastCursorStyle` on failure.

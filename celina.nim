@@ -37,7 +37,6 @@
 ## - `geometry <celina/core/geometry.html>`_ — Geometric types for positioning and sizing
 ## - `layout <celina/core/layout.html>`_ — Constraint-based layout system
 ## - `renderer <celina/core/renderer.html>`_ — Differential rendering and terminal output
-## - `screen_state <celina/core/screen_state.html>`_ — What the terminal shows, and the frame protocol
 ## - `terminal <celina/core/terminal.html>`_ — Terminal control using ANSI escape sequences
 ## - `terminal_common <celina/core/terminal_common.html>`_ — Shared terminal algorithms and utilities
 ## - `windows <celina/core/windows.html>`_ — Window management with overlapping and focus support
@@ -66,9 +65,8 @@ import std/unicode
 
 import
   celina/core/[
-    geometry, colors, buffer, events, terminal, layout, errors, terminal_common,
-    screen_state, app, app_delegation, app_handlers, renderer, cursor, fps, windows,
-    borders,
+    geometry, colors, buffer, events, terminal, layout, errors, terminal_common, app,
+    app_delegation, app_handlers, renderer, cursor, fps, windows, borders,
   ]
 
 import celina/async/async_backend
@@ -76,9 +74,8 @@ import celina/async/async_backend
 export unicode
 
 export
-  geometry, colors, buffer, events, layout, terminal, errors, terminal_common,
-  screen_state, app, app_delegation, app_handlers, renderer, cursor, fps, windows,
-  borders
+  geometry, colors, buffer, events, layout, terminal, errors, terminal_common, app,
+  app_delegation, app_handlers, renderer, cursor, fps, windows, borders
 
 export async_backend, hasAsyncSupport, hasChronos, hasAsyncDispatch
 

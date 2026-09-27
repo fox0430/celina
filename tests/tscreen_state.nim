@@ -118,7 +118,7 @@ suite "Screen state: recording the outcome":
     check state.known
     check state.lastBuffer[1, 0].symbol == "x"
 
-  test "swNone keeps the screen known and lastBuffer unchanged":
+  test "a staged write that sent nothing still marks the screen unknown":
     var state = knownScreen(4, 2)
     var frame = newBuffer(4, 2)
     frame[1, 0] = cell("x")
@@ -127,8 +127,22 @@ suite "Screen state: recording the outcome":
     state.stage(plan, frame)
     state.finishAdopt(plan, frame, swNone)
 
-    # A write that sent nothing left the screen exactly as it was, so the next
-    # frame is the same diff again, not a full repaint.
+    # The storage handed back by `stage` is the caller's grid while the write
+    # runs, so a concurrent writer may have mutated it: the next frame is a
+    # full render, not a diff against it.
+    check not state.known
+    check state.lastBuffer[1, 0].symbol == " "
+    check state.planFrame(frame, noCursor, false).bytes == buildFullRenderOutput(frame)
+
+  test "the copy variant keeps the screen known when nothing was sent":
+    var state = knownScreen(4, 2)
+    var frame = newBuffer(4, 2)
+    frame[1, 0] = cell("x")
+
+    state.finish(state.planFrame(frame, noCursor, false), frame, swNone)
+
+    # No storage changed hands, so `lastBuffer` is still what the screen shows
+    # and the next frame is the same diff again.
     check state.known
     check state.lastBuffer[1, 0].symbol == " "
     check state.planFrame(frame, noCursor, false).bytes ==
@@ -202,6 +216,16 @@ suite "Screen state: recording the outcome":
     state.invalidate()
     state.finishClear(state.planClear(size(6, 3)), swNone)
 
+    check not state.known
+    check state.lastBuffer.area == rect(0, 0, 4, 2)
+
+  test "a clear cut partway marks the screen unknown":
+    var state = knownScreen(4, 2)
+    let plan = state.planClear(size(6, 3))
+    state.finishClear(plan, swPartial)
+
+    # The screen shows a mix of the old frame and the clear, so the next draw
+    # must repaint in full; `lastBuffer` is kept but unused while unknown.
     check not state.known
     check state.lastBuffer.area == rect(0, 0, 4, 2)
 

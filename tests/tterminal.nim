@@ -1268,6 +1268,52 @@ suite "Terminal Module Tests":
       else:
         skip()
 
+    test "an adopt draw that sent nothing leaves the next draw full":
+      when defined(posix):
+        let terminal = knownScreenTerminal(10, 3)
+        var frame = newBuffer(10, 3)
+        frame[2, 1] = cell("x")
+        var buffer = frame
+        withFailingStdout(
+          proc() =
+            terminal.drawAdopt(buffer)
+        )
+
+        # The staged swap was rolled back, but the grid was in the caller's
+        # hands while the write ran, so it is not trusted as the diff basis.
+        let output = captureStdout(
+          proc() =
+            terminal.drawAdopt(buffer)
+        )
+        check output == wrapWithSyncOutput(buildFullRenderOutput(frame))
+      else:
+        skip()
+
+    test "a clear cut off partway leaves the next draw full":
+      when defined(linux):
+        let terminal = knownScreenTerminal(10, 3)
+        var raised = false
+        discard captureCutStdout(
+          4,
+          proc() =
+            try:
+              terminal.clearScreen()
+            except IOError:
+              raised = true,
+        )
+        check raised
+
+        var frame = newBuffer(10, 3)
+        frame[2, 1] = cell("x")
+        let output = captureStdout(
+          proc() =
+            terminal.draw(frame)
+        )
+        # The clear stopped partway, so the screen is unknown: full render.
+        check output == wrapWithSyncOutput(buildFullRenderOutput(frame))
+      else:
+        skip()
+
     test "a render that sent nothing raises and keeps the screen known":
       when defined(posix):
         let terminal = knownScreenTerminal(10, 3)

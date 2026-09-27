@@ -6,8 +6,7 @@ import ../celina/async/[async_backend, async_buffer]
 import ../celina/core/[geometry, colors, buffer, errors]
 
 import ../celina/async/async_terminal {.all.}
-when hasChronos:
-  import ../celina/async/async_io {.all.}
+import ../celina/async/async_io {.all.}
 import ./stdout_capture
 import ../celina/core/terminal_common
 from ../celina/core/output_stream import
@@ -366,6 +365,41 @@ suite "AsyncTerminal unknown screen state":
     # `lastBuffer` and the next frame is a diff against it.
     check output == wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), next))
 
+  test "an adopt draw that sent nothing leaves the next draw full":
+    let terminal = knownScreenTerminal(10, 3)
+    var frame = newBuffer(10, 3)
+    frame[2, 1] = cell("x")
+    let asyncBuffer = newAsyncBuffer(10, 3)
+    asyncBuffer.updateFromBuffer(frame)
+    var style = CursorStyle.Default
+    withFailingStdout(
+      proc() =
+        style = waitFor terminal.drawWithCursorAdoptAsync(
+          asyncBuffer, 1, 1, true, SteadyBar, lastCursorStyle = style
+        )
+    )
+    check style == CursorStyle.Default
+
+    let output = captureStdout(
+      proc() =
+        discard waitFor terminal.drawWithCursorAdoptAsync(
+          asyncBuffer, 1, 1, true, SteadyBar, lastCursorStyle = style
+        )
+    )
+    let (expected, _) = buildOutputWithCursor(
+      newBuffer(10, 3),
+      frame,
+      1,
+      1,
+      true,
+      SteadyBar,
+      lastCursorStyle = style,
+      force = true,
+    )
+    # The grid was in the caller's hands while the failed write ran, so the
+    # screen is unknown and this frame is a full render.
+    check output == wrapWithSyncOutput(expected)
+
   test "a failed drawWithCursorAsync keeps the screen known":
     let terminal = knownScreenTerminal(10, 3)
     var frame = newBuffer(10, 3)
@@ -441,6 +475,31 @@ suite "AsyncTerminal unknown screen state":
       check output ==
         frameReset & ResetAndClearScreenSeq &
         wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), frame))
+    else:
+      skip()
+
+  test "a clear cut off partway leaves the next draw full":
+    when defined(linux):
+      let terminal = knownScreenTerminal(10, 3)
+      var raised = false
+      discard captureCutStdout(
+        4,
+        proc() =
+          try:
+            waitFor terminal.clearScreenAsync()
+          except IOError:
+            raised = true,
+      )
+      check raised
+
+      var frame = newBuffer(10, 3)
+      frame[2, 1] = cell("x")
+      let output = captureStdout(
+        proc() =
+          waitFor terminal.drawAsync(frame)
+      )
+      # The clear stopped partway, so the screen is unknown: full render.
+      check output == wrapWithSyncOutput(buildFullRenderOutput(frame))
     else:
       skip()
 
@@ -700,12 +759,17 @@ suite "AsyncTerminal unknown screen state":
 
       check note == ""
       check cancelled
-      # The tracked cursor style is unchanged, and the frame that was cut is
-      # followed by its reset and a full render.
+      # The tracked cursor style is unchanged.
       check style == CursorStyle.Default
+      # The cancel counts as a partial write: the first write after it carries
+      # its resets, and the screen is unknown. A frame of the screen's own size
+      # proves the unknown part — the size difference of the cancelled frame
+      # would force a full render on its own.
+      var small = newBuffer(10, 3)
+      small[1, 1] = cell("z")
       let (expected, _) = buildOutputWithCursor(
         newBuffer(10, 3),
-        frame,
+        small,
         0,
         0,
         true,
@@ -716,7 +780,7 @@ suite "AsyncTerminal unknown screen state":
       let output = captureStdout(
         proc() =
           discard waitFor terminal.drawWithCursorAsync(
-            frame, 0, 0, true, CursorStyle.Default, lastCursorStyle = style
+            small, 0, 0, true, CursorStyle.Default, lastCursorStyle = style
           )
       )
       check (AbortPartialSeq & Osc8Reset & "\e[0m") in output
@@ -725,39 +789,36 @@ suite "AsyncTerminal unknown screen state":
     test "a cancel during a frame write is not swallowed":
       skip()
 
-  when hasChronos:
-    test "a frame that waited for the lock is planned after the writer ahead of it":
-      let terminal = knownScreenTerminal(10, 3)
-      var frame = newBuffer(10, 3)
-      frame[3, 1] = cell("y")
+  test "a frame that waited for the lock is planned after the writer ahead of it":
+    let terminal = knownScreenTerminal(10, 3)
+    var frame = newBuffer(10, 3)
+    frame[3, 1] = cell("y")
 
-      # Hold the lock so the frame below parks on it, then leave behind what a
-      # write that stopped partway leaves: the screen unknown and its reset
-      # pending. The frame is planned only once the lock is handed over, so it
-      # is a full render behind that reset, not a diff against the screen as it
-      # was when the frame was called.
-      doAssert tryAcquireStdoutLockImmediate()
-      let parked = terminal.drawAsync(frame)
-      # What a wrapped frame that stopped partway leaves behind: the abort and
-      # the resets of what it had opened.
-      setPendingReset({srAbort, srOsc8, srSgr, srSyncEnd})
-      terminal.invalidate()
-      try:
-        let output = captureStdout(
-          proc() =
-            releaseStdoutLock()
-            waitFor parked
-        )
-        check output == frameReset & wrapWithSyncOutput(buildFullRenderOutput(frame))
-        check not resetPending()
-      finally:
-        # The lock must not stay held for the rest of the suite: the frame
-        # releases it on its own way out, so this only matters when the body
-        # above never ran or never got that far.
-        releaseStdoutLock()
-  else:
-    test "a frame that waited for the lock is planned after the writer ahead of it":
-      skip()
+    # Hold the lock so the frame below parks on it, then leave behind what a
+    # write that stopped partway leaves: the screen unknown and its reset
+    # pending. The frame is planned only once the lock is handed over, so it
+    # is a full render behind that reset, not a diff against the screen as it
+    # was when the frame was called. The lock and the planning under it are
+    # shared by both async backends, so this runs on both.
+    doAssert tryAcquireStdoutLockImmediate()
+    let parked = terminal.drawAsync(frame)
+    # What a wrapped frame that stopped partway leaves behind: the abort and
+    # the resets of what it had opened.
+    setPendingReset({srAbort, srOsc8, srSgr, srSyncEnd})
+    terminal.invalidate()
+    try:
+      let output = captureStdout(
+        proc() =
+          releaseStdoutLock()
+          waitFor parked
+      )
+      check output == frameReset & wrapWithSyncOutput(buildFullRenderOutput(frame))
+      check not resetPending()
+    finally:
+      # The lock must not stay held for the rest of the suite: the frame
+      # releases it on its own way out, so this only matters when the body
+      # above never ran or never got that far.
+      releaseStdoutLock()
 
 suite "AsyncTerminal POSIX Platform Support":
   test "Terminal size detection works on POSIX systems":

@@ -153,11 +153,18 @@ proc finishAdopt*(
   ## `drawWithCursorAdopt`): a staged swap is kept when the frame went out in
   ## full and rolled back otherwise, so `lastBuffer` holds only frames the
   ## screen showed and the caller keeps the grid it rendered.
+  ##
+  ## A staged frame that sent nothing still leaves the screen unknown: the
+  ## rolled-back storage is the caller's grid while the write is in flight, so
+  ## a writer that runs during the write (the async adopt path awaits) may have
+  ## mutated it, and it is no longer a safe diff basis.
   if plan.kind == pkFrame:
     if plan.staged:
       if outcome != swAll:
         swap(s.lastBuffer, buffer)
         s.lastBuffer.clearDirty()
+        if outcome == swNone:
+          s.invalidate()
     elif outcome == swAll:
       # `stage` could not swap (first frame, after a resize): copy instead.
       s.lastBuffer = buffer

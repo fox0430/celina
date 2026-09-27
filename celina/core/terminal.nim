@@ -33,7 +33,7 @@ type Terminal* = ref object ## Terminal interface for screen management
   bracketedPasteEnabled*: bool
   focusEventsEnabled*: bool
   syncOutputEnabled*: bool
-  screen*: ScreenState ## what the screen shows; see screen_state.nim
+  screen: ScreenState ## what the screen shows; see screen_state.nim
   rawModeEnabled: bool # Track raw mode state internally
   originalTermios: Termios # Store original terminal settings per instance
   originalStdinFlags: cint # Saved stdin descriptor flags (for O_NONBLOCK restore)
@@ -460,7 +460,10 @@ template presentFrame(
   ## the cursor style the terminal now shows. `force` marks the screen unknown
   ## first, so the frame is a full render; `adopt` is the zero-copy variant
   ## whose caller re-fills `buffer` every frame. A building error happens
-  ## before any byte goes out, so the screen state is untouched.
+  ## before any byte goes out, so the screen state is untouched. An adopt write
+  ## that did not go out in full, including one that sent nothing, rolls the
+  ## staged swap back and leaves the screen unknown, since the grid was handed
+  ## to the caller during the write.
   block:
     if force:
       terminal.screen.invalidate()
@@ -738,8 +741,9 @@ proc drawAdopt*(terminal: Terminal, buffer: var Buffer, force: bool = false) =
   ## caller MUST fully re-fill `buffer` before the next frame or it will render
   ## stale content; `Renderer.render` guarantees this via `renderer.clear()`.
   ## A write that did not go out in full rolls the swap back, so the caller
-  ## keeps the grid it rendered. Prefer the copy-preserving `draw` unless you
-  ## own the buffer and clear it every frame.
+  ## keeps the grid it rendered; that includes one that sent nothing, which
+  ## leaves the screen unknown, so the next frame is a full render. Prefer the
+  ## copy-preserving `draw` unless you own the buffer and clear it every frame.
   discard
     terminal.presentFrame(buffer, noCursor, force, not terminal.syncOutputEnabled, true)
 
@@ -799,7 +803,9 @@ proc drawWithCursorAdopt*(
   ##
   ## As with `drawAdopt`, the rendered content is swapped into `lastBuffer` and
   ## the previous frame's storage is recycled back into `buffer`, so the caller
-  ## MUST fully re-fill `buffer` each frame. Used by `Renderer.render`.
+  ## MUST fully re-fill `buffer` each frame. Used by `Renderer.render`. A
+  ## write that did not go out in full, including one that sent nothing, rolls
+  ## the swap back and leaves the screen unknown.
   ##
   ## Returns the updated lastCursorStyle value on success, or the original
   ## `lastCursorStyle` on failure.
