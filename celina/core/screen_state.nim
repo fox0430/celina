@@ -109,6 +109,8 @@ proc planClear*(s: ScreenState, size: Size): FramePlan =
   ## Plan a full-screen clear of a `size`-sized screen, recorded as blank at
   ## that size once it goes out. Not wrapped, and a partial write of it leaves
   ## nothing open that the next write has to undo.
+  ## A clear plan names no cursor style: `ResetAndClearScreenSeq` resets SGR but
+  ## not DECSCUSR, so `newStyle` stays `CursorStyle.Default`.
   result.kind = pkClear
   result.bytes = ResetAndClearScreenSeq
   result.epoch = s.epoch
