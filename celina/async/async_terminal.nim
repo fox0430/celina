@@ -500,7 +500,8 @@ proc presentFrame(
   ## Plan, write and record one frame of `buffer`, whose content the caller
   ## keeps (copy semantics). `force` marks the screen unknown first, so the
   ## frame is a full render. A building error happens before any byte goes out,
-  ## so the screen state is untouched.
+  ## so no write is recorded; the one state change it can leave behind is the
+  ## `force` invalidate, which runs before the plan.
   var
     outcome = swPartial # a cancel mid-write counts as a partial write
     style = cursor.lastStyle
@@ -570,7 +571,8 @@ proc renderAsync*(terminal: AsyncTerminal, buffer: Buffer) {.async.} =
 proc renderFullAsync*(terminal: AsyncTerminal, buffer: Buffer) {.async.} =
   ## Force a full async render of the buffer
   ## Output is automatically wrapped with synchronized output sequences (DEC mode 2026)
-  ## to prevent flickering on supported terminals.
+  ## to prevent flickering on supported terminals, unless the app enabled that
+  ## mode itself.
   ##
   ## Low-level API: raises `TerminalError` if the frame cannot be written in full,
   ## matching the sync `renderFull`. A partial or cancelled write leaves the

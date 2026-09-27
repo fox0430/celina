@@ -9,8 +9,12 @@
 ##
 ## Frames/clears only name the reset (a wrapped frame adds `srSyncEnd`).
 ##
-## Not covered: direct-fd emergency restores (own abort), C stdio / async
-## flushes that bypass this state.
+## Not covered: the emergency restores that write straight to the fd (the
+## blocking `Terminal.emergencyRestore` and the blocking async-mode
+## `AsyncTerminal.emergencyRestore`), since their reset starts with its own
+## abort; `emergencyRestoreAsync` goes through `writeStdoutAsync`, so it sends
+## a pending reset first like any other write. C stdio / async flushes that
+## bypass this state do too.
 ##
 ## Internal: not re-exported. Process-global, not thread-safe; no blocking
 ## write while a `writeStdoutAsync` is parked mid-write.

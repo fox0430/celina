@@ -5,11 +5,8 @@ import std/unittest
 import ../celina/core/[terminal_common, output_stream]
 import ./stdout_capture
 
-const
-  resetAll = AbortPartialSeq & Osc8Reset & "\e[0m" & SyncOutputDisable
-    ## Every reset, in the order the stream sends them.
-
-  frameReset = resetAll
+const resetAll = AbortPartialSeq & Osc8Reset & "\e[0m" & SyncOutputDisable
+  ## Every reset, in the order the stream sends them.
 
 suite "Output stream":
   teardown:

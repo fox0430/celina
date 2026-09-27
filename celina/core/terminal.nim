@@ -460,10 +460,14 @@ template presentFrame(
   ## the cursor style the terminal now shows. `force` marks the screen unknown
   ## first, so the frame is a full render; `adopt` is the zero-copy variant
   ## whose caller re-fills `buffer` every frame. A building error happens
-  ## before any byte goes out, so the screen state is untouched. An adopt write
-  ## that did not go out in full, including one that sent nothing, rolls the
-  ## staged swap back and leaves the screen unknown, since the grid was handed
-  ## to the caller during the write.
+  ## before any byte goes out, so no write is recorded; the one state change it
+  ## can leave behind is the `force` invalidate, which runs before the plan.
+  ## A staged adopt write that did not go out in full, including one that sent
+  ## nothing, rolls the staged swap back and leaves the screen unknown, since
+  ## the grid was handed to the caller during the write. An adopt write that
+  ## could not be staged (first frame, after a resize) has no swap to roll back
+  ## and leaves the screen state alone; the area change makes the next frame a
+  ## full render either way.
   block:
     if force:
       terminal.screen.invalidate()
@@ -740,10 +744,13 @@ proc drawAdopt*(terminal: Terminal, buffer: var Buffer, force: bool = false) =
   ## the previous frame's storage is handed back in `buffer` (recycled). The
   ## caller MUST fully re-fill `buffer` before the next frame or it will render
   ## stale content; `Renderer.render` guarantees this via `renderer.clear()`.
-  ## A write that did not go out in full rolls the swap back, so the caller
-  ## keeps the grid it rendered; that includes one that sent nothing, which
-  ## leaves the screen unknown, so the next frame is a full render. Prefer the
-  ## copy-preserving `draw` unless you own the buffer and clear it every frame.
+  ## A staged write that did not go out in full rolls the swap back, so the
+  ## caller keeps the grid it rendered; that includes one that sent nothing,
+  ## which leaves the screen unknown, so the next frame is a full render. A
+  ## write that could not be staged (first frame, after a resize) has no swap
+  ## to roll back, and the area change makes the next frame a full render
+  ## anyway. Prefer the copy-preserving `draw` unless you own the buffer and
+  ## clear it every frame.
   discard
     terminal.presentFrame(buffer, noCursor, force, not terminal.syncOutputEnabled, true)
 
@@ -770,7 +777,9 @@ proc drawWithCursor*(
   ## zero-copy renderer-owned hot path, use `drawWithCursorAdopt` instead.
   ##
   ## Note: This procedure silently ignores I/O errors to prevent crashes from transient
-  ## terminal issues. After a failed write, the next frame is a full render.
+  ## terminal issues. A write that stopped partway leaves the screen unknown, so the next
+  ## frame is a full render; one that sent nothing leaves it known, and the next frame
+  ## is the same diff again.
   let presented = terminal.presentFrame(
     buffer,
     CursorRequest(
@@ -804,8 +813,10 @@ proc drawWithCursorAdopt*(
   ## As with `drawAdopt`, the rendered content is swapped into `lastBuffer` and
   ## the previous frame's storage is recycled back into `buffer`, so the caller
   ## MUST fully re-fill `buffer` each frame. Used by `Renderer.render`. A
-  ## write that did not go out in full, including one that sent nothing, rolls
-  ## the swap back and leaves the screen unknown.
+  ## write that could be staged and did not go out in full, including one that
+  ## sent nothing, rolls the swap back and leaves the screen unknown; a write
+  ## that could not be staged (first frame, after a resize) has no swap to
+  ## roll back, and the area change makes the next frame a full render anyway.
   ##
   ## Returns the updated lastCursorStyle value on success, or the original
   ## `lastCursorStyle` on failure.

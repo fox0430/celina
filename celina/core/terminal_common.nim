@@ -823,8 +823,9 @@ proc appendCursorCommands*(
   ## it is sent again after a frame that did not go out in full).
   ##
   ## Shared by `buildOutputWithCursor` and the screen state's `planFrame`, so
-  ## the cursor bytes are built in one place. Appending keeps them inside a
-  ## synchronized output block when the caller wrapped `output` first.
+  ## the cursor bytes are built in one place. Call this before the caller wraps
+  ## `output`: appending after the wrap leaves the cursor bytes outside the
+  ## synchronized output block. `planFrame` is the reference order.
   result = lastCursorStyle
   if cursorVisible and cursorX >= 0 and cursorY >= 0:
     # Only apply cursor style if it has changed to avoid interrupting blinking

@@ -4,7 +4,7 @@ import std/[unittest, posix, deques]
 
 import ../celina/async/async_backend
 import ../celina/async/async_io {.all.}
-import ../celina/core/[terminal_common, output_stream]
+import ../celina/core/[colors, terminal_common, output_stream]
 import ./stdout_capture
 
 when hasChronos:
@@ -373,6 +373,79 @@ suite "Pending reset":
     check m == 1
     check output == AbortPartialSeq & "y"
     check not resetPending()
+
+  # `resume` does not take the stdout lock, so a reset can be marked pending
+  # while a write that already started sending one awaits. The write clears
+  # only the parts it sent, so what `resume` named is still pending when the
+  # write returns; clearing the whole set would drop it and the shell would
+  # inherit the attributes the other program left set.
+  when defined(posix):
+    type InFlightResetProbe = tuple[pendingAfter: bool, note: string]
+
+    proc markResetPendingDuringWrite(): Future[InFlightResetProbe] {.async.} =
+      var fds: array[2, cint]
+      if pipe(fds) != 0:
+        return (pendingAfter: false, note: "pipe failed")
+      for fd in fds:
+        if fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) or O_NONBLOCK) < 0:
+          discard close(fds[0])
+          discard close(fds[1])
+          return (pendingAfter: false, note: "cannot set O_NONBLOCK")
+      stdout.flushFile()
+      let saved = dup(STDOUT_FILENO)
+      if saved < 0:
+        discard close(fds[0])
+        discard close(fds[1])
+        return (pendingAfter: false, note: "dup failed")
+
+      var
+        pendingAfter = false
+        note = ""
+      try:
+        discard dup2(fds[1], STDOUT_FILENO)
+        # Fill the pipe so the write below parks while sending its reset, which
+        # is the window `resume` writes into. The loop stops at EAGAIN, so this
+        # holds for any pipe capacity and needs no F_SETPIPE_SZ.
+        var filler = newString(65536)
+        while posix.write(fds[1], addr filler[0], filler.len.cint) > 0:
+          discard
+        setPendingReset({srAbort})
+        let fut = writeStdoutAsync("x")
+        # The body of `writeStdoutAsync` runs up to its first await, so the
+        # reset write has already been tried and is parked by now. A finished
+        # future means the pipe drained under it and there was no window here.
+        if fut.finished:
+          note = "the write did not park on a full pipe"
+        else:
+          # What `resume` does, lock-free, while the write above is in flight.
+          setPendingReset({srSgr})
+          # Drain so the parked write can go on; it re-polls on its own timer.
+          var buf = newString(65536)
+          while posix.read(fds[0], addr buf[0], buf.len.cint) > 0:
+            discard
+          discard await fut
+          pendingAfter = resetPending()
+      finally:
+        discard dup2(saved, STDOUT_FILENO)
+        discard close(saved)
+        discard close(fds[0])
+        discard close(fds[1])
+      (pendingAfter: pendingAfter, note: note)
+
+  test "a reset marked pending while a write is in flight survives that write":
+    when defined(posix):
+      let (pendingAfter, note) = waitFor markResetPendingDuringWrite()
+      check note == ""
+      check pendingAfter
+      # And it is not only a flag: the next write still sends it first.
+      let output = captureStdout(
+        proc() =
+          discard waitFor writeStdoutAsync("y")
+      )
+      check output == resetSequence() & "y"
+      check not resetPending()
+    else:
+      skip()
 
   test "the blocking writes send a reset a cut async write left pending":
     when defined(linux):
