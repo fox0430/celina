@@ -946,3 +946,15 @@ template restoreSuspendedFeatures*(terminal: typed) =
     terminal.enableFocusEvents()
   if terminal.suspendState.suspendedSyncOutput:
     terminal.enableSyncOutput()
+
+template adoptLastBufferImpl*(
+    terminal: typed, buffer: var Buffer
+) {.deprecated: "Assign `lastBuffer`, or `swap` it when the areas match".} =
+  ## Swaps `buffer` into `lastBuffer` when the areas match (`buffer` gets the
+  ## previous frame's storage), copies it otherwise. Does not mark the screen
+  ## known.
+  if terminal.lastBuffer.area == buffer.area:
+    swap(terminal.lastBuffer, buffer)
+  else:
+    terminal.lastBuffer = buffer
+  terminal.lastBuffer.clearDirty()
