@@ -600,13 +600,10 @@ proc needsFullRender*(oldBuffer, newBuffer: Buffer, force: bool): bool {.inline.
   force or oldBuffer.area != newBuffer.area
 
 # Low-level write retry policy and classification
-# Shared by the sync (`writeWithRetry` in terminal.nim), the blocking async-mode
-# (`writeStdoutBlocking` in async/async_io.nim) and the async (`writeStdoutAsync`,
-# same file) write loops so the EINTR/EAGAIN/short-write decision and the give-up
-# thresholds live in one place. The two *blocking* loops now share their whole
-# body via `writeAllBlocking` below; only the async loop stays separate because it
-# must `await sleepMs` (after a non-blocking `pollWritable` probe) instead of
-# blocking in `pollWritable`.
+# Shared by the blocking loop (`writeAllBlocking` below) and the async loop
+# (`writeStreamLocked` in output_stream.nim), so the EINTR/EAGAIN/short-write
+# decision and the give-up thresholds live in one place. The async loop stays
+# separate because it must `await sleepMs` instead of blocking in `pollWritable`.
 
 proc classifyWriteResult*(n: int): WriteOutcome =
   ## Classify the raw return value of a single `write(2)` call into a retry
@@ -660,9 +657,7 @@ proc writeAllBlocking*(
   ##
   ## `writeStdoutBlocking` (async/async_io.nim) and the sync `writeWithRetry`
   ## (terminal.nim) both delegate here through `writeStream` in
-  ## output_stream.nim; the async `writeStdoutAsync` stays separate because it
-  ## must `await` rather than block. Uses the shared
-  ## `classifyWriteResult`/`WriteMaxBlockedWaits` policy above.
+  ## output_stream.nim.
   if data.len == 0:
     return 0
 

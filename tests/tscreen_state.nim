@@ -173,8 +173,7 @@ suite "Screen state: recording the outcome":
     check state.lastBuffer[1, 0].symbol == "x"
 
   test "the copy variant takes nothing for a write that sent nothing":
-    # A copy is not staged, so there is nothing to roll back: `lastBuffer` keeps
-    # the frame it already had, never the one that never went out.
+    # `finish` stages nothing, so `lastBuffer` keeps the frame it already had.
     var state = knownScreen(4, 2)
     var shown = newBuffer(4, 2)
     shown[0, 0] = cell("a")
@@ -255,14 +254,18 @@ suite "Screen state: adopt":
   test "staging copies when the areas differ, so the caller keeps its size":
     var state = knownScreen(4, 2)
     var frame = newBuffer(6, 3)
+    frame[0, 0] = cell("new")
     var plan = state.planFrame(frame, noCursor, false)
 
     state.stage(plan, frame)
-    check state.lastBuffer.area == rect(0, 0, 4, 2)
+    check state.lastBuffer.area == rect(0, 0, 6, 3)
     check frame.area == rect(0, 0, 6, 3)
 
+    # A mutation during the write does not reach the copy.
+    frame[0, 0] = cell("late")
     state.finishAdopt(plan, frame, swAll)
-    check state.lastBuffer.area == rect(0, 0, 6, 3)
+    check state.known
+    check state.lastBuffer[0, 0].symbol == "new"
     check frame.area == rect(0, 0, 6, 3)
 
   test "a resize during a failed staged write is kept":
@@ -279,6 +282,68 @@ suite "Screen state: adopt":
       check not state.known
       let next = state.planFrame(frame, noCursor, false)
       check next.bytes == buildFullRenderOutput(frame)
+
+  test "a staged copy that sent nothing marks the screen unknown":
+    var state = knownScreen(4, 2)
+    var frame = newBuffer(6, 3)
+    var plan = state.planFrame(frame, noCursor, false)
+
+    state.stage(plan, frame)
+    state.finishAdopt(plan, frame, swNone)
+
+    # The copy already replaced the frame the screen shows.
+    check not state.known
+
+  test "an unstaged adopt swaps after a write that went out in full":
+    var state = knownScreen(4, 2)
+    state.lastBuffer[0, 0] = cell("old")
+    var frame = newBuffer(4, 2)
+    frame[0, 0] = cell("new")
+    frame.markDirty(0, 0)
+
+    state.finishAdopt(state.planFrame(frame, noCursor, false), frame, swAll)
+
+    check state.known
+    check state.lastBuffer[0, 0].symbol == "new"
+    check not state.lastBuffer.isDirty()
+    check frame[0, 0].symbol == "old"
+
+  test "an unstaged adopt copies after a write that went out in full when the areas differ":
+    var state = knownScreen(4, 2)
+    var frame = newBuffer(6, 3)
+    frame[0, 0] = cell("new")
+
+    state.finishAdopt(state.planFrame(frame, noCursor, false), frame, swAll)
+
+    check state.known
+    check state.lastBuffer.area == rect(0, 0, 6, 3)
+    check state.lastBuffer[0, 0].symbol == "new"
+    check frame[0, 0].symbol == "new"
+
+  test "an unstaged adopt that sent nothing keeps the screen known":
+    var state = knownScreen(4, 2)
+    var frame = newBuffer(4, 2)
+    frame[1, 0] = cell("x")
+
+    state.finishAdopt(state.planFrame(frame, noCursor, false), frame, swNone)
+
+    # Nothing is staged, so the next frame is the same diff again.
+    check state.known
+    check state.lastBuffer[1, 0].symbol == " "
+    check frame[1, 0].symbol == "x"
+    check state.planFrame(frame, noCursor, false).bytes ==
+      buildDifferentialOutput(newBuffer(4, 2), frame)
+
+  test "an unstaged adopt cut partway takes nothing and marks the screen unknown":
+    var state = knownScreen(4, 2)
+    var frame = newBuffer(4, 2)
+    frame[1, 0] = cell("x")
+
+    state.finishAdopt(state.planFrame(frame, noCursor, false), frame, swPartial)
+
+    check not state.known
+    check state.lastBuffer[1, 0].symbol == " "
+    check frame[1, 0].symbol == "x"
 
   test "a staged frame is adopted clean":
     var state = knownScreen(4, 2)

@@ -1090,6 +1090,110 @@ suite "Async Adopt Rendering":
     )
     check output == wrapWithSyncOutput(expected)
 
+  # `F_SETPIPE_SZ` is a Linux extension, so the pipe can only be shrunk here.
+  when defined(linux):
+    var F_SETPIPE_SZ {.importc: "F_SETPIPE_SZ", header: "<fcntl.h>".}: cint
+
+    proc mutateDuringAdoptDraw(
+        terminal: AsyncTerminal, asyncBuffer: async_buffer.AsyncBuffer
+    ): Future[string] {.async.} =
+      ## Draw `asyncBuffer` into a small pipe, put "late" in cell (0, 0) while
+      ## the write is parked, then drain the pipe. Returns "" on success, else
+      ## why the write could not be parked.
+      var fds: array[2, cint]
+      if pipe(fds) != 0:
+        return "pipe failed"
+      # The caller pins the frame to be larger than this, so the write parks.
+      if fcntl(fds[1], F_SETPIPE_SZ, 4096) < 0:
+        let why = osErrorMsg(osLastError()) # before any other call touches errno
+        discard close(fds[0])
+        discard close(fds[1])
+        return "cannot shrink the pipe buffer: " & why
+      for fd in fds:
+        discard fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) or O_NONBLOCK)
+      stdout.flushFile()
+      let saved = dup(STDOUT_FILENO)
+      if saved < 0:
+        discard close(fds[0])
+        discard close(fds[1])
+        return "dup failed"
+
+      var note = ""
+      try:
+        discard dup2(fds[1], STDOUT_FILENO)
+        let fut = terminal.drawWithCursorAdoptAsync(
+          asyncBuffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default
+        )
+        # The frame is larger than the pipe, so readable bytes mean a parked write.
+        var started = false
+        for _ in 0 ..< 500: # up to ~5 s
+          var pfd: Tpollfd
+          pfd.fd = fds[0]
+          pfd.events = POLLIN
+          pfd.revents = 0
+          if posix.poll(addr pfd, 1, 0) > 0:
+            started = true
+            break
+          await sleepMs(10)
+        if not started:
+          note = "frame write did not start within the wait bound"
+        elif fut.finished:
+          note = "frame write finished without parking"
+        else:
+          asyncBuffer.withBuffer:
+            buffer[0, 0] = cell("late")
+        var buf = newString(65536)
+        while not fut.finished:
+          while posix.read(fds[0], addr buf[0], buf.len) > 0:
+            discard
+          await sleepMs(1)
+        discard await fut
+      finally:
+        discard dup2(saved, STDOUT_FILENO)
+        discard close(saved)
+        discard close(fds[0])
+        discard close(fds[1])
+      note
+
+    test "drawWithCursorAdoptAsync adopts a resized grid as it was planned":
+      # A resized frame is copied before the write, so a mutation during the
+      # write does not reach `lastBuffer`.
+      let terminal = knownScreenTerminal(10, 3)
+      let asyncBuffer = newAsyncBuffer(100, 60)
+      asyncBuffer.withBuffer:
+        for y in 0 ..< 60:
+          for x in 0 ..< 100:
+            buffer[x, y] = cell($((x + y) mod 10), style(Color.Red, modifiers = {Bold}))
+        buffer[0, 0] = cell("new")
+        check buildFullRenderOutput(buffer).len > 4096
+
+      check (waitFor mutateDuringAdoptDraw(terminal, asyncBuffer)) == ""
+      check terminal.lastBuffer.area == rect(0, 0, 100, 60)
+      check terminal.lastBuffer[0, 0].symbol == "new"
+
+      # The next frame is a diff that sends the mutation.
+      var expected: string
+      asyncBuffer.withBuffer:
+        expected = buildOutputWithCursor(
+          terminal.lastBuffer,
+          buffer,
+          0,
+          0,
+          false,
+          lastCursorStyle = CursorStyle.Default,
+        ).output
+      let output = captureStdout(
+        proc() =
+          discard waitFor terminal.drawWithCursorAdoptAsync(
+            asyncBuffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default
+          )
+      )
+      check "late" in output
+      check output == wrapWithSyncOutput(expected)
+  else:
+    test "drawWithCursorAdoptAsync adopts a resized grid as it was planned":
+      skip()
+
 suite "AsyncTerminal Performance Considerations":
   test "Large buffer handling":
     let terminal = createTestTerminal()
