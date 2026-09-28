@@ -1339,7 +1339,7 @@ suite "Terminal Module Tests":
         skip()
 
     test "a render cut off partway makes the next render full":
-      when defined(posix):
+      when defined(linux):
         let terminal = knownScreenTerminal(10, 3)
         var frame = newBuffer(10, 3)
         frame[2, 1] = cell("x")
@@ -1497,7 +1497,7 @@ suite "Terminal Module Tests":
         skip()
 
     test "cleanup and suspend send the reset of a cut write first":
-      when defined(posix):
+      when defined(linux):
         let terminal = knownScreenTerminal(10, 3)
         let known = captureStdout(
           proc() =
@@ -1534,7 +1534,7 @@ suite "Terminal Module Tests":
         skip()
 
     test "a reset keeps the synchronized output block the app opened":
-      when defined(posix):
+      when defined(linux):
         # With mode 2026 on, celina does not wrap its frames, so a cut frame
         # leaves the app's block open and the reset must not close it.
         let terminal = knownScreenTerminal(10, 3)
