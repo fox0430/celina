@@ -128,10 +128,11 @@ proc unlockpt(fd: cint): cint {.importc, header: "<stdlib.h>".}
 proc ptsname(fd: cint): cstring {.importc, header: "<stdlib.h>".}
 var TIOCSWINSZ {.importc, header: "<sys/ioctl.h>".}: culong
 
-proc withPtyStdout*(cols, rows: int, body: proc()): bool =
-  ## Run `body` with stdout on a pty of the given size; output is discarded.
-  ## Returns false without running `body` if the pty cannot be set up.
-  ## Output is drained only afterwards, so keep it within the pty buffer.
+proc withPtyStdout*(cols, rows: int, output: var string, body: proc()): bool =
+  ## Run `body` with stdout on a pty of the given size and append what it
+  ## wrote to `output`. Returns false without running `body` if the pty cannot
+  ## be set up. Output is drained only afterwards, so keep it within the pty
+  ## buffer.
   stdout.flushFile()
   let master = posix_openpt(O_RDWR or O_NOCTTY)
   if master == -1:
@@ -158,7 +159,6 @@ proc withPtyStdout*(cols, rows: int, body: proc()): bool =
     discard close(slave)
     discard close(saved)
     return false
-  discard close(slave)
   try:
     body()
   finally:
@@ -166,7 +166,18 @@ proc withPtyStdout*(cols, rows: int, body: proc()): bool =
     discard dup2(saved, STDOUT_FILENO)
     discard close(saved)
     discard fcntl(master, F_SETFL, fcntl(master, F_GETFL) or O_NONBLOCK)
-    var buf: array[4096, char]
-    while posix.read(master, addr buf[0], buf.len) > 0:
-      discard
+    var buf = newString(4096)
+    while true:
+      let n = posix.read(master, addr buf[0], buf.len)
+      if n <= 0:
+        break
+      output.add buf[0 ..< n]
+    # Closed only after the drain: the last slave close may drop unread output
+    # on some systems.
+    discard close(slave)
   true
+
+proc withPtyStdout*(cols, rows: int, body: proc()): bool =
+  ## `withPtyStdout` that discards the output.
+  var output: string
+  withPtyStdout(cols, rows, output, body)

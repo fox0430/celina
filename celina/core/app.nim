@@ -41,7 +41,6 @@ type
     ## via `quit` / `isRunning` and related procs rather than touching fields.
     shouldQuit*: bool
     running*: bool ## Whether app is currently running
-    forceNextRender*: bool ## Force full render on next frame (used after resize)
     windowMode*: bool ## Whether to use window management
     resizeState*: ResizeState ## Shared resize detection state (from tick_common)
 
@@ -80,7 +79,6 @@ proc newApp*(config: AppConfig = DefaultAppConfig): App =
     state: AppState(
       shouldQuit: false,
       running: false,
-      forceNextRender: false,
       windowMode: config.windowMode,
       resizeState: initResizeState(termSize.width, termSize.height),
     ),
@@ -144,11 +142,9 @@ proc setup(app: App) =
     app.terminal.enableFocusEvents()
 
   terminal.hideCursor()
+  # Records the blank screen, so the first frame is a diff against it.
   app.terminal.clearScreen()
 
-  # Redundant: clearScreen recorded the blank screen, so a diff would suffice.
-  # The forced frame clears the screen again until forceNextRender is removed.
-  app.state.forceNextRender = true
   # Idle time counts from this run's start, not from `new` or a previous run.
   app.timings.lastEventTime = getMonoTime()
 
@@ -158,8 +154,6 @@ proc handleResize(app: App) =
   app.renderer.resize()
   # Clear screen to avoid artifacts from old content
   app.terminal.clearScreen()
-  # Redundant with clearScreen, as in setup
-  app.state.forceNextRender = true
 
 proc dispatchEvent*(app: App, event: Event): EventResult =
   ## Invoke the configured event handler for the given event.
@@ -218,12 +212,8 @@ proc render(app: App) =
   if app.state.windowMode and not app.windowManager.isNil:
     app.windowManager.render(app.renderer.getBuffer())
 
-  # Render to terminal (force if requested after resize)
-  if app.state.forceNextRender:
-    app.renderer.render(force = true)
-    app.state.forceNextRender = false
-  else:
-    app.renderer.render()
+  # Render to terminal
+  app.renderer.render()
 
 proc tick(app: App): bool =
   ## Process one application tick (events + render).
@@ -502,15 +492,14 @@ proc isSuspended*(app: App): bool =
 proc resume*(app: App) =
   ## Resume the TUI after a `suspend()` call.
   ##
-  ## Restores terminal state and forces a full redraw on the next frame.
-  ## When the app was suspended, also restarts the application-timeout idle
-  ## clock.
+  ## Restores terminal state. When the app was suspended, the terminal marks
+  ## the screen unknown, so the next frame is a full redraw, and the
+  ## application-timeout idle clock restarts.
   let wasSuspended = app.isSuspended
   # Update the app state even when the terminal resume fails partway.
   try:
     app.terminal.resume()
   finally:
-    app.state.forceNextRender = true
     if wasSuspended:
       # Returning from the suspended program counts as activity, like the
       # start of a run.
