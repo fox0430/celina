@@ -1336,8 +1336,8 @@ suite "Terminal Common Module Tests":
       check pollWritable(fds[1], 0) == wwError
 
     test "writeAllBlocking with maxBlockedWaits = 1 gives up on a full fd without waiting":
-      # abortPartialWrite (output_stream) sends its abort this way, so a wedged
-      # tty does not get a second ~2s wait budget.
+      # markPartialWrite (output_stream) sends the reset after a cut write this
+      # way, so a wedged tty does not get a second ~2s wait budget.
       var fds: array[2, cint]
       check posix.pipe(fds) == 0
       defer:
@@ -1394,66 +1394,3 @@ suite "EmergencyResetSeq":
     # an SGR reset may follow.
     check EmergencyResetAltScreenSeq.startsWith(EmergencyResetSeq)
     check EmergencyResetAltScreenSeq.endsWith(AlternateScreenExit & "\e[0m")
-
-suite "Screen state":
-  type FakeTerminal = ref object
-    size: Size
-    lastBuffer: Buffer
-    syncOutputEnabled: bool
-    screenUnknown: bool
-
-  test "A known screen wraps frames without an abort":
-    let terminal = FakeTerminal()
-    check not terminal.frameForce(false)
-    check terminal.abortPrefix == ""
-    check terminal.frameBytes("x") == wrapWithSyncOutput("x")
-    check terminal.frameBytes("") == ""
-
-  test "An unknown screen forces a full render and aborts before the wrap":
-    let terminal = FakeTerminal(lastBuffer: newBuffer(4, 2))
-    terminal.lastBuffer[0, 0] = cell("x")
-    terminal.markScreenUnknown()
-
-    check terminal.frameForce(false)
-    check terminal.abortPrefix == AbortFrameSeq
-    check terminal.frameBytes("x") == AbortFrameSeq & wrapWithSyncOutput("x")
-    # `lastBuffer` is kept; the flag alone makes the next frame a full render.
-    check terminal.lastBuffer[0, 0].symbol == "x"
-
-  test "The abort ends a synchronized output block a failed frame left open":
-    # Clears and low-level renders are not wrapped, so no later ESU closes it.
-    let terminal = FakeTerminal(screenUnknown: true)
-    check terminal.abortPrefix.endsWith(SyncOutputDisable)
-
-  test "The abort keeps the app's synchronized output block open":
-    let terminal = FakeTerminal(syncOutputEnabled: true, screenUnknown: true)
-    check terminal.abortPrefix == AbortFrameKeepSyncSeq
-    check SyncOutputDisable notin terminal.abortPrefix
-    check terminal.frameBytes("x") == AbortFrameKeepSyncSeq & "x"
-
-  test "restorePrefix is the abort plus an SGR reset while the screen is unknown":
-    let terminal = FakeTerminal()
-    check terminal.restorePrefix == ""
-
-    terminal.markScreenUnknown()
-    check terminal.restorePrefix == AbortFrameSeq & "\e[0m"
-
-    terminal.syncOutputEnabled = true
-    check terminal.restorePrefix == AbortFrameKeepSyncSeq & "\e[0m"
-
-  test "A clear or a written frame makes the screen known":
-    let terminal = FakeTerminal(size: size(10, 3), screenUnknown: true)
-    terminal.markScreenCleared()
-    check not terminal.screenUnknown
-    check terminal.lastBuffer == newBuffer(10, 3)
-
-    var frame = newBuffer(10, 3)
-    frame[1, 1] = cell("y")
-    terminal.markScreenUnknown()
-    terminal.commitLastBuffer(frame)
-    check not terminal.screenUnknown
-    check terminal.lastBuffer == frame
-
-    terminal.markScreenUnknown()
-    terminal.adoptLastBufferImpl(frame)
-    check not terminal.screenUnknown

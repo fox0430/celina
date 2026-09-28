@@ -6,11 +6,10 @@
 import std/[options, posix, selectors, deques]
 
 import async_backend
-from ../core/terminal_common import
-  WriteOutcome, classifyWriteResult, WriteWaitOutcome, pollWritable, WriteBlockedWaitMs,
-  WriteMaxBlockedWaits, AbortPartialSeq
-from ../core/output_stream import
-  abortPending, clearPendingAbort, abortPartialWrite, writeStream
+# The write loops live in core/output_stream.nim (which owns the shared
+# EINTR/EAGAIN/short-write policy in terminal_common and the pending reset);
+# this module only serializes them through the stdout lock.
+from ../core/output_stream import writeStream, writeStreamLocked
 
 type
   AsyncIOError* = object of CatchableError
@@ -201,27 +200,16 @@ proc readStdinAsync*(
 
 # Async Output Functions
 
-# Serialization for concurrent stdout writes.
+# Serialization for concurrent stdout writes. `writeStdoutAsync` yields
+# between `write(2)` attempts, opening a window for interleaved writes that
+# would splice escape sequences. Holders keep this cooperative lock for the
+# whole unit of output (a single write, or a frame via `withStdoutLock`),
+# so one sequence flushes fully before the next begins. `writeStdoutBlocking`
+# and `flushStdoutAsync` bypass it for the cleanup/signal path.
 #
-# `writeStdoutAsync` yields the event loop (`await sleepMs`) between `write(2)`
-# attempts so it can drain a flow-controlled tty without blocking. That yield is
-# also a window in which a *second* task could start its own write and interleave
-# bytes, splicing two escape sequences together and corrupting terminal state.
-# To prevent that, every `writeStdoutAsync` call holds this single cooperative
-# lock for its whole duration, so one sequence is fully flushed before the next
-# one begins. (The synchronous `writeStdoutBlocking` family and `flushStdoutAsync`
-# do not take this lock — they are for the cleanup/signal path and must not run
-# concurrently with a live async writer.)
-#
-# It is a plain bool + FIFO waiter queue, not chronos' `AsyncLock`: std/asyncdispatch
-# ships no async lock, and chronos' lock has a stricter ownership contract (a
-# separate `acquired` flag, plus a hand-off whose returned future only completes a
-# loop turn later) that does not match the direct synchronous hand-off used here. A
-# hand-rolled FIFO is the one implementation that serves both backends with the
-# same semantics. The loop is single-threaded and cooperative, so the bool
-# test-and-set in `tryAcquireStdoutLockImmediate` crosses no `await` and cannot race
-# another task; release hands the lock straight to the next waiter (the bool stays
-# set) to avoid both a spin-wait and a barge-ahead by a task acquiring in the gap.
+# Plain bool + FIFO queue (no AsyncLock): serves both backends with the same
+# semantics. Single-threaded cooperative loop, so the bool test-and-set crosses
+# no `await` and cannot race; release hands off directly to avoid barging.
 var
   stdoutWriteLocked = false
   stdoutWriteWaiters = initDeque[Future[void]]()
@@ -268,190 +256,50 @@ proc releaseStdoutLock() =
         return
     stdoutWriteLocked = false
 
-when defined(celinaDebug):
-  proc writeProgress(total, dataLen, abortLeft: int): string =
-    ## Bytes of `data` written for the give-up warnings in `writeStdoutAsync`,
-    ## plus the pending abort when the write stopped before it was out.
-    result = $total & "/" & $dataLen & " bytes"
-    if abortLeft > 0:
-      result.add ", pending abort " & $(AbortPartialSeq.len - abortLeft) & "/" &
-        $AbortPartialSeq.len & " bytes"
+template withStdoutLock*(body: untyped) =
+  ## Hold the stdout lock across `body`, which must cover the whole unit of
+  ## output (plan + write + record for a frame; `writeStreamLocked` for a
+  ## single write). Not reentrant: `body` must not call a lock-taking write.
+  ##
+  ## Cancel-safe: the lock releases only once actually granted, so a cancel
+  ## while parked never releases an unheld lock.
+  block:
+    var stdoutLockHeld = false
+    try:
+      # Fast path: take a free lock with no Future allocation; only park
+      # (allocating a waiter) when another writer already holds it.
+      if not tryAcquireStdoutLockImmediate():
+        await waitForStdoutLock()
+      stdoutLockHeld = true
+      body
+    finally:
+      if stdoutLockHeld:
+        releaseStdoutLock()
 
 proc writeStdoutAsync*(data: string): Future[int] {.async.} =
-  ## Write data to stdout asynchronously.
+  ## Async stdout write, serialized through the stdout lock. Loop is
+  ## `writeStreamLocked`; this proc only adds the lock. Yields between
+  ## `write(2)` attempts, gives up after `WriteMaxBlockedWaits` no-progress
+  ## waits (~2s) or a hard error.
   ##
-  ## Loops until every byte is written so a short `write(2)` can't leave a
-  ## multi-byte escape sequence half-emitted (which corrupts terminal state).
-  ## On EAGAIN it asks `pollWritable` whether stdout has drained or gone away
-  ## (POLLHUP/POLLERR) and yields cooperatively via `await sleepMs` between
-  ## attempts, so it neither busy-spins nor blocks the event loop. It gives up
-  ## only after `WriteMaxBlockedWaits` consecutive attempts make no progress
-  ## (≈2s on a wedged tty) or on a hard error, so ordinary flow control never
-  ## truncates output. Returns the number of bytes written: `data.len` on
-  ## success, or a short count if it gives up before the data is fully flushed.
+  ## Returns bytes written (`data.len` on success). Use `writeOrRaiseAsync`
+  ## for critical sequences, `tryWriteAsync` for best-effort ones. Frame paths
+  ## use `withStdoutLock` + `writeStreamLocked` directly to see the outcome.
   ##
-  ## This is the async twin of `writeWithRetry` in core/terminal.nim; the two
-  ## share the same EINTR/EAGAIN/short-write contract and retry policy (the
-  ## constants in terminal_common) but differ in how they wait — this one yields
-  ## via `await sleepMs`, the sync version blocks in `pollWritable` — so keep
-  ## their policy in sync when changing either.
-  ##
-  ## The return value is a raw byte count (the async twin of `write(2)`); a short
-  ## count means output was truncated. Callers that must not emit a half-written
-  ## control sequence go through `writeOrRaiseAsync` (raises `IOError` on a short
-  ## count) instead of discarding it; `tryWriteAsync` is the best-effort variant
-  ## for non-critical control. These mirror the sync `writeOrRaise`/`tryWrite`
-  ## split in core/terminal.nim, and `async_terminal` routes all its control and
-  ## frame output through them so a truncated escape sequence can never be
-  ## silently swallowed on the live render path.
-  ##
-  ## Concurrency: the whole write is serialized through `acquireStdoutLock` /
-  ## `releaseStdoutLock`, so two tasks writing at once can never interleave their
-  ## bytes and splice one escape sequence into another. Each caller's data is
-  ## flushed in full (or to its short-count give-up point) before the next
-  ## queued writer starts, and writes proceed in call order (FIFO). Only
-  ## `writeStdoutAsync` writers are serialized; the synchronous
-  ## `writeStdoutBlocking` family and `flushStdoutAsync` bypass the lock.
-  ##
-  ## A chronos `CancelledError` propagates out of this proc (so a `cancelAndWait`
-  ## shutdown can interrupt a write that is parked on a flow-controlled tty); the
-  ## lock is still released on the way out. Every *other* error is swallowed and
-  ## reported as a short count, as before.
-  ##
-  ## Aborts follow core/output_stream.nim, as in the sync writes: a write that
-  ## stops or is cancelled partway calls `abortPartialWrite` before the lock is
-  ## released, and a pending abort goes out first under the same hold. Until it
-  ## is out in full, `data` is not written, so giving up on it returns 0.
-  ##
-  ## Head-of-line cost: the lock is held for the whole write, including the
-  ## `WriteMaxBlockedWaits` back-off budget (~2s) on a wedged tty, so one stuck
-  ## writer stalls every other queued writer for up to that budget. This is
-  ## deliberate — releasing mid-write would let another task's bytes splice into a
-  ## half-emitted escape sequence, the exact corruption this serialization
-  ## prevents — and the per-write give-up budget bounds the worst-case stall.
-
+  ## `CancelledError` propagates (lock still released, cut reset still marked);
+  ## other errors become a short count. The lock is held for the whole write,
+  ## so one wedged writer stalls the queue up to the give-up budget — required
+  ## to avoid splicing half-emitted escape sequences.
+  #
   # An empty write does nothing, so skip the lock entirely rather than acquire
   # (and possibly park behind an in-flight writer) just to emit zero bytes.
   if data.len == 0:
     return 0
 
-  var
-    total = 0
-    blockedWaits = 0
-    held = false
-    abortLeft = 0 # bytes of a pending abort still to write before `data`
-  let
-    fd = STDOUT_FILENO.cint
-    abortBytes = AbortPartialSeq
-
-  # Hold the lock for the entire write, including every `await` inside the loop,
-  # so no other task can emit between our `write(2)` attempts. Acquire inside the
-  # `try` and set `held` only once it has actually granted, so the `finally`
-  # releases iff this call owns the lock: a writer cancelled while still parked in
-  # the wait queue (CancelledError raised at `await waitForStdoutLock()`) never
-  # releases a lock it never held — its queued waiter is skipped by the next
-  # `releaseStdoutLock`. `unsafeAddr data[total]` is only evaluated once
-  # `total < data.len`, so it is never taken on an empty string.
-  try:
-    # Fast path: take a free lock with no Future allocation; only park (allocating
-    # a waiter) when another writer already holds it.
-    if not tryAcquireStdoutLockImmediate():
-      await waitForStdoutLock()
-    held = true
-
-    # A pending abort goes first, through the same loop.
-    if abortPending():
-      abortLeft = abortBytes.len
-
-    while total < data.len:
-      let n =
-        if abortLeft > 0:
-          posix.write(fd, unsafeAddr abortBytes[abortBytes.len - abortLeft], abortLeft).int
-        else:
-          posix.write(fd, unsafeAddr data[total], data.len - total).int
-
-      case classifyWriteResult(n)
-      of woProgress:
-        if abortLeft > 0:
-          abortLeft -= n
-          if abortLeft == 0:
-            clearPendingAbort()
-        else:
-          total += n
-        blockedWaits = 0
-      of woInterrupted:
-        # Interrupted before writing anything. Yield before retrying so a signal
-        # storm (e.g. SIGWINCH during a resize drag) can't starve the event
-        # loop, and count it so a relentless storm can't loop forever.
-        inc blockedWaits
-        if blockedWaits >= WriteMaxBlockedWaits:
-          when defined(celinaDebug):
-            stderr.writeLine(
-              "Warning: writeStdoutAsync gave up after " & $WriteMaxBlockedWaits &
-                " interrupted writes (" & writeProgress(total, data.len, abortLeft) & ")"
-            )
-          break
-        await sleepMs(0)
-      of woWouldBlock:
-        # Non-blocking stdout not ready (its open file description shares stdin's
-        # O_NONBLOCK when fd 0/1 point at the same tty). Wait for it to drain
-        # instead of dropping data mid-escape-sequence: probe whether the fd has
-        # become writable or gone away, then yield. Give up only after
-        # WriteMaxBlockedWaits consecutive no-progress waits (steady drainage
-        # resets the counter via woProgress), so a flow-controlled terminal
-        # never truncates output yet a permanently wedged fd can't hang forever.
-        inc blockedWaits
-        if blockedWaits >= WriteMaxBlockedWaits:
-          when defined(celinaDebug):
-            stderr.writeLine(
-              "Warning: writeStdoutAsync gave up after " & $WriteMaxBlockedWaits &
-                " blocked writes (" & writeProgress(total, data.len, abortLeft) & ")"
-            )
-          break
-        case pollWritable(fd, 0) # non-blocking probe; never blocks the event loop
-        of wwError:
-          # stdout went away (POLLHUP/POLLERR); stop and report bytes sent.
-          when defined(celinaDebug):
-            stderr.writeLine(
-              "Warning: writeStdoutAsync stdout error (" &
-                writeProgress(total, data.len, abortLeft) & ")"
-            )
-          break
-        of wwWritable:
-          # Writable again: yield once and retry promptly.
-          await sleepMs(0)
-        of wwNotReady:
-          # Still full: back off cooperatively before re-probing the fd.
-          await sleepMs(WriteBlockedWaitMs)
-      of woHardError:
-        # Hard error, or a 0-byte write we can't make progress on. Stop and
-        # report how much actually made it out.
-        when defined(celinaDebug):
-          stderr.writeLine(
-            "Warning: writeStdoutAsync hard error (" &
-              writeProgress(total, data.len, abortLeft) & ")"
-          )
-        break
-  except CancelledError as e:
-    # Let chronos cancellation propagate (the `finally` still releases the lock)
-    # so `cancelAndWait`-based shutdown can tear the write down, instead of the
-    # catch-all below silently swallowing it and finishing the future as a normal
-    # short count. asyncdispatch never raises this type, so this is a no-op there.
-    raise e
-  except CatchableError:
-    # Preserve the old contract of never raising on ordinary I/O errors: report
-    # however many bytes already made it out.
-    discard
-  finally:
-    if held:
-      # Abort an escape sequence a partial write may have cut in half before
-      # the next writer gets the lock. A pending abort cut off partway stays
-      # pending.
-      if total > 0 and total < data.len:
-        abortPartialWrite()
-      releaseStdoutLock()
-
-  result = total
+  var written = 0
+  withStdoutLock:
+    written = await writeStreamLocked(data, {})
+  written
 
 proc flushStdoutAsync*(): Future[void] {.async.} =
   ## Flush the C stdio buffer (`stdout.flushFile`) asynchronously.
@@ -513,16 +361,17 @@ proc writeOrRaiseAsync*(data: string): Future[void] {.async.} =
 proc writeStdoutBlocking*(data: string): int =
   ## Blocking write of `data` to stdout via the shared `writeStream` in
   ## core/output_stream.nim (the same path the sync `writeWithRetry` uses,
-  ## aborts included). Instead of yielding, it blocks in `pollWritable` while
-  ## stdout is non-writable. Uses `STDOUT_FILENO` directly so it never goes
-  ## through the stdio buffer or mixes ordering with
+  ## pending resets included). Instead of yielding, it blocks in
+  ## `pollWritable` while stdout is non-writable. Uses `STDOUT_FILENO`
+  ## directly so it never goes through the stdio buffer or mixes ordering with
   ## `stdout.write`/`stdout.flushFile`. Returns bytes written (a short count
-  ## means it gave up on a wedged tty); never raises.
+  ## means it gave up on a wedged tty, or a pending reset kept it from trying at
+  ## all); never raises.
   ##
   ## Intended for mode toggles in `AsyncTerminal` that must stay callable from
   ## both async procs and the synchronous `cleanup` fallback used by crash
   ## handlers/signal hooks.
-  writeStream(data)
+  writeStream(data, {})
 
 proc tryWriteBlocking*(data: string) =
   ## Best-effort synchronous write for mode toggles and other non-critical

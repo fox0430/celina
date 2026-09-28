@@ -1,16 +1,16 @@
 # Tests for async_terminal module
 
-import std/[unittest, strutils, posix, importutils]
+import std/[unittest, strutils, posix, importutils, oserrors]
 
 import ../celina/async/[async_backend, async_buffer]
 import ../celina/core/[geometry, colors, buffer, errors]
 
 import ../celina/async/async_terminal {.all.}
-when hasChronos:
-  import ../celina/async/async_io {.all.}
+import ../celina/async/async_io {.all.}
 import ./stdout_capture
 import ../celina/core/terminal_common
-from ../celina/core/output_stream import clearPendingAbort
+from ../celina/core/output_stream import
+  clearPendingReset, resetPending, setPendingReset, srAbort, srOsc8, srSgr, srSyncEnd
 
 privateAccess(AsyncTerminal)
 
@@ -28,6 +28,18 @@ proc createTestTerminal(): AsyncTerminal =
   )
   # Initialize lastBuffer without fd registration
   result.lastBuffer = newBuffer(rect(0, 0, result.size.width, result.size.height))
+
+proc knownScreenTerminal(width, height: int): AsyncTerminal =
+  ## A terminal whose screen is known at the given size: `clearScreenAsync`
+  ## records a blank screen, so the next frame is a diff against it. Its own
+  ## output is captured, so a test's capture starts clean.
+  let terminal = createTestTerminal()
+  terminal.size = size(width, height)
+  discard captureStdout(
+    proc() =
+      waitFor terminal.clearScreenAsync()
+  )
+  terminal
 
 suite "AsyncTerminal Basic Operations":
   test "newAsyncTerminal creates terminal with default state":
@@ -270,10 +282,8 @@ suite "AsyncTerminal.clearScreenAsync":
       ResetAndClearScreenSeq &
       wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), frame))
 
-  test "a failed clear raises and makes the next draw an aborted full render":
-    let terminal = createTestTerminal()
-    terminal.size = size(10, 3)
-    terminal.lastBuffer = newBuffer(10, 3)
+  test "a clear that sent nothing raises and keeps the screen known":
+    let terminal = knownScreenTerminal(10, 3)
     var frame = newBuffer(10, 3)
     frame[2, 1] = cell("x")
 
@@ -292,22 +302,49 @@ suite "AsyncTerminal.clearScreenAsync":
         waitFor terminal.drawAsync(frame)
     )
 
-    check output == AbortFrameSeq & wrapWithSyncOutput(buildFullRenderOutput(frame))
+    # The clear emitted nothing, so the screen still shows `lastBuffer` and the
+    # next frame is a diff against it.
+    check output == wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), frame))
 
 suite "AsyncTerminal unknown screen state":
-  # A write that fails may have stopped partway, so the screen and the
-  # terminal's parser state are unknown until a frame or clear goes out.
-  teardown:
-    # A failed check or a resume must not leave an abort pending for the next
-    # test.
-    clearPendingAbort()
+  # A write that stops partway leaves the screen unknown, so the next frame is a
+  # full render. A write that sent nothing changes nothing: the screen keeps
+  # whatever it was, so a known screen stays known and its next frame is the
+  # same diff again. `withFailingStdout` (EBADF, zero bytes) covers the second
+  # case, `captureCutStdout` the first.
 
-  test "a failed drawAsync makes the next draw an aborted full render":
-    let terminal = createTestTerminal()
-    terminal.lastBuffer = newBuffer(10, 3)
+  teardown:
+    # A failed check or a resume must not leave a reset pending for the next
+    # test.
+    clearPendingReset()
+
+  # A frame celina wrapped needs its synchronized output block ended too.
+  const frameReset = AbortPartialSeq & Osc8Reset & "\e[0m" & SyncOutputDisable
+
+  test "a known screen diffs, and invalidate makes the next draw full":
+    let terminal = knownScreenTerminal(10, 3)
     var frame = newBuffer(10, 3)
     frame[2, 1] = cell("x")
 
+    let diff = captureStdout(
+      proc() =
+        waitFor terminal.drawAsync(frame)
+    )
+    check diff == wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), frame))
+
+    terminal.invalidate()
+    let drawn = captureStdout(
+      proc() =
+        waitFor terminal.drawAsync(frame)
+    )
+    check drawn == wrapWithSyncOutput(buildFullRenderOutput(frame))
+    # `lastBuffer` is kept; the state alone makes the next frame a full render.
+    check terminal.lastBuffer.area == rect(0, 0, 10, 3)
+
+  test "a write that sent nothing keeps the screen known":
+    let terminal = knownScreenTerminal(10, 3)
+    var frame = newBuffer(10, 3)
+    frame[2, 1] = cell("x")
     var raised = false
     withFailingStdout(
       proc() =
@@ -317,7 +354,6 @@ suite "AsyncTerminal unknown screen state":
           raised = true
     )
     check raised
-    check terminal.screenUnknown
 
     var next = frame
     next[3, 1] = cell("y")
@@ -325,21 +361,47 @@ suite "AsyncTerminal unknown screen state":
       proc() =
         waitFor terminal.drawAsync(next)
     )
-    check output == AbortFrameSeq & wrapWithSyncOutput(buildFullRenderOutput(next))
-    check not terminal.screenUnknown
+    # Not a full repaint: nothing was emitted, so the screen still shows
+    # `lastBuffer` and the next frame is a diff against it.
+    check output == wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), next))
 
-    # Known again: the frame after that is a plain diff.
-    var third = next
-    third[4, 1] = cell("z")
-    let diff = captureStdout(
+  test "an adopt draw that sent nothing leaves the next draw full":
+    let terminal = knownScreenTerminal(10, 3)
+    var frame = newBuffer(10, 3)
+    frame[2, 1] = cell("x")
+    let asyncBuffer = newAsyncBuffer(10, 3)
+    asyncBuffer.updateFromBuffer(frame)
+    var style = CursorStyle.Default
+    withFailingStdout(
       proc() =
-        waitFor terminal.drawAsync(third)
+        style = waitFor terminal.drawWithCursorAdoptAsync(
+          asyncBuffer, 1, 1, true, SteadyBar, lastCursorStyle = style
+        )
     )
-    check diff == wrapWithSyncOutput(buildDifferentialOutput(next, third))
+    check style == CursorStyle.Default
 
-  test "a failed drawWithCursorAsync makes the next frame an aborted full render":
-    let terminal = createTestTerminal()
-    terminal.lastBuffer = newBuffer(10, 3)
+    let output = captureStdout(
+      proc() =
+        discard waitFor terminal.drawWithCursorAdoptAsync(
+          asyncBuffer, 1, 1, true, SteadyBar, lastCursorStyle = style
+        )
+    )
+    let (expected, _) = buildOutputWithCursor(
+      newBuffer(10, 3),
+      frame,
+      1,
+      1,
+      true,
+      SteadyBar,
+      lastCursorStyle = style,
+      force = true,
+    )
+    # The grid was in the caller's hands while the failed write ran, so the
+    # screen is unknown and this frame is a full render.
+    check output == wrapWithSyncOutput(expected)
+
+  test "a failed drawWithCursorAsync keeps the screen known":
+    let terminal = knownScreenTerminal(10, 3)
     var frame = newBuffer(10, 3)
     frame[2, 1] = cell("x")
 
@@ -351,7 +413,6 @@ suite "AsyncTerminal unknown screen state":
         )
     )
     check style == CursorStyle.Default
-    check terminal.screenUnknown
 
     let output = captureStdout(
       proc() =
@@ -367,53 +428,83 @@ suite "AsyncTerminal unknown screen state":
       true,
       SteadyBar,
       lastCursorStyle = CursorStyle.Default,
-      force = true,
     )
-    check output == AbortFrameSeq & wrapWithSyncOutput(expected)
-    check not terminal.screenUnknown
+    check output == wrapWithSyncOutput(expected)
 
-  test "a failed first drawWithCursorAdoptAsync marks the screen unknown":
-    # Areas differ, so this is the copy path rather than the swap path.
-    let terminal = createTestTerminal()
-    terminal.lastBuffer = newBuffer(0, 0)
-    let asyncBuffer = newAsyncBuffer(10, 3)
-    asyncBuffer.withBuffer:
-      buffer[2, 1] = cell("x")
+  test "a draw cut off partway is reset at once and the next draw is full":
+    when defined(linux):
+      let terminal = knownScreenTerminal(10, 3)
+      var frame = newBuffer(10, 3)
+      frame[2, 1] = cell("x")
+      var next = frame
+      next[3, 1] = cell("y")
+      # `drawAsync` raises on a truncated frame (it does not swallow it), so the
+      # cut first draw is caught; the second one is the point of the test.
+      let cutDraw = proc() =
+        try:
+          waitFor terminal.drawAsync(frame)
+        except TerminalError:
+          discard
+        waitFor terminal.drawAsync(next)
+      let output = captureCutStdout(4, cutDraw)
 
-    withFailingStdout(
-      proc() =
-        discard waitFor terminal.drawWithCursorAdoptAsync(
-          asyncBuffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default
-        )
-    )
-    check terminal.screenUnknown
-    check terminal.lastBuffer.area.isEmpty()
+      let cutFrame =
+        wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), frame))
+      check output ==
+        cutFrame[0 ..< 4] & frameReset & wrapWithSyncOutput(buildFullRenderOutput(next))
+    else:
+      skip()
 
-  test "a clear after a failed write aborts first and makes the screen known":
-    let terminal = createTestTerminal()
-    terminal.size = size(10, 3)
-    terminal.lastBuffer = newBuffer(10, 3)
-    var frame = newBuffer(10, 3)
-    frame[2, 1] = cell("x")
-    withFailingStdout(
-      proc() =
-        discard waitFor terminal.drawWithCursorAsync(
-          frame, 0, 0, false, lastCursorStyle = CursorStyle.Default
-        )
-    )
+  test "a clear after a cut write is reset first and makes the screen known":
+    when defined(linux):
+      let terminal = knownScreenTerminal(10, 3)
+      var frame = newBuffer(10, 3)
+      frame[2, 1] = cell("x")
+      let cutDraw = proc() =
+        try:
+          waitFor terminal.drawAsync(frame)
+        except TerminalError:
+          discard
+      discard captureCutStdout(4, cutDraw, failedWrites = 2)
 
-    let output = captureStdout(
-      proc() =
-        waitFor terminal.clearScreenAsync()
-        waitFor terminal.drawAsync(frame)
-    )
-    check output ==
-      AbortFrameSeq & ResetAndClearScreenSeq &
-      wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), frame))
+      let output = captureStdout(
+        proc() =
+          waitFor terminal.clearScreenAsync()
+          waitFor terminal.drawAsync(frame)
+      )
+      check output ==
+        frameReset & ResetAndClearScreenSeq &
+        wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), frame))
+    else:
+      skip()
 
-  test "renderAsync renders in full while the screen is unknown":
-    let terminal = createTestTerminal()
-    terminal.lastBuffer = newBuffer(10, 3)
+  test "a clear cut off partway leaves the next draw full":
+    when defined(linux):
+      let terminal = knownScreenTerminal(10, 3)
+      var raised = false
+      discard captureCutStdout(
+        4,
+        proc() =
+          try:
+            waitFor terminal.clearScreenAsync()
+          except IOError:
+            raised = true,
+      )
+      check raised
+
+      var frame = newBuffer(10, 3)
+      frame[2, 1] = cell("x")
+      let output = captureStdout(
+        proc() =
+          waitFor terminal.drawAsync(frame)
+      )
+      # The clear stopped partway, so the screen is unknown: full render.
+      check output == wrapWithSyncOutput(buildFullRenderOutput(frame))
+    else:
+      skip()
+
+  test "a renderAsync that sent nothing keeps the screen known":
+    let terminal = knownScreenTerminal(10, 3)
     var frame = newBuffer(10, 3)
     frame[2, 1] = cell("x")
 
@@ -426,32 +517,81 @@ suite "AsyncTerminal unknown screen state":
           raised = true
     )
     check raised
-    check terminal.screenUnknown
 
-    # A diff against the old `lastBuffer` would be wrong.
     let output = captureStdout(
       proc() =
         waitFor terminal.renderAsync(frame)
     )
-    check output == AbortFrameSeq & wrapWithSyncOutput(buildFullRenderOutput(frame))
-    check not terminal.screenUnknown
+    check output == wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), frame))
 
-  test "resumeAsync sends the abort before its first write":
-    let terminal = createTestTerminal()
+  test "a renderAsync cut off partway makes the next render full":
+    when defined(linux):
+      let terminal = knownScreenTerminal(10, 3)
+      var frame = newBuffer(10, 3)
+      frame[2, 1] = cell("x")
+
+      var raised = false
+      let cutProc = proc() =
+        try:
+          waitFor terminal.renderAsync(frame)
+        except TerminalError:
+          raised = true
+      discard captureCutStdout(4, cutProc)
+      check raised
+
+      # A diff against the old `lastBuffer` would be wrong: render in full.
+      let output = captureStdout(
+        proc() =
+          waitFor terminal.renderAsync(frame)
+      )
+      check output == wrapWithSyncOutput(buildFullRenderOutput(frame))
+    else:
+      skip()
+
+  test "renderAsync renders in full after a resize":
+    let terminal = knownScreenTerminal(10, 3)
+    var frame = newBuffer(20, 5)
+    frame[2, 1] = cell("x")
+
+    let output = captureStdout(
+      proc() =
+        waitFor terminal.renderAsync(frame)
+    )
+    check output == wrapWithSyncOutput(buildFullRenderOutput(frame))
+
+  test "resumeAsync sends the reset before its first write":
+    let terminal = knownScreenTerminal(10, 3)
     discard captureStdout(
       proc() =
         waitFor terminal.suspendAsync()
     )
-    # Another program had the terminal and may have left a sequence open.
+    # Another program had the terminal and may have left a sequence, an OSC 8
+    # link, attributes set, or a block celina wrapped open.
     let resumed = captureStdout(
       proc() =
         waitFor terminal.resumeAsync()
     )
-    check resumed == AbortPartialSeq & HideCursorSeq
+    check resumed ==
+      AbortPartialSeq & Osc8Reset & "\e[0m" & SyncOutputDisable & HideCursorSeq
+    check not resetPending()
 
-  test "the first draw after resumeAsync is an aborted full render":
-    let terminal = createTestTerminal()
-    terminal.lastBuffer = newBuffer(10, 3)
+  test "a hand back after resumeAsync resets the attributes left behind":
+    # `suspendAsync`, `resumeAsync` and `cleanup` write no frame, so nothing
+    # else restores the attributes another program left set: without the SGR
+    # reset the shell inherits them. The next frame would start with one, but a
+    # hand back is not guaranteed to be followed by a frame.
+    let terminal = knownScreenTerminal(10, 3)
+    let handedBack = captureStdout(
+      proc() =
+        waitFor terminal.suspendAsync()
+        waitFor terminal.resumeAsync()
+        waitFor terminal.cleanupAsync()
+    )
+    check "\e[0m" in handedBack
+    check handedBack.endsWith(ShowCursorSeq)
+
+  test "the first draw after resumeAsync is a full render":
+    let terminal = knownScreenTerminal(10, 3)
     var frame = newBuffer(10, 3)
     frame[2, 1] = cell("x")
     discard captureStdout(
@@ -464,45 +604,221 @@ suite "AsyncTerminal unknown screen state":
       proc() =
         waitFor terminal.drawAsync(frame)
     )
-    check output == AbortFrameSeq & wrapWithSyncOutput(buildFullRenderOutput(frame))
+    check output == wrapWithSyncOutput(buildFullRenderOutput(frame))
 
-  test "cleanup, cleanupAsync and suspendAsync close what a failed write left open first":
-    let terminal = createTestTerminal()
-    terminal.lastBuffer = newBuffer(10, 3)
-    let known = captureStdout(
-      proc() =
-        waitFor terminal.cleanupAsync()
-    )
-    check known == ShowCursorSeq
+  test "cleanup, cleanupAsync and suspendAsync send the reset of a cut write first":
+    when defined(linux):
+      let terminal = knownScreenTerminal(10, 3)
+      let known = captureStdout(
+        proc() =
+          waitFor terminal.cleanupAsync()
+      )
+      check known == ShowCursorSeq
 
-    var frame = newBuffer(10, 3)
-    frame[2, 1] = cell("x")
-    withFailingStdout(
-      proc() =
-        discard waitFor terminal.drawWithCursorAsync(
-          frame, 0, 0, false, lastCursorStyle = CursorStyle.Default
+      var frame = newBuffer(10, 3)
+      frame[2, 1] = cell("x")
+      let cutDraw = proc() =
+        try:
+          waitFor terminal.drawAsync(frame)
+        except TerminalError:
+          discard
+
+      discard captureCutStdout(4, cutDraw, failedWrites = 2)
+      let cleanedAsync = captureStdout(
+        proc() =
+          waitFor terminal.cleanupAsync()
+      )
+      check cleanedAsync == frameReset & ShowCursorSeq
+
+      discard captureCutStdout(4, cutDraw, failedWrites = 2)
+      let cleaned = captureStdout(
+        proc() =
+          terminal.cleanup()
+      )
+      check cleaned == frameReset & ShowCursorSeq
+
+      discard captureCutStdout(4, cutDraw, failedWrites = 2)
+      let suspended = captureStdout(
+        proc() =
+          waitFor terminal.suspendAsync()
+      )
+      check suspended == frameReset & ShowCursorSeq
+    else:
+      skip()
+
+  # `F_SETPIPE_SZ` is a Linux extension, so the pipe can only be shrunk here.
+  when defined(linux) and hasChronos:
+    var F_SETPIPE_SZ {.importc: "F_SETPIPE_SZ", header: "<fcntl.h>".}: cint
+
+    # A chronos cancel must reach the caller (a `cancelAndWait` shutdown depends
+    # on it) and count as a partial write: the frame may have gone out in part.
+    # The body is an `async` proc because a chronos cancel has to be awaited to
+    # observe; the test itself only `waitFor`s the result.
+    proc cancelDuringFrameDraw(
+        terminal: AsyncTerminal, frame: Buffer
+    ): Future[tuple[cancelled: bool, style: CursorStyle, note: string]] {.async.} =
+      var fds: array[2, cint]
+      if pipe(fds) != 0:
+        return (cancelled: false, style: CursorStyle.Default, note: "pipe failed")
+      # A small pipe buffer, so even a modest frame parks on EAGAIN instead of
+      # waiting for the 64 KiB default to fill. `F_SETPIPE_SZ` returns the new
+      # size, so only -1 is a failure. The caller pins the frame to be larger
+      # than what is asked for here; if the shrink does not take (a sandbox that
+      # forbids it, a pipe-user-pages limit) the whole frame would fit the
+      # default buffer and the write would never park, so say so instead of
+      # letting that read as a lost cancel.
+      let shrunk = fcntl(fds[1], F_SETPIPE_SZ, 4096)
+      if shrunk < 0:
+        let why = osErrorMsg(osLastError()) # before any other call touches errno
+        discard close(fds[0])
+        discard close(fds[1])
+        return (
+          cancelled: false,
+          style: CursorStyle.Default,
+          note: "cannot shrink the pipe buffer: " & why,
         )
-    )
-    check terminal.screenUnknown
+      for fd in fds:
+        discard fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) or O_NONBLOCK)
+      stdout.flushFile()
+      let saved = dup(STDOUT_FILENO)
+      if saved < 0:
+        discard close(fds[0])
+        discard close(fds[1])
+        return (cancelled: false, style: CursorStyle.Default, note: "dup failed")
 
-    let restore = AbortFrameSeq & "\e[0m"
-    let cleanedAsync = captureStdout(
-      proc() =
-        waitFor terminal.cleanupAsync()
-    )
-    check cleanedAsync == restore & ShowCursorSeq
+      var
+        cancelled = false
+        style = CursorStyle.Default
+        note = ""
+      try:
+        discard dup2(fds[1], STDOUT_FILENO)
+        let fut = terminal.drawWithCursorAsync(
+          frame, 0, 0, true, CursorStyle.Default, lastCursorStyle = style
+        )
+        # The pipe holds 4096 bytes and the frame is larger than that (the
+        # caller checks the margin), so once bytes are observable on the read
+        # end the writer is parked mid-write: wait for that instead of assuming a
+        # fixed sleep gets the cancel there. The probe never blocks (timeout 0);
+        # the `await` yields to the writer.
+        var started = false
+        for _ in 0 ..< 500: # up to ~5 s
+          var pfd: Tpollfd
+          pfd.fd = fds[0]
+          pfd.events = POLLIN
+          pfd.revents = 0
+          if posix.poll(addr pfd, 1, 0) > 0:
+            started = true
+            break
+          await sleepMs(10)
+        if not started:
+          note = "frame write did not start within the wait bound"
+        else:
+          fut.cancelSoon()
+          try:
+            # Awaiting the future itself is what observes the error: `join` and
+            # `cancelAndWait` swallow it, which is the bug this test pins down.
+            let applied: CursorStyle = await fut
+            style = applied
+            # It returned without raising, so the write finished on its own —
+            # went out in full, or gave up on a short count. Either way the
+            # cancel was not observed, and saying so keeps a failure from
+            # arriving with no reason at all.
+            note = "frame write finished without a cancel"
+          except CancelledError:
+            cancelled = true
+          except CatchableError as e:
+            # The frame failed on its own before the cancel landed; keep the
+            # reason so a failure can be told apart from a lost cancel.
+            note = "frame failed on its own: " & e.msg
+        # Drain the pipe so the write end is empty again before it is closed.
+        var buf = newString(65536)
+        while posix.read(fds[0], addr buf[0], buf.len) > 0:
+          discard
+      finally:
+        discard dup2(saved, STDOUT_FILENO)
+        discard close(saved)
+        discard close(fds[0])
+        discard close(fds[1])
+      (cancelled: cancelled, style: style, note: note)
 
-    let cleaned = captureStdout(
-      proc() =
-        terminal.cleanup()
-    )
-    check cleaned == restore & ShowCursorSeq
+    test "a cancel during a frame write is not swallowed":
+      let terminal = knownScreenTerminal(10, 3)
+      # A frame larger than the pipe buffer the helper asks for (styled cells in
+      # every position, ~6.4 KiB against its 4 KiB), so the write parks on EAGAIN
+      # and the cancel lands in the middle of it. The margin is what makes the
+      # cancel reachable at all, and it is only ~1.6x, so pin it: a frame that
+      # shrank below the buffer would be written in full and the test would
+      # report a lost cancel instead of the real cause.
+      var frame = newBuffer(100, 60)
+      for y in 0 ..< 60:
+        for x in 0 ..< 100:
+          frame[x, y] = cell($((x + y) mod 10), style(Color.Red, modifiers = {Bold}))
+      check buildFullRenderOutput(frame).len > 4096
 
-    let suspended = captureStdout(
-      proc() =
-        waitFor terminal.suspendAsync()
-    )
-    check suspended == restore & ShowCursorSeq
+      let (cancelled, style, note) = waitFor cancelDuringFrameDraw(terminal, frame)
+
+      check note == ""
+      check cancelled
+      # The tracked cursor style is unchanged.
+      check style == CursorStyle.Default
+      # The cancel counts as a partial write: the first write after it carries
+      # its resets, and the screen is unknown. A frame of the screen's own size
+      # proves the unknown part — the size difference of the cancelled frame
+      # would force a full render on its own.
+      var small = newBuffer(10, 3)
+      small[1, 1] = cell("z")
+      let (expected, _) = buildOutputWithCursor(
+        newBuffer(10, 3),
+        small,
+        0,
+        0,
+        true,
+        CursorStyle.Default,
+        lastCursorStyle = style,
+        force = true,
+      )
+      let output = captureStdout(
+        proc() =
+          discard waitFor terminal.drawWithCursorAsync(
+            small, 0, 0, true, CursorStyle.Default, lastCursorStyle = style
+          )
+      )
+      check (AbortPartialSeq & Osc8Reset & "\e[0m") in output
+      check output.endsWith(wrapWithSyncOutput(expected))
+  else:
+    test "a cancel during a frame write is not swallowed":
+      skip()
+
+  test "a frame that waited for the lock is planned after the writer ahead of it":
+    let terminal = knownScreenTerminal(10, 3)
+    var frame = newBuffer(10, 3)
+    frame[3, 1] = cell("y")
+
+    # Hold the lock so the frame below parks on it, then leave behind what a
+    # write that stopped partway leaves: the screen unknown and its reset
+    # pending. The frame is planned only once the lock is handed over, so it
+    # is a full render behind that reset, not a diff against the screen as it
+    # was when the frame was called. The lock and the planning under it are
+    # shared by both async backends, so this runs on both.
+    doAssert tryAcquireStdoutLockImmediate()
+    let parked = terminal.drawAsync(frame)
+    # What a wrapped frame that stopped partway leaves behind: the abort and
+    # the resets of what it had opened.
+    setPendingReset({srAbort, srOsc8, srSgr, srSyncEnd})
+    terminal.invalidate()
+    try:
+      let output = captureStdout(
+        proc() =
+          releaseStdoutLock()
+          waitFor parked
+      )
+      check output == frameReset & wrapWithSyncOutput(buildFullRenderOutput(frame))
+      check not resetPending()
+    finally:
+      # The lock must not stay held for the rest of the suite: the frame
+      # releases it on its own way out, so this only matters when the body
+      # above never ran or never got that far.
+      releaseStdoutLock()
 
 suite "AsyncTerminal POSIX Platform Support":
   test "Terminal size detection works on POSIX systems":
@@ -713,10 +1029,11 @@ suite "Async Adopt Rendering":
         # The previous frame's cell must be gone from the adopted baseline.
         check terminal.lastBuffer[i - 1, 0].symbol != $(i - 1)
 
-  test "drawWithCursorAdoptAsync rolls back lastBuffer on a truncated write":
-    # Regression for the commit-before-await reorder: on the steady-state swap
-    # path, `lastBuffer` is committed before the write. If the write fails, the
-    # swap is rolled back and the screen is marked unknown.
+  test "drawWithCursorAdoptAsync rolls back lastBuffer when the write sends nothing":
+    # On the steady-state swap path, `lastBuffer` is adopted before the write, so
+    # a task that mutates the grid during a flow-controlled write cannot corrupt
+    # it. If the frame does not go out in full, the swap is rolled back and the
+    # caller keeps the grid it rendered.
     let terminal = createTestTerminal()
     terminal.lastBuffer = newBuffer(10, 5)
     terminal.lastBuffer[0, 0] = cell("OLD")
@@ -726,8 +1043,8 @@ suite "Async Adopt Rendering":
       buffer[0, 0] = cell("NEW")
 
     # Redirect stdout (fd 1) to a read-only fd so the underlying posix.write
-    # fails with EBADF and writeOrRaiseAsync raises IOError. Save and restore
-    # the original fd so only this test is affected.
+    # fails with EBADF and the frame is never sent. Save and restore the
+    # original fd so only this test is affected.
     let savedStdout = posix.dup(STDOUT_FILENO)
     let roFd = posix.open("/dev/null", O_RDONLY)
     require savedStdout >= 0
@@ -752,9 +1069,8 @@ suite "Async Adopt Rendering":
     asyncBuffer.withBuffer:
       check buffer[0, 0].symbol == "NEW"
 
-    # The write may have stopped partway: the next frame is an aborted full
-    # render even without force.
-    check terminal.screenUnknown
+    # Nothing was emitted, so only the forced invalidation makes the next frame
+    # a full render, and no reset is owed.
     var expected: string
     asyncBuffer.withBuffer:
       expected = buildOutputWithCursor(
@@ -772,8 +1088,7 @@ suite "Async Adopt Rendering":
           asyncBuffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default
         )
     )
-    check output == AbortFrameSeq & wrapWithSyncOutput(expected)
-    check not terminal.screenUnknown
+    check output == wrapWithSyncOutput(expected)
 
 suite "AsyncTerminal Performance Considerations":
   test "Large buffer handling":

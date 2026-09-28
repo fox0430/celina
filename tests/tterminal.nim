@@ -43,6 +43,18 @@ when defined(posix):
     else:
       result = ""
 
+proc knownScreenTerminal(width, height: int): Terminal =
+  ## A terminal whose screen is known at the given size: `clearScreen` records a
+  ## blank screen, so the next frame is a diff against it. Its own output is
+  ## captured, so a test's capture starts clean.
+  let terminal = newTerminal()
+  terminal.size = size(width, height)
+  discard captureStdout(
+    proc() =
+      terminal.clearScreen()
+  )
+  terminal
+
 suite "Terminal Module Tests":
   suite "Terminal Creation":
     test "Terminal creation with newTerminal()":
@@ -910,8 +922,8 @@ suite "Terminal Module Tests":
 
   suite "Writes cut off partway":
     teardown:
-      # A failed check must not leave an abort pending for the next test.
-      clearPendingAbort()
+      # A failed check must not leave a reset pending for the next test.
+      clearPendingReset()
 
     test "a control sequence cut off partway is aborted before the next write":
       when defined(linux):
@@ -1079,11 +1091,9 @@ suite "Terminal Module Tests":
       else:
         skip()
 
-    test "a failed clear raises and makes the next draw an aborted full render":
+    test "a clear that sent nothing raises and keeps the screen known":
       when defined(posix):
-        let terminal = newTerminal()
-        terminal.size = size(10, 3)
-        terminal.lastBuffer = newBuffer(10, 3)
+        let terminal = knownScreenTerminal(10, 3)
 
         var raised = false
         withFailingStdout(
@@ -1102,37 +1112,55 @@ suite "Terminal Module Tests":
             terminal.draw(frame)
         )
 
-        check output == AbortFrameSeq & wrapWithSyncOutput(buildFullRenderOutput(frame))
+        # The clear emitted nothing, so the screen still shows `lastBuffer` and
+        # the next frame is a diff against it.
+        check output ==
+          wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), frame))
       else:
         skip()
 
   suite "Unknown screen state":
-    # A write that fails may have stopped partway, so the screen and the
-    # terminal's parser state are unknown until a frame or clear goes out.
+    # A write that stops partway leaves the screen unknown, so the next frame is
+    # a full render. A write that sent nothing changes nothing: the screen keeps
+    # whatever it was, so a known screen stays known and its next frame is the
+    # same diff again. `withFailingStdout` (EBADF, zero bytes) covers the second
+    # case, `captureCutStdout` the first.
+
     teardown:
-      # A failed check or a resume must not leave an abort pending for the
+      # A failed check or a resume must not leave a reset pending for the
       # next test.
-      clearPendingAbort()
+      clearPendingReset()
 
-    test "the screen state templates work outside the terminal module":
-      # They are exported from terminal_common, so they must not need the
-      # terminal module's private fields.
-      let terminal = newTerminal()
-      terminal.size = size(4, 2)
-      terminal.markScreenUnknown()
-      check terminal.screenUnknown
-      check terminal.frameForce(false)
-      check terminal.frameBytes("x") == AbortFrameSeq & wrapWithSyncOutput("x")
+    # A frame celina wrapped needs its synchronized output block ended too.
+    const frameReset = AbortPartialSeq & Osc8Reset & "\e[0m" & SyncOutputDisable
 
-      var frame = newBuffer(4, 2)
-      terminal.adoptLastBufferImpl(frame)
-      check not terminal.screenUnknown
-      check terminal.frameBytes("x") == wrapWithSyncOutput("x")
-
-    test "a failed draw makes the next draw an aborted full render":
+    test "a known screen diffs, and invalidate makes the next draw a full render":
       when defined(posix):
-        let terminal = newTerminal()
-        terminal.lastBuffer = newBuffer(10, 3)
+        let terminal = knownScreenTerminal(10, 3)
+        var frame = newBuffer(10, 3)
+        frame[2, 1] = cell("x")
+
+        let diff = captureStdout(
+          proc() =
+            terminal.draw(frame)
+        )
+        check diff ==
+          wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), frame))
+
+        terminal.invalidate()
+        let drawn = captureStdout(
+          proc() =
+            terminal.draw(frame)
+        )
+        check drawn == wrapWithSyncOutput(buildFullRenderOutput(frame))
+        # `lastBuffer` is kept; the state alone makes the next frame a full render.
+        check terminal.lastBuffer.area == rect(0, 0, 10, 3)
+      else:
+        skip()
+
+    test "a write that sent nothing keeps the screen known":
+      when defined(posix):
+        let terminal = knownScreenTerminal(10, 3)
         var frame = newBuffer(10, 3)
         frame[2, 1] = cell("x")
         withFailingStdout(
@@ -1146,23 +1174,17 @@ suite "Terminal Module Tests":
           proc() =
             terminal.draw(next)
         )
-        check output == AbortFrameSeq & wrapWithSyncOutput(buildFullRenderOutput(next))
-
-        # Known again: the frame after that is a plain diff.
-        var third = next
-        third[4, 1] = cell("z")
-        let diff = captureStdout(
-          proc() =
-            terminal.draw(third)
-        )
-        check diff == wrapWithSyncOutput(buildDifferentialOutput(next, third))
+        # Not a full repaint: nothing was emitted, so the screen still shows
+        # `lastBuffer` and the next frame is a diff against it.
+        check output ==
+          wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), next))
+        check output != buildFullRenderOutput(next)
       else:
         skip()
 
-    test "a failed drawWithCursor makes the next frame an aborted full render":
+    test "a failed drawWithCursor returns the previous cursor style and keeps the screen known":
       when defined(posix):
-        let terminal = newTerminal()
-        terminal.lastBuffer = newBuffer(10, 3)
+        let terminal = knownScreenTerminal(10, 3)
         var frame = newBuffer(10, 3)
         frame[2, 1] = cell("x")
         var style = CursorStyle.Default
@@ -1188,29 +1210,54 @@ suite "Terminal Module Tests":
           true,
           SteadyBar,
           lastCursorStyle = CursorStyle.Default,
-          force = true,
         )
-        check output == AbortFrameSeq & wrapWithSyncOutput(expected)
+        check output == wrapWithSyncOutput(expected)
       else:
         skip()
 
-    test "a clear after a failed write aborts first and makes the screen known":
-      when defined(posix):
-        let terminal = newTerminal()
-        terminal.size = size(10, 3)
-        terminal.lastBuffer = newBuffer(10, 3)
+    test "a draw cut off partway is reset at once and the next draw is full":
+      when defined(linux):
+        let terminal = knownScreenTerminal(10, 3)
         var frame = newBuffer(10, 3)
         frame[2, 1] = cell("x")
-        withFailingStdout(
+        var next = frame
+        next[3, 1] = cell("y")
+        let output = captureCutStdout(
+          4,
           proc() =
             terminal.draw(frame)
+            terminal.draw(next),
+        )
+
+        let cutFrame =
+          wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), frame))
+        # The cut write's own reset goes out at once (its no-wait try), then the
+        # next frame is a full render in a new synchronized output block.
+        check output ==
+          cutFrame[0 ..< 4] & frameReset &
+          wrapWithSyncOutput(buildFullRenderOutput(next))
+      else:
+        skip()
+
+    test "a clear after a cut write is reset first and makes the screen known":
+      when defined(linux):
+        let terminal = knownScreenTerminal(10, 3)
+        var frame = newBuffer(10, 3)
+        frame[2, 1] = cell("x")
+        discard captureCutStdout(
+          4,
+          proc() =
+            terminal.draw(frame),
+          failedWrites = 2,
         )
 
         let cleared = captureStdout(
           proc() =
             terminal.clearScreen()
         )
-        check cleared == AbortFrameSeq & ResetAndClearScreenSeq
+        # The frame named the OSC 8, SGR and block resets; the clear adds only
+        # its own reset-and-clear.
+        check cleared == frameReset & ResetAndClearScreenSeq
 
         let output = captureStdout(
           proc() =
@@ -1221,10 +1268,55 @@ suite "Terminal Module Tests":
       else:
         skip()
 
-    test "render and renderFull abort first while the screen is unknown":
+    test "an adopt draw that sent nothing leaves the next draw full":
       when defined(posix):
-        let terminal = newTerminal()
-        terminal.lastBuffer = newBuffer(10, 3)
+        let terminal = knownScreenTerminal(10, 3)
+        var frame = newBuffer(10, 3)
+        frame[2, 1] = cell("x")
+        var buffer = frame
+        withFailingStdout(
+          proc() =
+            terminal.drawAdopt(buffer)
+        )
+
+        # The staged swap was rolled back, but the grid was in the caller's
+        # hands while the write ran, so it is not trusted as the diff basis.
+        let output = captureStdout(
+          proc() =
+            terminal.drawAdopt(buffer)
+        )
+        check output == wrapWithSyncOutput(buildFullRenderOutput(frame))
+      else:
+        skip()
+
+    test "a clear cut off partway leaves the next draw full":
+      when defined(linux):
+        let terminal = knownScreenTerminal(10, 3)
+        var raised = false
+        discard captureCutStdout(
+          4,
+          proc() =
+            try:
+              terminal.clearScreen()
+            except IOError:
+              raised = true,
+        )
+        check raised
+
+        var frame = newBuffer(10, 3)
+        frame[2, 1] = cell("x")
+        let output = captureStdout(
+          proc() =
+            terminal.draw(frame)
+        )
+        # The clear stopped partway, so the screen is unknown: full render.
+        check output == wrapWithSyncOutput(buildFullRenderOutput(frame))
+      else:
+        skip()
+
+    test "a render that sent nothing raises and keeps the screen known":
+      when defined(posix):
+        let terminal = knownScreenTerminal(10, 3)
         var frame = newBuffer(10, 3)
         frame[2, 1] = cell("x")
 
@@ -1238,24 +1330,39 @@ suite "Terminal Module Tests":
         )
         check raised
 
+        let diff = captureStdout(
+          proc() =
+            terminal.render(frame)
+        )
+        check diff == buildDifferentialOutput(newBuffer(10, 3), frame)
+      else:
+        skip()
+
+    test "a render cut off partway makes the next render full":
+      when defined(linux):
+        let terminal = knownScreenTerminal(10, 3)
+        var frame = newBuffer(10, 3)
+        frame[2, 1] = cell("x")
+
+        var raised = false
+        let cut = captureCutStdout(
+          4,
+          proc() =
+            try:
+              terminal.render(frame)
+            except TerminalError:
+              raised = true,
+        )
+        check raised
+
         # A diff against the old `lastBuffer` would be wrong: render in full.
         let rendered = captureStdout(
           proc() =
             terminal.render(frame)
         )
-        check rendered == AbortFrameSeq & buildFullRenderOutput(frame)
+        check rendered == buildFullRenderOutput(frame)
 
-        withFailingStdout(
-          proc() =
-            terminal.draw(newBuffer(10, 3))
-        )
-        let full = captureStdout(
-          proc() =
-            terminal.renderFull(frame)
-        )
-        check full == AbortFrameSeq & buildFullRenderOutput(frame)
-
-        # Known again: no abort, and render diffs.
+        # Known again: render diffs.
         var next = frame
         next[3, 1] = cell("y")
         let diff = captureStdout(
@@ -1263,30 +1370,116 @@ suite "Terminal Module Tests":
             terminal.render(next)
         )
         check diff == buildDifferentialOutput(frame, next)
+        # The low-level render is not wrapped, so only the OSC 8 and SGR resets.
+        check (AbortPartialSeq & Osc8Reset & "\e[0m") in cut
       else:
         skip()
 
-    test "resume sends the abort before its first write":
+    test "renderFull forces, so a failed one leaves the screen unknown":
+      when defined(posix):
+        let terminal = knownScreenTerminal(10, 3)
+        var frame = newBuffer(10, 3)
+        frame[2, 1] = cell("x")
+
+        var raised = false
+        withFailingStdout(
+          proc() =
+            try:
+              terminal.renderFull(frame)
+            except TerminalError:
+              raised = true
+        )
+        check raised
+
+        # `force` is an invalidation, so even a clear that sent nothing leaves
+        # the next frame a full render.
+        let rendered = captureStdout(
+          proc() =
+            terminal.render(frame)
+        )
+        check rendered == buildFullRenderOutput(frame)
+      else:
+        skip()
+
+    test "render and renderFull render in full after a resize":
+      when defined(posix):
+        let terminal = knownScreenTerminal(10, 3)
+        var frame = newBuffer(20, 5)
+        frame[2, 1] = cell("x")
+
+        # The areas differ, so a diff against a cropped `lastBuffer` would be
+        # wrong. The sync render is not wrapped in synchronized output.
+        let rendered = captureStdout(
+          proc() =
+            terminal.render(frame)
+        )
+        check rendered == buildFullRenderOutput(frame)
+        check SyncOutputEnable notin rendered
+      else:
+        skip()
+
+    test "resume sends the reset before its first write":
       when defined(posix):
         let terminal = newTerminal()
         discard captureStdout(
           proc() =
             terminal.suspend()
         )
-        # Another program had the terminal and may have left a sequence open.
+        # Another program had the terminal and may have left a sequence, an
+        # OSC 8 link, attributes set, or a block celina wrapped open.
         let resumed = captureStdout(
           proc() =
             terminal.resume()
         )
-        check resumed == AbortPartialSeq & HideCursorSeq
-        check not abortPending()
+        check resumed ==
+          AbortPartialSeq & Osc8Reset & "\e[0m" & SyncOutputDisable & HideCursorSeq
+        check not resetPending()
       else:
         skip()
 
-    test "the first draw after resume is an aborted full render":
+    test "a hand back after resume resets the attributes the other program left":
       when defined(posix):
+        # `resume` and `suspend` do not write a frame, so nothing else restores
+        # the attributes another program left set: without the SGR reset the
+        # shell inherits them. The next frame would start with one, but a
+        # hand back is not guaranteed to be followed by a frame.
         let terminal = newTerminal()
-        terminal.lastBuffer = newBuffer(10, 3)
+        let handedBack = captureStdout(
+          proc() =
+            terminal.suspend()
+            terminal.resume()
+            terminal.cleanup()
+        )
+        check "\e[0m" in handedBack
+        check handedBack.endsWith(ShowCursorSeq)
+      else:
+        skip()
+
+    test "resume widens a pending reset instead of replacing it":
+      when defined(posix):
+        # A frame that stopped partway leaves its reset pending, the SGR one
+        # included. `resume` names the resets another program may have left
+        # open, so it adds to what is pending; replacing it would drop the SGR
+        # reset the cut frame still needs.
+        let terminal = newTerminal()
+        discard captureStdout(
+          proc() =
+            terminal.suspend()
+        )
+        setPendingReset({srOsc8, srSgr, srSyncEnd})
+        let resumed = captureStdout(
+          proc() =
+            terminal.resume()
+        )
+        check resumed ==
+          AbortPartialSeq & Osc8Reset & "\e[0m" & SyncOutputDisable & HideCursorSeq
+        check not resetPending()
+      else:
+        skip()
+
+    test "the first draw after resume is a full render":
+      when defined(posix):
+        let terminal = knownScreenTerminal(10, 3)
         var frame = newBuffer(10, 3)
         frame[2, 1] = cell("x")
         discard captureStdout(
@@ -1299,37 +1492,13 @@ suite "Terminal Module Tests":
           proc() =
             terminal.draw(frame)
         )
-        check drawn == AbortFrameSeq & wrapWithSyncOutput(buildFullRenderOutput(frame))
+        check drawn == wrapWithSyncOutput(buildFullRenderOutput(frame))
       else:
         skip()
 
-    test "a draw cut off partway is aborted at once and the next draw is full":
+    test "cleanup and suspend send the reset of a cut write first":
       when defined(linux):
-        let terminal = newTerminal()
-        terminal.lastBuffer = newBuffer(10, 3)
-        var frame = newBuffer(10, 3)
-        frame[2, 1] = cell("x")
-        var next = frame
-        next[3, 1] = cell("y")
-        let output = captureCutStdout(
-          10,
-          proc() =
-            terminal.draw(frame)
-            terminal.draw(next),
-        )
-
-        let cutFrame =
-          wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), frame))
-        check output ==
-          cutFrame[0 ..< 10] & AbortPartialSeq & AbortFrameSeq &
-          wrapWithSyncOutput(buildFullRenderOutput(next))
-      else:
-        skip()
-
-    test "cleanup and suspend close what a failed write left open first":
-      when defined(posix):
-        let terminal = newTerminal()
-        terminal.lastBuffer = newBuffer(10, 3)
+        let terminal = knownScreenTerminal(10, 3)
         let known = captureStdout(
           proc() =
             terminal.cleanup()
@@ -1338,55 +1507,68 @@ suite "Terminal Module Tests":
 
         var frame = newBuffer(10, 3)
         frame[2, 1] = cell("x")
-        withFailingStdout(
+        discard captureCutStdout(
+          4,
           proc() =
-            terminal.draw(frame)
+            terminal.draw(frame),
+          failedWrites = 2,
         )
         let cleaned = captureStdout(
           proc() =
             terminal.cleanup()
         )
-        check cleaned == AbortFrameSeq & "\e[0m" & ShowCursorSeq
+        check cleaned == frameReset & ShowCursorSeq
 
+        discard captureCutStdout(
+          4,
+          proc() =
+            terminal.draw(frame),
+          failedWrites = 2,
+        )
         let suspended = captureStdout(
           proc() =
             terminal.suspend()
         )
-        check suspended == AbortFrameSeq & "\e[0m" & ShowCursorSeq
+        check suspended == frameReset & ShowCursorSeq
       else:
         skip()
 
-    test "the abort keeps a synchronized output block the app opened":
-      when defined(posix):
-        let terminal = newTerminal()
-        terminal.size = size(10, 3)
-        terminal.lastBuffer = newBuffer(10, 3)
+    test "a reset keeps the synchronized output block the app opened":
+      when defined(linux):
+        # With mode 2026 on, celina does not wrap its frames, so a cut frame
+        # leaves the app's block open and the reset must not close it.
+        let terminal = knownScreenTerminal(10, 3)
         discard captureStdout(
           proc() =
             terminal.enableSyncOutput()
         )
         var frame = newBuffer(10, 3)
         frame[2, 1] = cell("x")
-        withFailingStdout(
+        const appReset = AbortPartialSeq & Osc8Reset & "\e[0m"
+        discard captureCutStdout(
+          4,
           proc() =
-            terminal.draw(frame)
+            terminal.draw(frame),
+          failedWrites = 2,
         )
+
         let cleared = captureStdout(
           proc() =
             terminal.clearScreen()
         )
-        check cleared == AbortFrameKeepSyncSeq & ResetAndClearScreenSeq
+        check cleared == appReset & ResetAndClearScreenSeq
 
-        withFailingStdout(
-          proc() =
-            terminal.draw(frame)
-        )
         # cleanup ends the app's block once, in its own step.
+        discard captureCutStdout(
+          4,
+          proc() =
+            terminal.draw(frame),
+          failedWrites = 2,
+        )
         let cleaned = captureStdout(
           proc() =
             terminal.cleanup()
         )
-        check cleaned ==
-          AbortFrameKeepSyncSeq & "\e[0m" & ShowCursorSeq & SyncOutputDisable
+        check cleaned == appReset & ShowCursorSeq & SyncOutputDisable
       else:
         skip()
