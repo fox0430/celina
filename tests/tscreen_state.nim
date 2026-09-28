@@ -265,6 +265,21 @@ suite "Screen state: adopt":
     check state.lastBuffer.area == rect(0, 0, 6, 3)
     check frame.area == rect(0, 0, 6, 3)
 
+  test "a resize during a failed staged write is kept":
+    for outcome in [swPartial, swNone]:
+      var state = knownScreen(4, 2)
+      var frame = newBuffer(4, 2)
+      var plan = state.planFrame(frame, noCursor, false)
+
+      state.stage(plan, frame)
+      frame.resize(rect(0, 0, 6, 3))
+      state.finishAdopt(plan, frame, outcome)
+
+      check frame.area == rect(0, 0, 6, 3)
+      check not state.known
+      let next = state.planFrame(frame, noCursor, false)
+      check next.bytes == buildFullRenderOutput(frame)
+
   test "a staged frame is adopted clean":
     var state = knownScreen(4, 2)
     var frame = newBuffer(4, 2)

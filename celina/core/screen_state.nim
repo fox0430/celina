@@ -159,12 +159,15 @@ proc finishAdopt*(
   ## A staged frame that sent nothing still leaves the screen unknown: the
   ## rolled-back storage is the caller's grid while the write is in flight, so
   ## a writer that runs during the write (the async adopt path awaits) may have
-  ## mutated it, and it is no longer a safe diff basis.
+  ## mutated it, and it is no longer a safe diff basis. If that writer resized
+  ## the grid, the caller keeps the resized storage and no swap back happens:
+  ## the screen is unknown then, so `lastBuffer` is not used as a diff basis.
   if plan.kind == pkFrame:
     if plan.staged:
       if outcome != swAll:
-        swap(s.lastBuffer, buffer)
-        s.lastBuffer.clearDirty()
+        if s.lastBuffer.area == buffer.area:
+          swap(s.lastBuffer, buffer)
+          s.lastBuffer.clearDirty()
         if outcome == swNone:
           s.invalidate()
     elif outcome == swAll:

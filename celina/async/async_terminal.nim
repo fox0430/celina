@@ -980,9 +980,10 @@ proc drawWithCursorAdoptAsync*(
   ## parameters.
   ##
   ## The frame is adopted before the write and handed back on a partial or
-  ## cancelled write, so a concurrent task that mutates `asyncBuffer` during a
-  ## flow-controlled write can no longer desync `lastBuffer` from the bytes
-  ## actually emitted. A write that stopped partway, was cancelled, or sent
+  ## cancelled write (unless `asyncBuffer` was resized during the write: then
+  ## it keeps the new size), so a concurrent task that mutates `asyncBuffer`
+  ## during a flow-controlled write can no longer desync `lastBuffer` from the
+  ## bytes actually emitted. A write that stopped partway, was cancelled, or sent
   ## nothing marks the screen unknown, so the next frame is a full render (for
   ## a write that sent nothing, the grid was in play during the write).
   ##
