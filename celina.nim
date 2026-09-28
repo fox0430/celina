@@ -74,8 +74,13 @@ import celina/async/async_backend
 export unicode
 
 export
-  geometry, colors, buffer, events, layout, terminal, errors, terminal_common, app,
-  app_delegation, app_handlers, renderer, cursor, fps, windows, borders
+  geometry, colors, buffer, events, layout, terminal, errors, app, app_delegation,
+  app_handlers, renderer, cursor, fps, windows, borders
+
+# Exported only for screen_state, output_stream and async_terminal.
+export terminal_common except
+  appendCursorCommands, needsFullRender, AbortPartialSeq, ResetAndClearScreenSeq,
+  EmergencyAltScreenTail
 
 export async_backend, hasAsyncSupport, hasChronos, hasAsyncDispatch
 

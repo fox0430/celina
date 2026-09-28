@@ -122,6 +122,15 @@ suite "Celina Main Module Tests":
       check config.alternateScreen == true
       check config.targetFps == 60
 
+    test "terminal_common internals are not re-exported":
+      check not compiles(appendCursorCommands)
+      check not compiles(needsFullRender)
+      check not compiles(AbortPartialSeq)
+      check not compiles(ResetAndClearScreenSeq)
+      check not compiles(EmergencyAltScreenTail)
+      check compiles(EmergencyResetSeq)
+      check compiles(EmergencyResetAltScreenSeq)
+
   suite "Window Management API":
     test "app without window mode handles gracefully":
       let app = newApp()
@@ -329,5 +338,46 @@ suite "Integration Tests":
       # Test that newApp() without config uses default
       let app2 = newApp()
       check app2.getTargetFps() == 60 # Should use default
+
+suite "v0.13.0 Compatibility":
+  test "adoptLastBufferImpl swaps when the areas match":
+    let terminal = newTerminal()
+    terminal.lastBuffer = newBuffer(4, 2)
+    terminal.lastBuffer[0, 0] = cell("old")
+    var buffer = newBuffer(4, 2)
+    buffer[0, 0] = cell("new")
+
+    adoptLastBufferImpl(terminal, buffer)
+
+    check terminal.lastBuffer[0, 0].symbol == "new"
+    check buffer[0, 0].symbol == "old"
+    check not terminal.lastBuffer.isDirty
+
+  test "adoptLastBufferImpl copies when the areas differ":
+    let terminal = newTerminal()
+    terminal.lastBuffer = newBuffer(4, 2)
+    var buffer = newBuffer(6, 3)
+    buffer[0, 0] = cell("new")
+
+    adoptLastBufferImpl(terminal, buffer)
+
+    check terminal.lastBuffer.area == rect(0, 0, 6, 3)
+    check terminal.lastBuffer[0, 0].symbol == "new"
+    check buffer[0, 0].symbol == "new"
+    check not terminal.lastBuffer.isDirty
+
+  when hasAsyncSupport:
+    test "adoptLastBufferImpl works on an AsyncTerminal":
+      let terminal = newAsyncTerminal()
+      terminal.lastBuffer = newBuffer(4, 2)
+      terminal.lastBuffer[0, 0] = cell("old")
+      var buffer = newBuffer(4, 2)
+      buffer[0, 0] = cell("new")
+
+      adoptLastBufferImpl(terminal, buffer)
+
+      check terminal.lastBuffer[0, 0].symbol == "new"
+      check buffer[0, 0].symbol == "old"
+      check not terminal.lastBuffer.isDirty
 
 {.pop.}
