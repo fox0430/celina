@@ -1155,23 +1155,64 @@ when hasAsyncSupport:
       check ticks == 1
       check app.state.shouldQuit == false
 
-    test "The first frame of the next run is a full render":
-      let config = AppConfig(alternateScreen: true, rawMode: false, targetFps: 60)
-      let app = newAsyncApp(config)
+    when defined(posix):
+      test "Each run clears the screen once and draws its first frame":
+        # The first frame is a diff against the screen setup cleared, so it
+        # does not clear again, and the next run does not diff against the
+        # last one.
+        var app: AsyncApp
+        var outputs: seq[string]
+        proc runOnce() =
+          outputs.add captureStdout(
+            proc() =
+              # Created on the pipe, so its buffer has the pipe's fallback size.
+              if app.isNil:
+                app = newAsyncApp(
+                  AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+                )
+                app.onRenderAsync proc(buffer: var Buffer, app: AsyncApp) =
+                  buffer.setString(0, 0, "hello")
+                  app.quit()
+              waitFor app.runAsync()
+          )
 
-      # `forceNextRender` is cleared after the frame, so the render handler
-      # sees whether the current frame is forced. Quit after the first frame.
-      var forced: seq[bool]
-      app.onRenderAsync proc(buffer: var Buffer, app: AsyncApp) =
-        forced.add app.state.forceNextRender
-        app.quit()
+        withStdinInput("", runOnce)
+        withStdinInput("", runOnce)
+        check outputs.len == 2
+        for output in outputs:
+          check output.count(ClearScreenSeq) == 1
+          check "hello" in output
 
-      waitFor app.runAsync()
-      check forced == @[true]
+      test "A resize clears the screen once":
+        # A frame is on screen first, so the clear and the repaint in `output`
+        # come from the resize.
+        var app: AsyncApp
+        var output: string
+        proc drawThenResize() =
+          discard captureStdout(
+            proc() =
+              # Created on the pipe, so the frame and the resize share its size.
+              app = newAsyncApp(
+                AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+              )
+              app.onRenderAsync proc(buffer: var Buffer, app: AsyncApp) =
+                buffer.setString(0, 0, "hello")
+              waitFor app.renderAsync()
+          )
+          app.inputReader = newAsyncInputReader()
+          try:
+            output = captureStdout(
+              proc() =
+                app.state.resizeState = initResizeState(1, 1)
+                discard waitFor app.tickAsync()
+            )
+          finally:
+            app.inputReader.closeAsyncInputReader()
+            app.inputReader = nil
 
-      forced.setLen(0)
-      waitFor app.runAsync()
-      check forced == @[true]
+        withStdinInput("", drawThenResize)
+        check output.count(ClearScreenSeq) == 1
+        check "hello" in output
 
     test "Idle time before runAsync does not fire the timeout":
       let config = AppConfig(alternateScreen: true, rawMode: false, targetFps: 60)

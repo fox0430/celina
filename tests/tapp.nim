@@ -1120,26 +1120,76 @@ suite "App run lifecycle":
       check ticks == 1
       check app.state.shouldQuit == false
 
-  test "The first frame of the next run is a full render":
-    if not hasTerminalSize():
-      skip()
-    else:
-      let config = AppConfig(alternateScreen: true, rawMode: false, targetFps: 60)
-      let app = newApp(config)
+  when defined(posix):
+    test "Each run clears the screen once and draws its first frame":
+      # The first frame is a diff against the screen setup cleared, so it does
+      # not clear again, and the next run does not diff against the last one.
+      var app: App
+      var outputs: seq[string]
+      var ranOnPty = true
+      proc runOnce() =
+        var output: string
+        ranOnPty =
+          ranOnPty and
+          withPtyStdout(
+            20,
+            5,
+            output,
+            proc() =
+              # Created on the pty, so its buffer has the pty's size.
+              if app.isNil:
+                app = newApp(
+                  AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+                )
+                app.onRender proc(buffer: var Buffer, app: App) =
+                  buffer.setString(0, 0, "hello")
+                  app.quit()
+              app.run(),
+          )
+        outputs.add output
 
-      # `forceNextRender` is cleared after the frame, so the render handler
-      # sees whether the current frame is forced. Quit after the first frame.
-      var forced: seq[bool]
-      app.onRender proc(buffer: var Buffer, app: App) =
-        forced.add app.state.forceNextRender
-        app.quit()
+      withStdinInput("", runOnce)
+      withStdinInput("", runOnce)
+      if not ranOnPty:
+        skip()
+      else:
+        for output in outputs:
+          check output.count(ClearScreenSeq) == 1
+          check "hello" in output
 
-      app.run()
-      check forced == @[true]
+    test "A resize clears the screen once":
+      # A frame is on screen first, so the clear and the repaint in `output`
+      # come from the resize.
+      var app: App
+      var output: string
+      var ranOnPty = false
+      proc drawThenResize() =
+        let drawn = withPtyStdout(
+          20,
+          5,
+          proc() =
+            app =
+              newApp(AppConfig(alternateScreen: false, rawMode: false, targetFps: 60))
+            app.onRender proc(buffer: var Buffer, app: App) =
+              buffer.setString(0, 0, "hello")
+            app.render(),
+        )
+        if drawn:
+          ranOnPty = withPtyStdout(
+            20,
+            5,
+            output,
+            proc() =
+              app.state.resizeState = initResizeState(1, 1)
+              discard app.tick(),
+          )
 
-      forced.setLen(0)
-      app.run()
-      check forced == @[true]
+      withStdinInput("", drawThenResize)
+      if not ranOnPty:
+        skip()
+      else:
+        check output.count(ClearScreenSeq) == 1
+        check "hello" in output
 
   test "Idle time before run does not fire the timeout":
     if not hasTerminalSize():

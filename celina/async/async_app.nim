@@ -104,7 +104,6 @@ proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
     state: AsyncAppState(
       shouldQuit: false,
       running: false,
-      forceNextRender: false,
       windowMode: config.windowMode,
       resizeState: initResizeState(termSize.width, termSize.height),
     ),
@@ -180,11 +179,9 @@ proc setupAsync(app: AsyncApp) {.async.} =
     await app.terminal.enableFocusEventsAsync()
 
   await hideCursorAsync()
+  # Records the blank screen, so the first frame is a diff against it.
   await app.terminal.clearScreenAsync()
 
-  # Redundant: clearScreen recorded the blank screen, so a diff would suffice.
-  # The forced frame clears the screen again until forceNextRender is removed.
-  app.state.forceNextRender = true
   # Idle time counts from this run's start, not from `new` or a previous run.
   app.timings.lastEventTime = getMonoTime()
 
@@ -203,8 +200,6 @@ proc handleResizeAsync(app: AsyncApp) {.async.} =
   app.renderer.resize()
   # Clear screen to avoid artifacts from old content
   await app.terminal.clearScreenAsync()
-  # Redundant with clearScreen, as in setup
-  app.state.forceNextRender = true
 
 proc dispatchEventAsync*(app: AsyncApp, event: Event): Future[EventResult] {.async.} =
   ## Invoke the configured async event handler for the given event.
@@ -265,12 +260,8 @@ proc renderAsync(app: AsyncApp) {.async.} =
   if app.state.windowMode and not app.windowManager.isNil:
     app.windowManager.render(app.renderer.getBuffer())
 
-  # Render to terminal (force if requested after resize)
-  if app.state.forceNextRender:
-    await app.renderer.renderAsync(force = true)
-    app.state.forceNextRender = false
-  else:
-    await app.renderer.renderAsync()
+  # Render to terminal
+  await app.renderer.renderAsync()
 
 proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
   ## Process one async application tick (events + render).
@@ -782,15 +773,14 @@ proc isSuspended*(app: AsyncApp): bool =
 proc resumeAsync*(app: AsyncApp) {.async.} =
   ## Resume the TUI after a `suspendAsync()` call.
   ##
-  ## Restores terminal state and forces a full redraw on the next frame.
-  ## When the app was suspended, also restarts the application-timeout idle
-  ## clock.
+  ## Restores terminal state. When the app was suspended, the terminal marks
+  ## the screen unknown, so the next frame is a full redraw, and the
+  ## application-timeout idle clock restarts.
   let wasSuspended = app.isSuspended
   # Update the app state even when the terminal resume fails partway.
   try:
     await app.terminal.resumeAsync(app.inputReader)
   finally:
-    app.state.forceNextRender = true
     if wasSuspended:
       # Returning from the suspended program counts as activity, like the
       # start of a run.
