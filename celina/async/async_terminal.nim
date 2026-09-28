@@ -499,9 +499,8 @@ proc presentFrame(
 ): Future[Presented] {.async.} =
   ## Plan, write and record one frame of `buffer`, whose content the caller
   ## keeps (copy semantics). `force` marks the screen unknown first, so the
-  ## frame is a full render. A building error happens before any byte goes out,
-  ## so no write is recorded; the one state change it can leave behind is the
-  ## `force` invalidate, which runs before the plan.
+  ## frame is a full render. A failed write comes back as the outcome; only a
+  ## cancel raises.
   var
     outcome = swPartial # a cancel mid-write counts as a partial write
     style = cursor.lastStyle
@@ -527,13 +526,10 @@ proc presentFrameAdopt(
     wrap: bool,
 ): Future[Presented] {.async.} =
   ## `presentFrame` for the live grid of a renderer-owned `AsyncBuffer`, which
-  ## the caller re-fills every frame. The frame is adopted into `lastBuffer`
-  ## before the write (a `swap` in the steady state) and handed back to
-  ## `asyncBuffer` on failure, so a task that mutates the grid during a
+  ## the caller re-fills every frame. The frame is staged before the write (see
+  ## `stage` and `finishAdopt`), so a task that mutates the grid during a
   ## flow-controlled write cannot desync `lastBuffer` from the bytes that went
-  ## out. A staged write that sent nothing is handed back too, but counts as a
-  ## failure for the screen state: the grid was in play during the write, so
-  ## the next frame is a full render.
+  ## out.
   var
     outcome = swPartial # a cancel mid-write counts as a partial write
     style = cursor.lastStyle
@@ -979,13 +975,11 @@ proc drawWithCursorAdoptAsync*(
   ## rather than `var Buffer` because `{.async.}` procs cannot capture `var`
   ## parameters.
   ##
-  ## The frame is adopted before the write and handed back on a partial or
-  ## cancelled write (unless `asyncBuffer` was resized during the write: then
-  ## it keeps the new size), so a concurrent task that mutates `asyncBuffer`
-  ## during a flow-controlled write can no longer desync `lastBuffer` from the
-  ## bytes actually emitted. A write that stopped partway, was cancelled, or sent
-  ## nothing marks the screen unknown, so the next frame is a full render (for
-  ## a write that sent nothing, the grid was in play during the write).
+  ## The frame is adopted before the write (copied on the first frame and after
+  ## a resize), so a concurrent task that mutates `asyncBuffer` during a
+  ## flow-controlled write cannot desync `lastBuffer` from the bytes actually
+  ## emitted. A write that did not go out in full hands a swap back (unless
+  ## `asyncBuffer` was resized meanwhile) and makes the next frame a full render.
   ##
   ## Returns the updated lastCursorStyle value on success, or the original
   ## `lastCursorStyle` on failure.
@@ -1003,7 +997,7 @@ proc drawWithCursorAdoptAsync*(
     not terminal.syncOutputEnabled,
   )
   when defined(celinaDebug):
-    if presented.outcome == swPartial:
+    if presented.outcome != swAll:
       stderr.writeLine("Warning: drawWithCursorAdoptAsync() left the screen unknown")
   presented.style
 

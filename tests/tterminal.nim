@@ -1268,7 +1268,7 @@ suite "Terminal Module Tests":
       else:
         skip()
 
-    test "an adopt draw that sent nothing leaves the next draw full":
+    test "an adopt draw that sent nothing keeps the screen known":
       when defined(posix):
         let terminal = knownScreenTerminal(10, 3)
         var frame = newBuffer(10, 3)
@@ -1278,14 +1278,16 @@ suite "Terminal Module Tests":
           proc() =
             terminal.drawAdopt(buffer)
         )
+        # Nothing was adopted: the caller keeps the grid it rendered.
+        check buffer == frame
 
-        # The staged swap was rolled back, but the grid was in the caller's
-        # hands while the write ran, so it is not trusted as the diff basis.
+        # The next frame is the same diff again, as with `draw`.
         let output = captureStdout(
           proc() =
             terminal.drawAdopt(buffer)
         )
-        check output == wrapWithSyncOutput(buildFullRenderOutput(frame))
+        check output ==
+          wrapWithSyncOutput(buildDifferentialOutput(newBuffer(10, 3), frame))
       else:
         skip()
 

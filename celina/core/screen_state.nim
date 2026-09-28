@@ -2,15 +2,16 @@
 ##
 ## While `known`, `lastBuffer` is on screen and the next frame may be a diff;
 ## unknown (cut write, `suspend`, `invalidate`) forces a full render. A write
-## that sent nothing keeps the screen known.
+## that sent nothing keeps the screen known, unless it was staged.
 ##
 ## Present paths plan one frame, write it, record the outcome. Copy paths use
-## `finish`; adopt paths `stage` before the write and `finishAdopt` after:
+## `finish`, adopt paths `finishAdopt`. An adopt path whose grid other tasks can
+## reach during the write (the async backend awaits) `stage`s it first:
 ##
 ## ```nim
 ## if force: screen.invalidate()
 ## var plan = screen.planFrame(buffer, cursor, wrap)
-## when adopt:
+## when adopt and shared:
 ##   screen.stage(plan, buffer)
 ## let outcome = outcomeOf(writeStream(plan.bytes, plan.onPartial), plan.bytes.len)
 ## when adopt:
@@ -43,6 +44,11 @@ type
     pkFrame ## a frame: a full render or a diff against `lastBuffer`
     pkClear ## a full-screen clear; `lastBuffer` becomes blank
 
+  Staging = enum
+    stNone ## not staged: `finishAdopt` adopts after a write that went out in full
+    stSwap ## `lastBuffer` and the grid swapped storage; rolled back on failure
+    stCopy ## `lastBuffer` is a copy of the grid (a size change); nothing to roll back
+
   FramePlan* = object
     bytes*: string ## ready to write; "" = nothing to write
     onPartial*: set[StreamReset] ## what a partial write of these bytes needs undone
@@ -50,7 +56,7 @@ type
     epoch: int ## `ScreenState.epoch` when the plan was made
     newStyle, lastStyle: CursorStyle
     clearedSize: Size ## pkClear: the size of the blank `lastBuffer`
-    staged: bool ## pkFrame: `lastBuffer` already holds the frame
+    staging: Staging ## pkFrame: how `stage` adopted the frame before the write
 
   Presented* = object ## What a present path reports back
     outcome*: StreamWrite ## how much of the frame went out
@@ -83,7 +89,7 @@ proc invalidate*(s: var ScreenState) =
 
 proc planFrame*(
     s: ScreenState, buffer: Buffer, cursor: CursorRequest, wrap: bool
-): FramePlan =
+): FramePlan {.raises: [].} =
   ## Plan the next frame: full render while unknown or after resize, else diff.
   ## `wrap` adds DEC 2026 sync output (and `srSyncEnd` to `onPartial`); pass
   ## false when unwrapped or app-managed. Cursor commands go inside the wrap.
@@ -117,13 +123,17 @@ proc planClear*(s: ScreenState, size: Size): FramePlan =
   result.clearedSize = size
 
 proc stage*(s: var ScreenState, plan: var FramePlan, buffer: var Buffer) =
-  ## Adopt `buffer` before the write so a concurrent mutation cannot desync
-  ## `lastBuffer` from the bytes. Swaps on matching area (zero-copy steady
-  ## state); otherwise `finish` copies. A failed write rolls back.
-  if plan.kind == pkFrame and s.lastBuffer.area == buffer.area:
-    swap(s.lastBuffer, buffer)
+  ## Adopt `buffer` before the write, so a task that mutates it while the write
+  ## runs cannot reach `lastBuffer`. Swaps on matching area (zero-copy steady
+  ## state), else copies; `finishAdopt` rolls a swap back on failure.
+  if plan.kind == pkFrame:
+    if s.lastBuffer.area == buffer.area:
+      swap(s.lastBuffer, buffer)
+      plan.staging = stSwap
+    else:
+      s.lastBuffer = buffer
+      plan.staging = stCopy
     s.lastBuffer.clearDirty()
-    plan.staged = true
 
 proc applyOutcome(s: var ScreenState, plan: FramePlan, outcome: StreamWrite) =
   ## The `known` and `epoch` half of `finish`, shared by every variant.
@@ -152,28 +162,33 @@ proc finishAdopt*(
     s: var ScreenState, plan: FramePlan, buffer: var Buffer, outcome: StreamWrite
 ) =
   ## Record a written frame the caller gave up (`drawAdopt`,
-  ## `drawWithCursorAdopt`): a staged swap is kept when the frame went out in
-  ## full and rolled back otherwise, so `lastBuffer` holds only frames the
-  ## screen showed and the caller keeps the grid it rendered.
+  ## `drawWithCursorAdopt`, `drawWithCursorAdoptAsync`): while the screen is
+  ## known, `lastBuffer` is the frame it shows, and a caller whose frame did not
+  ## go out in full keeps the grid it rendered.
   ##
-  ## A staged frame that sent nothing still leaves the screen unknown: the
-  ## rolled-back storage is the caller's grid while the write is in flight, so
-  ## a writer that runs during the write (the async adopt path awaits) may have
-  ## mutated it, and it is no longer a safe diff basis. If that writer resized
-  ## the grid, the caller keeps the resized storage and no swap back happens:
-  ## the screen is unknown then, so `lastBuffer` is not used as a diff basis.
+  ## Unstaged, the frame is adopted after a write that went out in full. Staged,
+  ## a swap is rolled back on failure, unless the grid was resized meanwhile
+  ## (the screen is unknown then anyway). A staged frame that sent nothing
+  ## leaves the screen unknown: the rolled-back storage may have been mutated
+  ## during the write, and a copy has already replaced the frame on screen.
   if plan.kind == pkFrame:
-    if plan.staged:
+    case plan.staging
+    of stNone:
+      if outcome == swAll:
+        if s.lastBuffer.area == buffer.area:
+          swap(s.lastBuffer, buffer)
+        else:
+          s.lastBuffer = buffer
+        s.lastBuffer.clearDirty()
+    of stSwap:
       if outcome != swAll:
         if s.lastBuffer.area == buffer.area:
           swap(s.lastBuffer, buffer)
           s.lastBuffer.clearDirty()
-        if outcome == swNone:
-          s.invalidate()
-    elif outcome == swAll:
-      # `stage` could not swap (first frame, after a resize): copy instead.
-      s.lastBuffer = buffer
-      s.lastBuffer.clearDirty()
+    of stCopy:
+      discard
+    if plan.staging != stNone and outcome == swNone:
+      s.invalidate()
   s.applyOutcome(plan, outcome)
 
 proc finishClear*(s: var ScreenState, plan: FramePlan, outcome: StreamWrite) =
