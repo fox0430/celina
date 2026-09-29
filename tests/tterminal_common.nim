@@ -1,6 +1,6 @@
 # Tests for terminal_common module
 
-import std/[unittest, strutils, times, posix]
+import std/[unittest, strutils, times, posix, unicode, importutils]
 
 import ../celina/core/terminal_common
 import ../celina/core/[geometry, colors, buffer]
@@ -1394,3 +1394,151 @@ suite "EmergencyResetSeq":
     # an SGR reset may follow.
     check EmergencyResetAltScreenSeq.startsWith(EmergencyResetSeq)
     check EmergencyResetAltScreenSeq.endsWith(AlternateScreenExit & "\e[0m")
+
+suite "OSC Sanitization (T1)":
+  test "OSC title makers strip BEL/ESC and cannot nest OSC 52":
+    check "\x1b]52" notin makeWindowTitleSeq("A\x1b]52;c;Hi\x07R")
+    check "\x07" notin makeWindowTitleSeq("A\x1b]52;c;Hi\x07R")[4 .. ^2]
+    check makeIconNameSeq("A\x07B") == "\e]1;AB\a"
+    let inner = makeTitleOnlySeq("A\x1b]0;pwned\x07B")
+    check "\x1b]0;" notin inner[4 .. ^2]
+    check "\x07" notin inner[4 .. ^2]
+
+  test "OSC hyperlink maker strips terminators":
+    let s = makeHyperlinkStartSeq("https://x/\x07\x1b\\y")
+    check "\x07" notin s
+    check "\x1b]52" notin s
+
+  test "OSC payloads reject surrogate-encoded C1 bytes":
+    # ED A0 9D / ED A0 9C would carry a raw 0x9D (OSC) / 0x9C (ST).
+    let title = makeWindowTitleSeq("\xED\xA0\x9D52;c;SGVsbG8=\xED\xA0\x9C")
+    let fffd3 = "\uFFFD".repeat(3)
+    check title == OscWindowTitleStart & fffd3 & "52;c;SGVsbG8=" & fffd3 & OscTerminator
+    check "\x9d" notin title
+    check "\x9c" notin title
+    let link = makeHyperlinkStartSeq("https://x/\xED\xA0\x9D52")
+    check link == Osc8Start & Osc8End
+    check "\x9d" notin link
+
+  test "OSC payloads are length-capped in runes, not bytes":
+    check makeWindowTitleSeq("A".repeat(600)).len <=
+      OscWindowTitleStart.len + MaxOscTitleLen + OscTerminator.len
+    let title = makeWindowTitleSeq("世".repeat(MaxOscTitleLen + 100))
+    let titlePayload = title[OscWindowTitleStart.len ..< title.len - OscTerminator.len]
+    check titlePayload.toRunes.len == MaxOscTitleLen
+    check validateUtf8(titlePayload) < 0
+
+  test "OSC title keeps the rest of an ill-formed title":
+    check makeWindowTitleSeq("caf\xE9 title") == "\e]0;caf\uFFFD title\a"
+    check makeTitleOnlySeq("a\x9bb") == "\e]2;a\uFFFDb\a"
+
+  test "OSC hyperlink over the cap is dropped, not truncated":
+    let atCap = "é".repeat(MaxOscUrlLen)
+    check makeHyperlinkStartSeq(atCap) == Osc8Start & atCap & Osc8End
+    check makeHyperlinkStartSeq(atCap & "x") == Osc8Start & Osc8End
+    check makeHyperlinkStartSeq("A".repeat(3000)) == Osc8Start & Osc8End
+
+  test "differential and full render never emit raw OSC 52":
+    var oldBuf = newBuffer(8, 2)
+    var newBuf = newBuffer(8, 2)
+    newBuf[0, 0] = cell("\x1b]52;c;Hi\x07")
+    newBuf.setString(0, 1, "link", defaultStyle(), "https://x/\x07\x1b]52;c;Hi\x07")
+    check "\x1b]52" notin buildDifferentialOutput(oldBuf, newBuf)
+    check "\x1b]52" notin buildFullRenderOutput(newBuf)
+
+  test "differential render of mismatched areas never emits raw OSC 52":
+    # The mismatched-area branch is a separate emit path.
+    var oldBuf = newBuffer(8, 2)
+    var newBuf = newBuffer(4, 1)
+    newBuf[0, 0] = cell("\x1b]52;c;Hi\x07")
+    newBuf.setString(1, 0, "link", defaultStyle(), "https://x/\x07\x1b]52;c;Hi\x07")
+    let emitted = buildDifferentialOutput(oldBuf, newBuf)
+    check "\x1b]52" notin emitted
+    check "\x07" notin emitted
+
+  test "a malformed cell symbol does not shift the cells after it":
+    var buf = newBuffer(6, 1)
+    buf[0, 0] = cell("\xF0\x9F")
+    buf[1, 0] = cell("X")
+    buf[2, 0] = cell("Y")
+    check buildFullRenderOutput(buf).endsWith("\e[1;2H" & "XY")
+
+  test "a control-containing cell symbol does not shift the cells after it":
+    var buf = newBuffer(6, 1)
+    buf[0, 0] = cell("a\x07")
+    check buf[0, 0].symbol == " "
+    check buf[0, 0].symbol.displayWidth == 1
+    buf[1, 0] = cell("X")
+    buf[2, 0] = cell("Y")
+    # The collapsed cell equals the default blank, so the diff skips it.
+    check buildDifferentialOutput(newBuffer(6, 1), buf) == "\e[1;2HXY"
+    check buildFullRenderOutput(buf).endsWith("\e[1;2H" & "XY")
+
+  test "a collapsed wide setCell symbol keeps both columns":
+    for symbol in ["你\x01", "\xE4\xBD"]:
+      var buf = newBuffer(6, 1)
+      buf.setCell(0, 0, symbol, 2)
+      buf.setString(2, 0, "AB")
+      check buf[0, 0].symbol == " "
+      check buf[1, 0].symbol == " "
+      check buildDifferentialOutput(newBuffer(6, 1), buf) == "\e[1;3HAB"
+      check buildFullRenderOutput(buf).endsWith("\e[1;3H" & "AB")
+
+  test "render builders re-sanitize raw cells planted in the buffer":
+    # Bypass the buffer's write paths to reach the builders' own sanitization.
+    privateAccess(Buffer)
+    var oldBuf = newBuffer(4, 1)
+    var newBuf = newBuffer(4, 1)
+    newBuf.content[0][0] = Cell(
+      symbol: "\x1b]52;c;Hi\x07", style: defaultStyle(), hyperlink: "https://x/\x07y"
+    )
+    newBuf.content[0][1] =
+      Cell(symbol: "\xF0\x9F", style: defaultStyle(), hyperlink: "")
+    for output in [
+      buildDifferentialOutput(oldBuf, newBuf), buildFullRenderOutput(newBuf)
+    ]:
+      check "\x1b]52" notin output
+      check "\x07" notin output
+      check "\xF0\x9F" notin output
+      check " ]52;c;Hi " notin output
+    var small = newBuffer(2, 1)
+    small.content[0][0] =
+      Cell(symbol: "\x1b]52;c;Hi\x07", style: defaultStyle(), hyperlink: "")
+    let mismatched = buildDifferentialOutput(oldBuf, small)
+    check "\x1b]52" notin mismatched
+    check "\x07" notin mismatched
+
+  test "RenderCommand text is sanitized at build time":
+    let batch = RenderBatch(
+      commands: @[RenderCommand(kind: RckWriteText, text: "\x1b]52;c;Hi\x07")]
+    )
+    check "\x1b]52" notin buildOutputString(batch)
+
+  test "generateRenderBatch sanitizes per cell so the rest of a run survives":
+    let changes = @[
+      (
+        pos: pos(0, 0),
+        cell: Cell(symbol: "a\x1b", style: defaultStyle(), hyperlink: ""),
+      ),
+      (pos: pos(1, 0), cell: Cell(symbol: "b", style: defaultStyle(), hyperlink: "")),
+      (pos: pos(2, 0), cell: Cell(symbol: "c", style: defaultStyle(), hyperlink: "")),
+      (pos: pos(0, 1), cell: Cell(symbol: "X", style: defaultStyle(), hyperlink: "")),
+    ]
+    let output = buildOutputString(generateRenderBatch(changes))
+    # Only the contaminated cell collapses.
+    check "a" notin output
+    check " bc" in output
+    check output.endsWith(makeCursorPositionSeq(0, 1) & "X")
+
+  test "makeCursorMoveSeq rejects empty, non-positive and control finals":
+    check makeCursorMoveSeq("", 3) == ""
+    check makeCursorMoveSeq("\x1b[A", 0) == ""
+    check makeCursorMoveSeq("\x1b[A", -5) == ""
+    check makeCursorMoveSeq("\x1b[A", 1) == "\x1b[A"
+    check makeCursorMoveSeq("\x1b[A", 3) == "\x1b[3A"
+    check makeCursorMoveSeq("\x1b[A\x1b", 3) == ""
+
+  test "makeCursorMoveSeq with steps == 1 requires exact three bytes":
+    check makeCursorMoveSeq("\x1b[2A", 1) == ""
+    check makeCursorMoveSeq("\x1b[A\x1b", 1) == ""
+    check makeCursorMoveSeq("A", 1) == ""

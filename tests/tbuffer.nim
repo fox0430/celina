@@ -903,7 +903,8 @@ suite "Buffer Module Tests":
 
       check buffer[0, 0].isEmpty()
       check not buffer[1, 0].isEmpty() # Space is content
-      check not buffer[2, 0].isEmpty() # Tab is content
+      # A control in a symbol collapses to one space.
+      check buffer[2, 0].symbol == " "
       check not buffer[3, 0].isEmpty() # Multiple spaces are content
       check not buffer[4, 0].isEmpty()
 
@@ -1388,3 +1389,95 @@ suite "Buffer Module Tests":
       check truncateToWidth(family, 1) == ""
       check truncateToWidth(family, 2) == family
       check truncateToWidth("A" & family, 2) == "A"
+
+suite "Output Escape Sanitization (T1)":
+  test "cell() collapses a symbol with C0/BEL/ESC to one space":
+    check cell("\x1b]52;c;Hi\x07").symbol == " "
+    check cell("a\x07").symbol == " "
+    check cell("\x01").symbol == " "
+    check cell(" ").symbol == " "
+    check cell("").symbol == ""
+
+  test "cell() removes controls from hyperlink":
+    check cell("x", defaultStyle(), "https://x/\x07y").hyperlink == "https://x/y"
+    check cell("x", defaultStyle(), "https://x/\x1b\\y").hyperlink == "https://x/\\y"
+
+  test "cell() neutralizes C1 controls (U+0080..U+009F)":
+    check cell($Rune(0x9B)).symbol == " "
+    check sanitizeHyperlink($Rune(0x9C)) == ""
+    # Raw C1 bytes are ill-formed UTF-8, so the whole symbol collapses.
+    check cell("\x9b").symbol == " "
+    check cell("\x9b世界").symbol == " "
+    check cell("世" & $Rune(0x9B) & "界").symbol == " "
+    check sanitizeHyperlink("https://x/\x9b") == ""
+    check sanitizeHyperlink("https://x/世" & $Rune(0x9C)) == "https://x/世"
+
+  test "cell() sanitizes controls mixed with multibyte text":
+    check cell("世\x1b]52;c;Hi\x07").symbol == " "
+    check cell("\x1b世").symbol == " "
+    check cell("世\x1b]52;c;Hi\x07").symbol.displayWidth == 1
+    check cell("\x1b世").symbol.displayWidth == 1
+
+  test "malformed UTF-8 collapses instead of widening the cell":
+    check cell("\xF0\x9F").symbol == " "
+    check cell("\x80").symbol == " "
+    check sanitizeHyperlink("https://x/\xF0\x9F") == ""
+    check cell("世".repeat(3)).symbol == "世".repeat(3)
+    # U+1F6D1 is F0 9F 9B 91: 0x9B as a continuation byte is not a C1 control.
+    check cell($Rune(0x1F6D1)).symbol == $Rune(0x1F6D1)
+
+  test "surrogate and out-of-range encodings cannot smuggle raw C1 bytes":
+    # ED A0..ED BF encode UTF-16 surrogates, which std validateUtf8 accepts.
+    check cell("\xED\xA0\x9B").symbol == " "
+    check cell("\xED\xA0\x9D52;c;Hi").symbol == " "
+    check cell("\xED\xA0\x80\xED\xB8\x80").symbol == " "
+    check sanitizeHyperlink("https://x/\xED\xA0\x9D52;c;Hi\xED\xA0\x9C") == ""
+    # F4 90.. and F5..F7 decode to code points above U+10FFFF.
+    check cell("\xF4\x90\x9B\x9B").symbol == " "
+    check cell("\xF5\x80\x80\x9B").symbol == " "
+    check sanitizeHyperlink("https://x/\xF4\x90\x9B\x9B") == ""
+
+  test "overlong encodings collapse instead of being normalized":
+    # Overlong encodings of '/'.
+    check cell("\xE0\x80\xAF").symbol == " "
+    check cell("\xF0\x80\x80\xAF").symbol == " "
+    check cell("\xC0\xAF").symbol == " "
+    check sanitizeHyperlink("https://x/\xE0\x80\xAF") == ""
+
+  test "valid text keeps bytes in 0x80..0x9F when they are continuation bytes":
+    # U+065B is D9 9B, U+1F49B is F0 9F 92 9B; 8-bit-mode terminals are out of scope.
+    check cell($Rune(0x065B)).symbol == $Rune(0x065B)
+    check cell($Rune(0x1F49B)).symbol == $Rune(0x1F49B)
+
+  test "[]= sanitizes a directly constructed Cell":
+    var buf = newBuffer(4, 1)
+    buf[0, 0] = Cell(
+      symbol: "\x1b]52;c;Hi\x07", style: defaultStyle(), hyperlink: "https://x/\x07y"
+    )
+    check buf[0, 0].symbol == " "
+    check buf[0, 0].symbol.displayWidth == 1
+    check "\x07" notin buf[0, 0].hyperlink
+
+  test "setCell, fill and clear sanitize":
+    var buf = newBuffer(4, 1)
+    buf.setCell(0, 0, "\x1b", 1)
+    check buf[0, 0].symbol == " "
+    buf.setCell(1, 0, "a\x07", 1)
+    check buf[1, 0].symbol == " "
+    check buf[1, 0].symbol.displayWidth == 1
+    buf.fill(rect(0, 0, 2, 1), Cell(symbol: "\x1b", hyperlink: "https://x/\x07y"))
+    check buf[1, 0].symbol == " "
+    check buf[1, 0].hyperlink == "https://x/y"
+    buf.clear(Cell(symbol: "\x07", style: defaultStyle()))
+    check buf[0, 0].symbol == " "
+
+  test "foldZeroWidthRune drops ESC instead of folding it":
+    var buf = newBuffer(5, 1)
+    buf.setString(0, 0, "A")
+    buf.foldZeroWidthRune(1, 0, Rune(0x1B))
+    check buf[0, 0].symbol == "A"
+
+  test "legit text and URLs survive sanitization":
+    check cell("Hello, 世界!").symbol == "Hello, 世界!"
+    check sanitizeHyperlink("https://example.com/a?b=1;c=2") ==
+      "https://example.com/a?b=1;c=2"

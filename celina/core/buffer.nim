@@ -7,7 +7,7 @@ import std/[strformat, unicode, sequtils, strutils]
 
 import pkg/unicodedb/[widths, properties, segmentation]
 
-import geometry, colors
+import geometry, colors, utf8_utils
 
 type
   Cell* = object ## Represents a single character cell in the terminal
@@ -73,23 +73,119 @@ const
     ## narrow (e.g. U+261D ☝). Like VS16, they fold as a zero-width mark but
     ## promote the whole cluster.
 
+template isControlCode(n: int): bool =
+  ## C0 (0x00..0x1F), DEL (0x7F), or C1 (0x80..0x9F).
+  n < 0x20 or n == 0x7F or (n >= 0x80 and n <= 0x9F)
+
+template isC0OrDel(n: int): bool =
+  ## C0 or DEL as a single byte. C1 is multibyte once encoded, so not matched.
+  n < 0x20 or n == 0x7F
+
+proc isWellFormedUtf8(s: string): bool =
+  ## Unlike `std/unicode.validateUtf8`, also rejects overlong, surrogate and
+  ## above-U+10FFFF encodings, which can hide a raw C1 byte as a continuation.
+  var i = 0
+  while i < s.len:
+    let n = utf8ByteLength(byte(s[i]))
+    if n == 0 or i + n > s.len:
+      return false
+    if not validateUtf8Sequence(s.toOpenArrayByte(i, i + n - 1)).isValid:
+      return false
+    inc i, n
+  true
+
+proc sanitizeControls(s: string, replaceWithSpace: bool): string =
+  ## Shared body of `sanitizeCellSymbol` and `sanitizeHyperlink`.
+  if s.len == 0:
+    return s
+  var hasHigh = false
+  var hasControl = false
+  for c in s:
+    let o = ord(c)
+    if isC0OrDel(o):
+      hasControl = true
+    elif o >= 0x80:
+      hasHigh = true
+    if hasControl and hasHigh:
+      break
+  if not hasControl and not hasHigh:
+    return s
+  if not hasHigh:
+    # Every byte is ASCII, so the probe above is exact.
+    if replaceWithSpace:
+      return " "
+    result = newStringOfCap(s.len)
+    for c in s:
+      if not isC0OrDel(ord(c)):
+        result.add(c)
+    return result
+  if not isWellFormedUtf8(s):
+    return (if replaceWithSpace: " " else: "")
+  # Well-formed, so controls are C0/DEL bytes or C1 as `C2 80..C2 9F`; a byte
+  # scan lets clean input skip the rune decode.
+  var needsRewrite = false
+  var i = 0
+  while i < s.len:
+    let b = byte(s[i])
+    if b < 0x20 or b == 0x7F or (b == 0xC2 and i + 1 < s.len and byte(s[i + 1]) <= 0x9F):
+      needsRewrite = true
+      break
+    inc i, (if b < 0x80: 1 else: utf8ByteLength(b))
+  if not needsRewrite:
+    return s
+  if replaceWithSpace:
+    return " "
+  result = newStringOfCap(s.len)
+  for r in s.toRunes:
+    if not isControlCode(int(r)):
+      result.add($r)
+
+proc sanitizeCellSymbol*(s: string): string =
+  ## Collapse a symbol that contains C0/C1/DEL or is not well-formed UTF-8 to a
+  ## single space, so it keeps the one column its cell recorded. Empty input
+  ## stays empty to preserve shadow cells. Assumes a terminal in UTF-8 mode.
+  sanitizeControls(s, replaceWithSpace = true)
+
+proc sanitizeHyperlink*(s: string): string =
+  ## Strip C0/C1/DEL for an OSC 8 sequence. Ill-formed UTF-8 yields `""`.
+  sanitizeControls(s, replaceWithSpace = false)
+
+proc sanitized(c: Cell): Cell {.inline.} =
+  Cell(
+    symbol: sanitizeCellSymbol(c.symbol),
+    style: c.style,
+    hyperlink: sanitizeHyperlink(c.hyperlink),
+  )
+
 proc cell*(
     symbol: string = " ", style: Style = defaultStyle(), hyperlink: string = ""
 ): Cell {.inline.} =
-  ## Create a new Cell
-  Cell(symbol: symbol, style: style, hyperlink: hyperlink)
+  ## Create a new Cell. Sanitizes `symbol` and `hyperlink` for safe output.
+  Cell(
+    symbol: sanitizeCellSymbol(symbol),
+    style: style,
+    hyperlink: sanitizeHyperlink(hyperlink),
+  )
 
 proc cell*(
     symbol: char, style: Style = defaultStyle(), hyperlink: string = ""
 ): Cell {.inline.} =
   ## Create a new Cell from a character
-  Cell(symbol: $symbol, style: style, hyperlink: hyperlink)
+  Cell(
+    symbol: sanitizeCellSymbol($symbol),
+    style: style,
+    hyperlink: sanitizeHyperlink(hyperlink),
+  )
 
 proc cell*(
     symbol: Rune, style: Style = defaultStyle(), hyperlink: string = ""
 ): Cell {.inline.} =
   ## Create a new Cell from a Rune
-  Cell(symbol: $symbol, style: style, hyperlink: hyperlink)
+  Cell(
+    symbol: sanitizeCellSymbol($symbol),
+    style: style,
+    hyperlink: sanitizeHyperlink(hyperlink),
+  )
 
 # Cell utilities
 proc isEmpty*(cell: Cell): bool {.inline.} =
@@ -130,12 +226,6 @@ proc runeWidth*(r: Rune): int =
   else:
     2
 
-template isC0Control(n: int): bool =
-  ## C0 control character (0x00..0x1F) or DEL (0x7F). Writing these directly
-  ## to a terminal moves the cursor or otherwise disrupts rendering, so they
-  ## must never reach a cell's `symbol`.
-  n < 0x20 or n == 0x7F
-
 template isKeycapBase(r: Rune): bool =
   ## A base that U+20E3 COMBINING ENCLOSING KEYCAP can enclose into a two-column
   ## keycap glyph: an ASCII digit 0-9, '#', or '*'. After any other base, U+20E3
@@ -158,11 +248,11 @@ proc clusterAt(runes: openArray[Rune], start: int): tuple[next, width: int] =
   var i = start + 1
   var w = runeWidth(lead)
 
-  # A C0 control / DEL never combines with following marks (TR29 GB4/GB5): it is
+  # A C0 control / DEL / C1 never combines with following marks (TR29 GB4/GB5): it is
   # its own cluster, so a trailing combining mark becomes the next cluster and
   # folds onto the previous base (e.g. a tab's expanded space) instead of being
   # swallowed here and silently dropped by the control branch of setRunes.
-  if isC0Control(int(lead)):
+  if isControlCode(int(lead)):
     return (i, w)
 
   # Fast path for a lone rune: with nothing following it, no VS16/ZWJ/keycap
@@ -506,6 +596,32 @@ proc `[]`*(buffer: Buffer, pos: Position): Cell {.inline.} =
   ## Get cell at position
   buffer[pos.x, pos.y]
 
+proc storeCell(buffer: var Buffer, x, y: int, safeCell: Cell) =
+  ## Body of `[]=` for an in-bounds, already sanitized cell.
+  let isShadowWrite = safeCell.isShadow
+  var minX = x
+  var maxX = x
+
+  if not isShadowWrite and x > 0:
+    let leftCell = buffer.content[y][x - 1]
+    if not leftCell.isShadow and leftCell.width == 2:
+      buffer.content[y][x - 1] = cell(" ", leftCell.style)
+      minX = x - 1
+
+  let oldCell = buffer.content[y][x]
+  if not oldCell.isShadow and oldCell.width == 2 and x + 1 < buffer.area.width:
+    buffer.content[y][x + 1] = cell(" ", oldCell.style)
+    maxX = x + 1
+
+  buffer.content[y][x] = safeCell
+
+  # markDirty(min) then markDirty(max) expands the region to cover the
+  # whole [minX..maxX] range; x always sits inside so we don't mark it
+  # separately when there was a neighbour cleanup.
+  buffer.markDirty(minX, y)
+  if maxX != minX:
+    buffer.markDirty(maxX, y)
+
 proc `[]=`*(buffer: var Buffer, x, y: int, newCell: Cell) =
   ## Set cell at coordinates.
   ##
@@ -528,32 +644,12 @@ proc `[]=`*(buffer: var Buffer, x, y: int, newCell: Cell) =
   ## wide character at the rightmost column leaves the buffer in an
   ## inconsistent state (no room for a shadow); use `setCell`, which
   ## performs the right-edge check.
+  ##
+  ## `newCell` is sanitized. A wide symbol with a control collapses to one
+  ## column, so use `setCell`, which blanks both columns.
   if not (x >= 0 and x < buffer.area.width and y >= 0 and y < buffer.area.height):
     return
-
-  let isShadowWrite = newCell.isShadow
-  var minX = x
-  var maxX = x
-
-  if not isShadowWrite and x > 0:
-    let leftCell = buffer.content[y][x - 1]
-    if not leftCell.isShadow and leftCell.width == 2:
-      buffer.content[y][x - 1] = cell(" ", leftCell.style)
-      minX = x - 1
-
-  let oldCell = buffer.content[y][x]
-  if not oldCell.isShadow and oldCell.width == 2 and x + 1 < buffer.area.width:
-    buffer.content[y][x + 1] = cell(" ", oldCell.style)
-    maxX = x + 1
-
-  buffer.content[y][x] = newCell
-
-  # markDirty(min) then markDirty(max) expands the region to cover the
-  # whole [minX..maxX] range; x always sits inside so we don't mark it
-  # separately when there was a neighbour cleanup.
-  buffer.markDirty(minX, y)
-  if maxX != minX:
-    buffer.markDirty(maxX, y)
+  buffer.storeCell(x, y, newCell.sanitized)
 
 proc `[]=`*(buffer: var Buffer, pos: Position, cell: Cell) {.inline.} =
   ## Set cell at position
@@ -573,26 +669,33 @@ proc clear*(buffer: var Buffer, cell: Cell = cell()) =
   ##
   ## Bypasses `[]=` (and its wide-character consistency check) because
   ## every cell is overwritten by `cell`, so there is no orphan to crush.
+  ## Sanitized once up front, as in `[]=`.
+  let safe = cell.sanitized
   for y in 0 ..< buffer.area.height:
     for x in 0 ..< buffer.area.width:
-      buffer.content[y][x] = cell
+      buffer.content[y][x] = safe
 
   # Mark entire buffer as dirty
   buffer.markDirtyRect(buffer.area)
 
 proc fill*(buffer: var Buffer, area: Rect, fillCell: Cell) =
-  ## Fill a rectangular area with the given cell
+  ## Fill a rectangular area with the given cell, sanitized once up front.
   let clippedArea = buffer.area.intersection(area)
+  let safe = fillCell.sanitized
 
   for y in clippedArea.y ..< clippedArea.bottom:
     for x in clippedArea.x ..< clippedArea.right:
       let localX = x - buffer.area.x
       let localY = y - buffer.area.y
       if buffer.isValidPos(localX, localY):
-        buffer[localX, localY] = fillCell
+        buffer.storeCell(localX, localY, safe)
 
   # Mark filled area as dirty
   buffer.markDirtyRect(clippedArea)
+
+proc sanitizeFoldedCluster(text: string): string {.inline.} =
+  ## Drop controls instead of adding a space: the base already booked the width.
+  sanitizeHyperlink(text)
 
 proc foldClusterInto*(buffer: var Buffer, baseX, y: int, text: string) {.inline.} =
   ## Append a zero-width cluster's text onto an existing base cell at
@@ -601,8 +704,12 @@ proc foldClusterInto*(buffer: var Buffer, baseX, y: int, text: string) {.inline.
   ## (for a wide base) is preserved. A no-op when `baseX < 0` or out of range,
   ## so callers can pass a "no base yet" sentinel and have the text dropped —
   ## mirroring how a leading mark with nothing to attach to is dropped.
+  ## `text` is stripped of controls; empty results are dropped without marking dirty.
   if baseX >= 0 and buffer.isValidPos(baseX, y):
-    buffer.content[y][baseX].symbol.add(text)
+    let safe = sanitizeFoldedCluster(text)
+    if safe.len == 0:
+      return
+    buffer.content[y][baseX].symbol.add(safe)
     buffer.markDirty(baseX, y)
 
 proc setRunes*(
@@ -620,7 +727,7 @@ proc setRunes*(
   ## `\t` expands to spaces up to the next `tabWidth` boundary measured
   ## from the starting `x`, so consecutive tabs land on consistent stops.
   ## When `tabWidth <= 0`, tab expansion is disabled and `\t` is replaced
-  ## with a single space. Other C0 control characters and DEL are always
+  ## with a single space. Other C0 control characters, DEL and C1 are always
   ## replaced with a single space — leaving them in a cell symbol would
   ## otherwise be re-emitted verbatim by the differential renderer and
   ## shift subsequent cursor positioning on the real terminal.
@@ -659,8 +766,8 @@ proc setRunes*(
           lastBaseX = currentX
         currentX.inc
       continue
-    if isC0Control(n):
-      # Other C0 controls / DEL (and `\t` when tabWidth <= 0):
+    if isControlCode(n):
+      # Other C0 controls / DEL / C1 (and `\t` when tabWidth <= 0):
       # substitute single space.
       if currentX >= buffer.area.width:
         break
@@ -712,7 +819,7 @@ proc setString*(
     tabWidth: int = DefaultTabWidth,
 ) =
   ## Set a string starting at the given coordinates.
-  ## See `setRunes` for tab and C0 control character semantics.
+  ## See `setRunes` for tab and control character semantics.
   if text.len == 0:
     return
   try:
@@ -745,7 +852,7 @@ proc setString*(
   ## Text is clipped to the area boundaries.
   ## Handles Unicode characters and wide characters properly for alignment calculation
   ##
-  ## C0 control characters (including `\t`) are substituted with a single
+  ## C0 control characters, DEL and C1 (including `\t`) are substituted with a single
   ## space — tab-stop expansion is intentionally skipped here because the
   ## alignment math is built around a fixed `textWidth`; the (x, y) overload
   ## of `setString` is the place to use real tab semantics.
@@ -762,7 +869,7 @@ proc setString*(
   # cluster string for every off-screen cluster.
   var textWidth = 0
   for (leadIdx, width) in clusterMetrics(runes):
-    if isC0Control(int(runes[leadIdx])):
+    if isControlCode(int(runes[leadIdx])):
       textWidth.inc
     else:
       textWidth += width
@@ -791,7 +898,7 @@ proc setString*(
   var lastBaseX = -1 # Last base cell written within the area; see `setRunes`.
   try:
     for (leadIdx, clusterText, width) in graphemeClusters(runes):
-      if isC0Control(int(runes[leadIdx])):
+      if isControlCode(int(runes[leadIdx])):
         # Substitute control char with single space.
         if currentX + 1 <= area.x:
           currentX.inc
@@ -883,9 +990,12 @@ proc setCell*(
     return
   if width == 2 and x + 1 >= buffer.area.width:
     return
-  buffer[x, y] = Cell(symbol: symbol, style: style, hyperlink: hyperlink)
+  let safe = sanitizeCellSymbol(symbol)
+  buffer[x, y] = Cell(symbol: safe, style: style, hyperlink: hyperlink)
   if width == 2:
-    buffer[x + 1, y] = Cell(symbol: "", style: style, hyperlink: hyperlink)
+    # A collapsed symbol is one column wide, so its second column is a blank.
+    let second = if safe == symbol: "" else: " "
+    buffer[x + 1, y] = Cell(symbol: second, style: style, hyperlink: hyperlink)
 
 proc setCell*(
     buffer: var Buffer,

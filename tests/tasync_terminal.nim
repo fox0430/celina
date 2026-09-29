@@ -245,6 +245,26 @@ suite "AsyncTerminal Control Sequence Writes":
   test "renderCellAsync writes an unstyled cell without raising":
     waitFor renderCellAsync(cell("Y"), 0, 0)
 
+  test "renderCellAsync never emits raw OSC 52 from a directly built Cell":
+    # renderCellAsync bypasses the buffer, so it must sanitize itself.
+    let evil = Cell(symbol: "\x1b]52;c;Hi\x07", style: defaultStyle(), hyperlink: "")
+    let output = captureStdout(
+      proc() =
+        waitFor renderCellAsync(evil, 0, 0)
+    )
+    check "\x1b]52" notin output
+    check "\x07" notin output
+    # The payload collapses to a single blank so the cell keeps its column.
+    check " ]52;c;Hi " notin output
+    check output.endsWith(" ")
+
+    let c1 = Cell(symbol: "\xc2\x9b", style: defaultStyle(), hyperlink: "")
+    let c1Output = captureStdout(
+      proc() =
+        waitFor renderCellAsync(c1, 0, 0)
+    )
+    check "\xc2\x9b" notin c1Output
+
   test "window title procs complete without raising":
     # These route through best-effort tryWriteAsync; a full write must not raise.
     waitFor setWindowTitleAsync("celina-test")

@@ -439,7 +439,7 @@ proc renderCell*(cell: Cell, x, y: int) =
   if styleSeq.len > 0:
     tryWrite(styleSeq)
 
-  tryWrite(cell.symbol)
+  tryWrite(sanitizeCellSymbol(cell.symbol))
 
   if styleSeq.len > 0:
     tryWrite(resetSequence())
