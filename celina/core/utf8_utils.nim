@@ -136,6 +136,23 @@ proc validateUtf8Sequence*(bytes: openArray[byte]): Utf8ValidationResult =
   return
     Utf8ValidationResult(isValid: true, expectedBytes: expectedLen, errorMessage: "")
 
+proc wellFormedSeqLen*(s: string, i: int): int =
+  ## Byte length of the sequence starting at `s[i]`, or 0 when it is ill-formed
+  ## or truncated. As strict as `validateUtf8Sequence`: overlong, surrogate and
+  ## above-U+10FFFF encodings yield 0.
+  ##
+  ## Example:
+  ## ```nim
+  ## assert wellFormedSeqLen("aé", 1) == 2
+  ## assert wellFormedSeqLen("\xED\xA0\x80", 0) == 0  # surrogate
+  ## ```
+  let n = utf8ByteLength(byte(s[i]))
+  if n == 0 or i + n > s.len:
+    return 0
+  if not validateUtf8Sequence(s.toOpenArrayByte(i, i + n - 1)).isValid:
+    return 0
+  n
+
 proc buildUtf8String*(firstByte: byte, continuationBytes: openArray[byte]): string =
   ## Build a UTF-8 string from first byte and continuation bytes
   ##

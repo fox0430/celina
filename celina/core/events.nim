@@ -10,7 +10,7 @@ import errors, mouse_logic, utf8_utils, key_logic, escape_sequence_logic
 # Re-export types to maintain API compatibility
 export mouse_logic.MouseButton, mouse_logic.MouseEventKind, mouse_logic.KeyModifier
 export key_logic.KeyCode, key_logic.KeyEvent
-export utf8_utils
+export utf8_utils except wellFormedSeqLen
 
 type
   EventResult* = enum
