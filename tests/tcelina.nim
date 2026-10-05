@@ -128,6 +128,8 @@ suite "Celina Main Module Tests":
       check not compiles(AbortPartialSeq)
       check not compiles(ResetAndClearScreenSeq)
       check not compiles(EmergencyAltScreenTail)
+      check not compiles(ReadOutcome)
+      check not compiles(classifyReadResult)
       check compiles(EmergencyResetSeq)
       check compiles(EmergencyResetAltScreenSeq)
 

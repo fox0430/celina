@@ -179,6 +179,8 @@ proc readKeyAsync*(reader: AsyncInputReader): Future[Event] {.async.} =
     let ch = await reader.readCharAsync()
 
     if ch == '\0':
+      if reader.takeCloseNotice():
+        return Event(kind: InputClosed)
       return Event(kind: Unknown)
 
     # Handle Ctrl+C (quit signal)

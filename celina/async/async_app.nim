@@ -337,7 +337,8 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
 
           # Window-first fallthrough: route through the window manager
           # first; only fall through to the global handler when no
-          # window consumed the event.
+          # window consumed the event. `InputClosed` concerns the whole
+          # app, so no window may consume it.
           #
           # `try/except Exception` is required here because window
           # handlers carry no `{.raises.}` annotation, so chronos's
@@ -347,7 +348,8 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
           # still react. `Defect`s are caught under `--panics:off`
           # (default) and propagate under `--panics:on`.
           var winConsumed = false
-          if app.state.windowMode and not app.windowManager.isNil:
+          if event.kind != InputClosed and app.state.windowMode and
+              not app.windowManager.isNil:
             {.cast(gcsafe).}:
               try:
                 if app.windowManager.handleEvent(event) == erConsume:

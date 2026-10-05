@@ -944,6 +944,36 @@ suite "App Application Timeout":
       check app.timings.lastEventTime >= handlerReturnedAt
       check timeoutCalls == 1
 
+    test "A closed stdin reaches the global handler once":
+      # A window that consumes every event must not hide the close. That the
+      # poll then waits is checked on `pollEvents`: this loop rounds the frame
+      # time down to whole ms, so its tick count is no measure of spinning.
+      let app = newApp(
+        AppConfig(
+          alternateScreen: false, rawMode: false, targetFps: 60, windowMode: true
+        )
+      )
+      let window = newWindow(rect(0, 0, 10, 5), "Swallow")
+      window.setEventHandler proc(w: Window, e: Event): EventResult =
+        erConsume
+      discard app.addWindow(window)
+      var closedEvents = 0
+      app.onEvent proc(event: Event): EventResult =
+        if event.kind == InputClosed:
+          closedEvents.inc
+        erContinue
+      proc tickSome() =
+        discard captureStdout(
+          proc() =
+            let size = getTerminalSizeOrDefault()
+            app.state.resizeState = initResizeState(size.width, size.height)
+            for _ in 1 .. 3:
+              discard app.tick()
+        )
+
+      withEndedStdin("", tickSome)
+      check closedEvents == 1
+
     test "A slow resize handler does not use up the idle time":
       let app = newApp(AppConfig(alternateScreen: false, rawMode: false, targetFps: 60))
       # A long timeout leaves room for a slow runner; the clock is backdated,

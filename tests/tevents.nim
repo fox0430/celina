@@ -25,6 +25,8 @@ proc redirectStdinFromPipe(): StdinPipe =
     discard close(fds[0])
     discard close(fds[1])
     return (cint(-1), cint(-1), cint(-1))
+  # An end of input seen on the old stdin is not this pipe's.
+  clearInputClosed()
   (saved, fds[0], fds[1])
 
 proc restoreStdin(p: StdinPipe) =
@@ -32,6 +34,7 @@ proc restoreStdin(p: StdinPipe) =
   discard close(p.saved)
   discard close(p.rfd)
   discard close(p.wfd)
+  clearInputClosed()
 
 proc feedPipe(p: StdinPipe, data: string) =
   if data.len > 0:
@@ -55,7 +58,8 @@ suite "Events Module Tests":
       check EventKind.FocusIn.ord == 4
       check EventKind.FocusOut.ord == 5
       check EventKind.Quit.ord == 6
-      check EventKind.Unknown.ord == 7
+      check EventKind.InputClosed.ord == 7
+      check EventKind.Unknown.ord == 8
 
   suite "KeyCode Tests":
     test "Basic key codes":
@@ -1569,6 +1573,9 @@ suite "Events Module Tests":
     test "quit event":
       check $Event(kind: Quit) == "Event(Quit)"
 
+    test "input closed event":
+      check $Event(kind: InputClosed) == "Event(InputClosed)"
+
     test "unknown event":
       check $Event(kind: Unknown) == "Event(Unknown)"
 
@@ -1964,4 +1971,63 @@ suite "Events Module Tests":
         finally:
           clearPendingByte()
           setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+  suite "End of input":
+    test "readKeyInput emits InputClosed once, after the bytes ahead of the end":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          feedPipe(p, "ab")
+          discard close(p.wfd)
+          p.wfd = -1
+          let a = readKeyInput()
+          check a.isSome and a.get.kind == EventKind.Key and a.get.key.char == "a"
+          let b = readKeyInput()
+          check b.isSome and b.get.kind == EventKind.Key and b.get.key.char == "b"
+          let closed = readKeyInput()
+          check closed.isSome and closed.get.kind == InputClosed
+          check readKeyInput().isNone
+        finally:
+          restoreStdin(p)
+
+    test "pollEvents offers the close once, then waits out its timeout":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          discard close(p.wfd)
+          p.wfd = -1
+          check pollEvents(1000)
+          let closed = readKeyInput()
+          check closed.isSome and closed.get.kind == InputClosed
+          check not hasInput()
+          let started = epochTime()
+          check not pollEvents(50)
+          check epochTime() - started >= 0.04
+        finally:
+          restoreStdin(p)
+
+    test "a close found right after ESC stays pending for the next read":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          feedPipe(p, "\x1b")
+          discard close(p.wfd)
+          p.wfd = -1
+          # The post-ESC wait reads the end, so the bare Escape is returned
+          # and the close stays pending until the next read.
+          let esc = readKeyInput()
+          check esc.isSome and esc.get.kind == EventKind.Key
+          check esc.get.key.code == Escape
+          # A poll loop must be offered the pending close, not told idle.
+          check hasInput()
+          check pollEvents(0)
+          let closed = readKeyInput()
+          check closed.isSome and closed.get.kind == InputClosed
+          check not hasInput()
+          check not pollEvents(0)
+        finally:
           restoreStdin(p)

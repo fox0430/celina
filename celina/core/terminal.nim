@@ -21,7 +21,7 @@ import geometry, colors, buffer, errors, terminal_common, screen_state
 from output_stream import
   StreamReset, swAll, swPartial, srAbort, srOsc8, srSgr, srSyncEnd, outcomeOf,
   sendPendingReset, markPartialWrite, writeStream, setPendingReset
-from events import clearPendingByte, setStdinNonBlockingPinned
+from events import clearPendingByte, clearInputClosed, setStdinNonBlockingPinned
 
 export errors.TerminalError
 
@@ -167,6 +167,8 @@ proc enableRawMode*(terminal: Terminal) =
     # Drop any UTF-8 resync byte buffered before mode transition so it
     # cannot leak across modes as a phantom keypress.
     clearPendingByte()
+    # Raw mode took, so stdin is a live terminal; an earlier end is stale.
+    clearInputClosed()
   except CatchableError as e:
     raise newTerminalError("Failed to enable raw mode: " & e.msg)
 

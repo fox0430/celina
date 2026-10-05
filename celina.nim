@@ -77,10 +77,11 @@ export
   geometry, colors, buffer, events, layout, terminal, errors, app, app_delegation,
   app_handlers, renderer, cursor, fps, windows, borders
 
-# Exported only for screen_state, output_stream and async_terminal.
+# Exported only for screen_state, output_stream, async_terminal and the input
+# readers (events, async_io).
 export terminal_common except
   appendCursorCommands, needsFullRender, AbortPartialSeq, ResetAndClearScreenSeq,
-  EmergencyAltScreenTail
+  EmergencyAltScreenTail, ReadOutcome, classifyReadResult
 
 export async_backend, hasAsyncSupport, hasChronos, hasAsyncDispatch
 

@@ -288,9 +288,11 @@ proc tick(app: App): bool =
 
           # Window-first fallthrough: route through the window manager
           # first; only fall through to the global handler when no
-          # window consumed the event.
+          # window consumed the event. `InputClosed` concerns the whole
+          # app, so no window may consume it.
           var winConsumed = false
-          if app.state.windowMode and not app.windowManager.isNil:
+          if event.kind != InputClosed and app.state.windowMode and
+              not app.windowManager.isNil:
             if app.windowManager.handleEvent(event) == erConsume:
               winConsumed = true
 

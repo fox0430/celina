@@ -50,6 +50,11 @@ type
     woWouldBlock ## fd not ready (EAGAIN/EWOULDBLOCK); back off and retry
     woHardError ## unrecoverable error, or a 0-byte write; give up
 
+  ReadOutcome* = enum
+    roData ## `read` returned n > 0; `n` bytes are in hand
+    roNoData ## nothing to read now (EAGAIN/EINTR, or EOF/EIO on a live tty); poll again
+    roClosed ## the input is gone for good (end of file or a hard error)
+
   WriteWaitOutcome* = enum
     wwWritable ## fd reports POLLOUT; a retried `write` should make progress
     wwNotReady ## not writable within the timeout (or poll itself was interrupted)
@@ -653,6 +658,28 @@ proc needsFullRender*(oldBuffer, newBuffer: Buffer, force: bool): bool {.inline.
   ## terminal may have cropped or reflowed it, so the frame clears and redraws.
   ## Shared by every draw path so `draw` and `drawWithCursor` agree.
   force or oldBuffer.area != newBuffer.area
+
+# Low-level read classification
+# Shared by the sync reader (`readByteNonBlocking` in events.nim) and the async
+# reader (`readNonBlocking` in async_io.nim), so both decide in one place when
+# the input has ended.
+
+proc classifyReadResult*(n: int, fd: cint): ReadOutcome =
+  ## Classify the raw return value of a single `read(2)` on `fd`. `errno` must
+  ## still reflect that `read` call.
+  ##
+  ## End of file and hard errors close the input, except on a terminal that
+  ## still answers `isatty`: there a 0-byte read is a cooked-mode Ctrl-D and
+  ## EIO a background read, and both pass. A hung-up terminal closes only
+  ## where `isatty` fails with EIO (Linux); XNU keeps answering `isatty` on
+  ## the zombie pty, so a hang-up there reads as a live terminal.
+  if n > 0:
+    return roData
+  if n < 0:
+    let err = errno
+    if err == EINTR or err == EAGAIN or err == EWOULDBLOCK:
+      return roNoData
+  if isatty(fd) == 1: roNoData else: roClosed
 
 # Low-level write retry policy and classification
 # Shared by the blocking loop (`writeAllBlocking` below) and the async loop
