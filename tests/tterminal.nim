@@ -168,6 +168,30 @@ suite "Terminal Module Tests":
       # We just test that the function exists and accepts the right parameters
       check testCell.symbol == "X"
 
+    test "renderCell never emits raw OSC 52 from a directly built Cell":
+      # renderCell bypasses the buffer, so it must sanitize itself.
+      when defined(posix):
+        let evil =
+          Cell(symbol: "\x1b]52;c;Hi\x07", style: defaultStyle(), hyperlink: "")
+        let output = captureStdout(
+          proc() =
+            renderCell(evil, 0, 0)
+        )
+        check "\x1b]52" notin output
+        check "\x07" notin output
+        # The payload collapses to a single blank so the cell keeps its column.
+        check " ]52;c;Hi " notin output
+        check output.endsWith(" ")
+
+        let c1 = Cell(symbol: "\xc2\x9b", style: defaultStyle(), hyperlink: "")
+        let c1Output = captureStdout(
+          proc() =
+            renderCell(c1, 0, 0)
+        )
+        check "\xc2\x9b" notin c1Output
+      else:
+        skip()
+
     test "render function with buffer changes":
       var buffer1 = newBuffer(10, 5)
       var buffer2 = newBuffer(10, 5)

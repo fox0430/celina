@@ -472,7 +472,7 @@ proc renderCellAsync*(cell: Cell, x, y: int) {.async.} =
   var output = makeCursorPositionSeq(x, y)
   if styleSeq.len > 0:
     output.add(styleSeq)
-  output.add(cell.symbol)
+  output.add(sanitizeCellSymbol(cell.symbol))
   if styleSeq.len > 0:
     output.add(resetSequence())
 

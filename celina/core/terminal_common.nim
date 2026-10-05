@@ -4,7 +4,7 @@
 ## synchronous (terminal.nim) and asynchronous (async_terminal.nim) implementations.
 
 import std/[strformat, termios, posix, strutils, os]
-import geometry, colors, buffer
+import geometry, colors, buffer, utf8_utils
 
 type
   AnsiSequence* = distinct string
@@ -182,6 +182,9 @@ const
   OscTitleOnlyStart* = "\e]2;"
   OscTerminator* = "\a" # BEL character as terminator (widely supported)
 
+  MaxOscTitleLen* = 512 ## Max title/icon length in runes, applied after sanitization.
+  MaxOscUrlLen* = 2048 ## Max hyperlink URL length in runes; longer URLs get no link.
+
   WriteBlockedWaitMs* = 2
     ## How long one blocked-write wait pauses for stdout to drain: the `poll(2)`
     ## timeout in the sync path, and the cooperative `sleepMs` backoff in the
@@ -196,25 +199,60 @@ const
     ## of zero progress. This bounds both an EAGAIN stall and a pathological
     ## EINTR storm with the same budget.
 
+proc runePrefixLen(s: string, maxRunes: int): int =
+  ## Byte length of the first `maxRunes` runes of well-formed `s`.
+  var runes = 0
+  while result < s.len and runes < maxRunes:
+    inc result, max(1, utf8ByteLength(byte(s[result])))
+    inc runes
+  result = min(result, s.len)
+
+proc replaceIllFormedUtf8(s: string): string =
+  ## Replace each byte that does not start a well-formed sequence with U+FFFD.
+  result = newStringOfCap(s.len)
+  var i = 0
+  while i < s.len:
+    let n = utf8ByteLength(byte(s[i]))
+    if n > 0 and i + n <= s.len and
+        validateUtf8Sequence(s.toOpenArrayByte(i, i + n - 1)).isValid:
+      for j in i ..< i + n:
+        result.add(s[j])
+      inc i, n
+    else:
+      result.add(Utf8ReplacementChar)
+      inc i
+
+proc sanitizeOscTitle(s: string): string =
+  ## Replace ill-formed UTF-8 with U+FFFD, strip controls and cut to
+  ## `MaxOscTitleLen` runes.
+  let clean = sanitizeHyperlink(replaceIllFormedUtf8(s))
+  clean[0 ..< runePrefixLen(clean, MaxOscTitleLen)]
+
+proc sanitizeOscUrl(s: string): string =
+  ## Strip controls. An ill-formed URL or one longer than `MaxOscUrlLen` runes
+  ## yields `""` (no link) rather than a different target.
+  let clean = sanitizeHyperlink(s)
+  if runePrefixLen(clean, MaxOscUrlLen) < clean.len: "" else: clean
+
 proc makeWindowTitleSeq*(title: string): string {.inline.} =
   ## Generate OSC sequence to set window title and icon name
-  ## Format: \e]0;title\a
-  OscWindowTitleStart & title & OscTerminator
+  ## Format: \e]0;title\a. Payload is sanitized and capped at `MaxOscTitleLen`.
+  OscWindowTitleStart & sanitizeOscTitle(title) & OscTerminator
 
 proc makeIconNameSeq*(name: string): string {.inline.} =
   ## Generate OSC sequence to set icon name only
-  ## Format: \e]1;name\a
-  OscIconNameStart & name & OscTerminator
+  ## Format: \e]1;name\a. Sanitized and capped at `MaxOscTitleLen`.
+  OscIconNameStart & sanitizeOscTitle(name) & OscTerminator
 
 proc makeTitleOnlySeq*(title: string): string {.inline.} =
   ## Generate OSC sequence to set window title only (not icon name)
-  ## Format: \e]2;title\a
-  OscTitleOnlyStart & title & OscTerminator
+  ## Format: \e]2;title\a. Sanitized and capped at `MaxOscTitleLen`.
+  OscTitleOnlyStart & sanitizeOscTitle(title) & OscTerminator
 
 proc makeHyperlinkStartSeq*(url: string): string {.inline.} =
   ## Generate OSC 8 hyperlink start sequence
-  ## Format: \e]8;;URL\e\\
-  Osc8Start & url & Osc8End
+  ## Format: \e]8;;URL\e\\. Sanitized; a URL over `MaxOscUrlLen` yields no link.
+  Osc8Start & sanitizeOscUrl(url) & Osc8End
 
 proc makeCursorPositionSeq*(x, y: int): string {.inline.} =
   ## Generate ANSI sequence for cursor positioning.
@@ -226,11 +264,21 @@ proc makeCursorPositionSeq*(pos: Position): string {.inline.} =
   makeCursorPositionSeq(pos.x, pos.y)
 
 proc makeCursorMoveSeq*(direction: string, steps: int): string {.inline.} =
-  ## Generate ANSI sequence for cursor movement with steps
+  ## Generate ANSI sequence for cursor movement with steps.
+  ## Returns `""` for empty `direction`, `steps < 1`, or a last byte outside
+  ## `0x40..0x7E`. With `steps == 1`, `direction` must be exactly `\e[` + last byte.
+  if direction.len == 0 or steps < 1:
+    return ""
+  let last = direction[^1]
+  let o = ord(last)
+  if o < 0x40 or o > 0x7E:
+    return ""
   if steps == 1:
-    direction
+    if direction.len == 3 and direction[0] == '\x1b' and direction[1] == '[':
+      return direction
+    return ""
   else:
-    &"\e[{steps}{direction[direction.len-1]}"
+    &"\e[{steps}{last}"
 
 proc getCursorStyleSeq*(style: CursorStyle): string =
   ## Get ANSI sequence for cursor style
@@ -350,8 +398,8 @@ proc generateRenderBatch*(changes: seq[tuple[pos: Position, cell: Cell]]): Rende
       result.addCommand(RenderCommand(kind: RckSetStyle, style: change.cell.style))
       lastStyle = change.cell.style
 
-    # Accumulate text
-    currentText.add(change.cell.symbol)
+    # Sanitize per cell: collapsing the joined run would drop its other cells.
+    currentText.add(sanitizeCellSymbol(change.cell.symbol))
     lastPos.x = change.pos.x
 
   # Flush final text
@@ -390,7 +438,9 @@ proc optimizeRenderBatch*(batch: RenderBatch): RenderBatch =
     i.inc
 
 proc buildOutputString*(batch: RenderBatch): string =
-  ## Build the final output string from render commands
+  ## Build the final output string from render commands.
+  ## `RckWriteText` is re-sanitized for hand-built batches; a control there
+  ## collapses the whole run to one space.
   result = newStringOfCap(batch.estimatedSize)
 
   for cmd in batch.commands:
@@ -400,7 +450,7 @@ proc buildOutputString*(batch: RenderBatch): string =
     of RckSetStyle:
       result.add(cmd.style.toAnsiSequence())
     of RckWriteText:
-      result.add(cmd.text)
+      result.add(sanitizeCellSymbol(cmd.text))
     of RckClearScreen:
       # Also resets SGR: a style set before the clear does not carry over.
       result.add(ResetAndClearScreenSeq)
@@ -435,6 +485,8 @@ proc calculateSimpleDiff*(
 proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
   ## Build output string using simple cell-by-cell differential rendering
   ## Supports OSC 8 hyperlinks - hyperlink state is tracked per cell
+  ## Symbols and hyperlinks are re-sanitized as defense in depth; every
+  ## `Buffer` write path already sanitizes.
 
   if oldBuffer.area != newBuffer.area:
     # Different sizes, use simple approach
@@ -449,13 +501,14 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
 
       result.add(makeCursorPositionSeq(change.pos.x, change.pos.y))
 
-      # Handle hyperlink state change
-      if change.cell.hyperlink != currentHyperlink:
+      # Handle sanitized hyperlink change.
+      let safeLink = sanitizeHyperlink(change.cell.hyperlink)
+      if safeLink != currentHyperlink:
         if currentHyperlink.len > 0:
           result.add(Osc8Reset)
-        if change.cell.hyperlink.len > 0:
-          result.add(makeHyperlinkStartSeq(change.cell.hyperlink))
-        currentHyperlink = change.cell.hyperlink
+        if safeLink.len > 0:
+          result.add(makeHyperlinkStartSeq(safeLink))
+        currentHyperlink = safeLink
 
       # Emit a style sequence only when the style differs from the one already
       # active; runs of same-styled cells then share a single SGR sequence.
@@ -466,7 +519,7 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
           result.add(change.cell.style.toAnsiSequence())
         currentStyle = change.cell.style
 
-      result.add(change.cell.symbol)
+      result.add(sanitizeCellSymbol(change.cell.symbol))
 
     # Close any open hyperlink and reset any lingering style at the end
     if currentHyperlink.len > 0:
@@ -498,13 +551,14 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
           result.add(makeCursorPositionSeq(x, y))
           lastCursorPos = (x, y)
 
-        # Handle hyperlink state change
-        if newCell.hyperlink != currentHyperlink:
+        # Handle sanitized hyperlink change.
+        let safeLink = sanitizeHyperlink(newCell.hyperlink)
+        if safeLink != currentHyperlink:
           if currentHyperlink.len > 0:
             result.add(Osc8Reset)
-          if newCell.hyperlink.len > 0:
-            result.add(makeHyperlinkStartSeq(newCell.hyperlink))
-          currentHyperlink = newCell.hyperlink
+          if safeLink.len > 0:
+            result.add(makeHyperlinkStartSeq(safeLink))
+          currentHyperlink = safeLink
 
         # Emit a style sequence only when the style changes. Adjacent changed
         # cells with the same style reuse the active SGR; carrying the style
@@ -517,7 +571,7 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
             result.add(newCell.style.toAnsiSequence())
           currentStyle = newCell.style
 
-        result.add(newCell.symbol)
+        result.add(sanitizeCellSymbol(newCell.symbol))
 
         # Update cursor position (we wrote one character)
         lastCursorPos = (x + 1, y)
@@ -531,6 +585,7 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
 proc buildFullRenderOutput*(buffer: Buffer): string =
   ## Build output string for full buffer render
   ## Supports OSC 8 hyperlinks
+  ## Re-sanitizes as defense in depth, as in `buildDifferentialOutput`.
   result = newStringOfCap(buffer.area.width * buffer.area.height * 10)
 
   # The loop below relies on the SGR reset: it starts from the default style.
@@ -562,14 +617,15 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
       if cursorX != x:
         result.add(makeCursorPositionSeq(buffer.area.x + x, buffer.area.y + y))
 
-      # Update hyperlink if changed. Skipped cells are never written, so an
-      # open hyperlink or style carried across a cursor jump does not reach them.
-      if cell.hyperlink != lastHyperlink:
+      # Update sanitized hyperlink if changed. Skipped cells are never
+      # written, so a carried link/style does not reach them.
+      let safeLink = sanitizeHyperlink(cell.hyperlink)
+      if safeLink != lastHyperlink:
         if lastHyperlink.len > 0:
           result.add(Osc8Reset)
-        if cell.hyperlink.len > 0:
-          result.add(makeHyperlinkStartSeq(cell.hyperlink))
-        lastHyperlink = cell.hyperlink
+        if safeLink.len > 0:
+          result.add(makeHyperlinkStartSeq(safeLink))
+        lastHyperlink = safeLink
 
       # Update style if changed
       if cell.style != lastStyle:
@@ -580,7 +636,7 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
         lastStyle = cell.style
 
       # Add the character
-      result.add(cell.symbol)
+      result.add(sanitizeCellSymbol(cell.symbol))
       cursorX = x + 1
 
   # Close any open hyperlink at the end
