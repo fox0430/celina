@@ -86,10 +86,8 @@ proc isWellFormedUtf8(s: string): bool =
   ## above-U+10FFFF encodings, which can hide a raw C1 byte as a continuation.
   var i = 0
   while i < s.len:
-    let n = utf8ByteLength(byte(s[i]))
-    if n == 0 or i + n > s.len:
-      return false
-    if not validateUtf8Sequence(s.toOpenArrayByte(i, i + n - 1)).isValid:
+    let n = wellFormedSeqLen(s, i)
+    if n == 0:
       return false
     inc i, n
   true

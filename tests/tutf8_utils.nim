@@ -136,6 +136,28 @@ suite "UTF-8 Sequence Validation":
   test "Valid maximum code point (F4 8F BF BF = U+10FFFF) stays valid":
     check validateUtf8Sequence([byte(0xF4), byte(0x8F), byte(0xBF), byte(0xBF)]).isValid
 
+suite "wellFormedSeqLen":
+  test "Returns the sequence length at the index":
+    let s = "aé\xE3\x81\x82\xF0\x9F\x98\x80"
+    check wellFormedSeqLen(s, 0) == 1
+    check wellFormedSeqLen(s, 1) == 2
+    check wellFormedSeqLen(s, 3) == 3
+    check wellFormedSeqLen(s, 6) == 4
+
+  test "Returns 0 for ill-formed or truncated sequences":
+    check wellFormedSeqLen("\xFF", 0) == 0
+    check wellFormedSeqLen("\x80", 0) == 0
+    check wellFormedSeqLen("a\xC3", 1) == 0
+    check wellFormedSeqLen("\xC3\x41", 0) == 0
+    check wellFormedSeqLen("\xC0\x80", 0) == 0
+    check wellFormedSeqLen("\xE0\x80\x80", 0) == 0
+    check wellFormedSeqLen("\xED\xA0\x80", 0) == 0
+    check wellFormedSeqLen("\xF4\x90\x80\x80", 0) == 0
+
+  test "Accepts the boundaries of the strict ranges":
+    check wellFormedSeqLen("\xED\x9F\xBF", 0) == 3
+    check wellFormedSeqLen("\xF4\x8F\xBF\xBF", 0) == 4
+
 suite "UTF-8 Second Byte Range (Table 3-7)":
   test "Narrowed ranges for E0/ED/F0/F4":
     check utf8SecondByteRange(0xE0) == (0xA0.byte, 0xBF.byte)

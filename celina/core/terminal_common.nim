@@ -212,9 +212,8 @@ proc replaceIllFormedUtf8(s: string): string =
   result = newStringOfCap(s.len)
   var i = 0
   while i < s.len:
-    let n = utf8ByteLength(byte(s[i]))
-    if n > 0 and i + n <= s.len and
-        validateUtf8Sequence(s.toOpenArrayByte(i, i + n - 1)).isValid:
+    let n = wellFormedSeqLen(s, i)
+    if n > 0:
       for j in i ..< i + n:
         result.add(s[j])
       inc i, n
@@ -232,7 +231,7 @@ proc sanitizeOscUrl(s: string): string =
   ## Strip controls. An ill-formed URL or one longer than `MaxOscUrlLen` runes
   ## yields `""` (no link) rather than a different target.
   let clean = sanitizeHyperlink(s)
-  if runePrefixLen(clean, MaxOscUrlLen) < clean.len: "" else: clean
+  if utf8CharLength(clean) > MaxOscUrlLen: "" else: clean
 
 proc makeWindowTitleSeq*(title: string): string {.inline.} =
   ## Generate OSC sequence to set window title and icon name
