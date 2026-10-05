@@ -12,6 +12,9 @@ import ../celina/core/terminal_common
 from ../celina/core/output_stream import
   clearPendingReset, resetPending, setPendingReset, srAbort, srOsc8, srSgr, srSyncEnd
 
+when hasChronos:
+  import std/deques
+
 privateAccess(AsyncTerminal)
 
 # Test helpers
@@ -1553,20 +1556,34 @@ suite "AsyncTerminal cleanupAsync":
         terminal.syncOutputEnabled
       )
 
+    template waitUntil(cond: untyped) =
+      ## A cancel takes several loop turns to land, and chronos drops one sent
+      ## before the previous has landed, so wait for the state, not a time.
+      for _ in 1 .. 2000:
+        if cond:
+          break
+        waitFor sleepAsync(1.milliseconds)
+      doAssert cond
+
     proc cancelCleanupWhileParked(
         terminal: AsyncTerminal, cancels: int, restoredBeforeUnlock: var bool
     ): Future[void] =
-      ## Start cleanupAsync behind a held stdout lock and request `cancels`
-      ## cancels, letting each land before the next. The first cancel moves it
-      ## to the emergency reset, still parked; a second one makes it restore
-      ## with a blocking write and return while the lock is still held.
+      ## Start cleanupAsync behind a held stdout lock and cancel it once or
+      ## twice (`cancels` is 1 or 2), letting each land before the next. The
+      ## first cancel moves it to the emergency reset, still parked; a second
+      ## one makes it restore with a blocking write and return while the lock
+      ## is still held.
       doAssert tryAcquireStdoutLockImmediate()
       try:
         result = terminal.cleanupAsync()
-        for _ in 1 .. cancels:
+        result.cancelSoon()
+        # The reset parks behind the cancelled cursor write's waiter.
+        waitUntil(stdoutWriteWaiters.len == 2)
+        if cancels >= 2:
           result.cancelSoon()
-          waitFor sleepAsync(1.milliseconds)
-        doAssert result.finished == (cancels >= 2)
+          waitUntil(result.finished)
+        else:
+          doAssert not result.finished
         restoredBeforeUnlock = terminal.allModesOff()
       finally:
         releaseStdoutLock()
