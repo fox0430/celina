@@ -2,6 +2,8 @@
 
 import std/[os, posix, tempfiles, termios]
 
+from ../celina/core/events import clearInputClosed
+
 proc captureStdout*(body: proc()): string =
   ## Run `body` with stdout redirected to a pipe and return what it wrote.
   ## Returns "" without running `body` if the redirect cannot be set up.
@@ -103,24 +105,41 @@ when defined(linux):
       discard close(savedStdout)
     readFile(path)
 
-proc withStdinInput*(input: string, body: proc()) =
-  ## Run `body` with stdin replaced by a pipe that holds `input`. The write
-  ## end stays open until `body` returns, so once `input` is read, stdin
-  ## has no data (and no EOF) to report.
+proc withStdinPipe(input: string, endAfterInput: bool, body: proc()) =
   var fds: array[2, cint]
   doAssert pipe(fds) == 0
   let saved = dup(STDIN_FILENO)
   doAssert saved != -1
   discard dup2(fds[0], STDIN_FILENO)
   discard close(fds[0])
+  # An end of input seen on the old stdin is not this pipe's.
+  clearInputClosed()
+  var writerOpen = true
   try:
     if input.len > 0:
       doAssert posix.write(fds[1], unsafeAddr input[0], input.len) == input.len
+    if endAfterInput:
+      discard close(fds[1])
+      writerOpen = false
     body()
   finally:
     discard dup2(saved, STDIN_FILENO)
     discard close(saved)
-    discard close(fds[1])
+    if writerOpen:
+      discard close(fds[1])
+    clearInputClosed()
+
+proc withStdinInput*(input: string, body: proc()) =
+  ## Run `body` with stdin replaced by a pipe that holds `input`. The write
+  ## end stays open until `body` returns, so once `input` is read, stdin
+  ## has no data (and no EOF) to report.
+  withStdinPipe(input, false, body)
+
+proc withEndedStdin*(input: string, body: proc()) =
+  ## Run `body` with stdin replaced by a pipe that holds `input` and whose
+  ## write end is already closed, so once `input` is read, stdin reports end
+  ## of file.
+  withStdinPipe(input, true, body)
 
 proc posix_openpt(flags: cint): cint {.importc, header: "<stdlib.h>".}
 proc grantpt(fd: cint): cint {.importc, header: "<stdlib.h>".}
@@ -128,25 +147,32 @@ proc unlockpt(fd: cint): cint {.importc, header: "<stdlib.h>".}
 proc ptsname(fd: cint): cstring {.importc, header: "<stdlib.h>".}
 var TIOCSWINSZ {.importc, header: "<sys/ioctl.h>".}: culong
 
+proc openPtyPair*(): tuple[master, slave: cint] =
+  ## Open a pty and return its master and slave fds, or (-1, -1) if it cannot
+  ## be set up. The caller closes both.
+  let master = posix_openpt(O_RDWR or O_NOCTTY)
+  if master == -1:
+    return (cint(-1), cint(-1))
+  if grantpt(master) == 0 and unlockpt(master) == 0:
+    let slaveName = ptsname(master)
+    if slaveName != nil:
+      let slave = open(slaveName, O_RDWR or O_NOCTTY)
+      if slave != -1:
+        return (master, slave)
+  discard close(master)
+  (cint(-1), cint(-1))
+
 proc withPtyStdout*(cols, rows: int, output: var string, body: proc()): bool =
   ## Run `body` with stdout on a pty of the given size and append what it
   ## wrote to `output`. Returns false without running `body` if the pty cannot
   ## be set up. Output is drained only afterwards, so keep it within the pty
   ## buffer.
   stdout.flushFile()
-  let master = posix_openpt(O_RDWR or O_NOCTTY)
+  let (master, slave) = openPtyPair()
   if master == -1:
     return false
   defer:
     discard close(master)
-  if grantpt(master) != 0 or unlockpt(master) != 0:
-    return false
-  let slaveName = ptsname(master)
-  if slaveName == nil:
-    return false
-  let slave = open(slaveName, O_RDWR or O_NOCTTY)
-  if slave == -1:
-    return false
   var ws = IOctl_WinSize(ws_row: rows.cushort, ws_col: cols.cushort)
   if ioctl(slave, TIOCSWINSZ, addr ws) != 0:
     discard close(slave)

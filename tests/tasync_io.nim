@@ -1,6 +1,6 @@
 # Test suite for async_io module
 #
-import std/[unittest, posix, deques]
+import std/[unittest, posix, deques, importutils]
 
 import ../celina/async/async_backend
 import ../celina/async/async_io {.all.}
@@ -541,3 +541,37 @@ suite "AsyncInputReader Non-Blocking Operations":
     check reader2 != nil
     reader1.closeAsyncInputReader()
     reader2.closeAsyncInputReader()
+
+suite "AsyncInputReader end of input":
+  test "a polling-mode reader reads to the end of a pipe that only hangs up":
+    # A drained pipe whose writer is gone reports POLLHUP without POLLIN.
+    privateAccess(AsyncInputReader)
+    proc readToEnd() =
+      let reader = newAsyncInputReader()
+      try:
+        reader.usePolling = true
+        check reader.hasDataAvailable(0)
+        check reader.readNonBlocking() == ""
+        check reader.isClosed
+        check not reader.hasDataAvailable(0)
+      finally:
+        reader.closeAsyncInputReader()
+
+    withEndedStdin("", readToEnd)
+
+  test "a hasInputAsync/readStdinAsync loop stops at the end of input":
+    proc readLoop() =
+      let reader = newAsyncInputReader()
+      try:
+        var data = ""
+        var reads = 0
+        while reads < 10 and (waitFor reader.hasInputAsync(0)):
+          data.add(waitFor reader.readStdinAsync(0))
+          inc reads
+        check data == "ab"
+        check reads < 10
+        check reader.isClosed
+      finally:
+        reader.closeAsyncInputReader()
+
+    withEndedStdin("ab", readLoop)

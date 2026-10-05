@@ -6,6 +6,7 @@
 import std/[os, posix, options, strutils, strformat]
 
 import errors, mouse_logic, utf8_utils, key_logic, escape_sequence_logic
+from terminal_common import ReadOutcome, classifyReadResult
 
 # Re-export types to maintain API compatibility
 export mouse_logic.MouseButton, mouse_logic.MouseEventKind, mouse_logic.KeyModifier
@@ -40,6 +41,10 @@ type
     FocusIn
     FocusOut
     Quit
+    InputClosed
+      ## Stdin has ended (end of file, or a read error on a fd that is not a
+      ## live terminal), so no more input will arrive. Delivered once, to the
+      ## global handler only; the loop keeps running at its normal pace.
     Unknown
 
   MouseEvent* = object
@@ -57,7 +62,7 @@ type
       mouse*: MouseEvent
     of Paste:
       pastedText*: string
-    of Resize, FocusIn, FocusOut, Quit, Unknown:
+    of Resize, FocusIn, FocusOut, Quit, InputClosed, Unknown:
       discard
 
 proc modifiersToString(modifiers: set[KeyModifier]): string =
@@ -110,6 +115,8 @@ proc `$`*(event: Event): string =
     "Event(FocusOut)"
   of Quit:
     "Event(Quit)"
+  of InputClosed:
+    "Event(InputClosed)"
   of Unknown:
     "Event(Unknown)"
 
@@ -218,6 +225,25 @@ proc setStdinNonBlockingPinned*(pinned: bool) =
 proc isStdinNonBlockingPinned*(): bool {.inline.} =
   ## Read-only accessor for the pin flag, intended for tests and diagnostics.
   stdinNonBlockingPinned
+
+# Set once a non-blocking read finds stdin gone (`roClosed`); stdin is not read
+# again until `clearInputClosed`. Thread-local like `pendingByte`.
+var inputClosed {.threadvar.}: bool
+var inputCloseReported {.threadvar.}: bool
+
+proc clearInputClosed*() =
+  ## Forget an earlier end of input. `Terminal.enableRawMode` calls this once
+  ## it succeeds, since stdin is then a live terminal.
+  inputClosed = false
+  inputCloseReported = false
+
+proc takeCloseNotice(): bool =
+  ## True exactly once after stdin closes; the caller then emits the one
+  ## `InputClosed` event.
+  if not inputClosed or inputCloseReported:
+    return false
+  inputCloseReported = true
+  true
 
 # Blocking I/O helper functions
 proc readByteBlocking(): tuple[success: bool, ch: char] =
@@ -501,17 +527,19 @@ proc readByteNonBlocking(fd: cint): tuple[success: bool, ch: char, isTimeout: bo
     let b = pendingByte.get
     pendingByte = none(byte)
     return (true, char(b), false)
+  if inputClosed:
+    return (false, '\0', false)
   var ch: char
   let bytesRead = read(fd, addr ch, 1)
+  let wouldBlock = bytesRead == -1 and (errno == EAGAIN or errno == EWOULDBLOCK)
 
-  if bytesRead == -1:
-    let err = errno
-    if err == EAGAIN or err == EWOULDBLOCK:
-      return (false, '\0', true)
-    return (false, '\0', false)
-  elif bytesRead == 1:
+  case classifyReadResult(bytesRead, fd)
+  of roData:
     return (true, ch, false)
-  else:
+  of roNoData:
+    return (false, '\0', wouldBlock)
+  of roClosed:
+    inputClosed = true
     return (false, '\0', false)
 
 proc readByteWithTimeoutNonBlocking(
@@ -652,10 +680,12 @@ proc readKeyInput*(): Option[Event] =
 
   let readResult = readByteNonBlocking(STDIN_FILENO)
 
-  # No data available or error
+  # No data available, or stdin has ended
   if not readResult.success:
     if needRestore:
       flags.restore()
+    if takeCloseNotice():
+      return some(Event(kind: InputClosed))
     return none(Event)
 
   let ch = readResult.ch
@@ -746,6 +776,8 @@ proc hasInput*(): bool =
   # available so the byte isn't stranded until fresh fd input arrives.
   if pendingByte.isSome:
     return true
+  if inputClosed:
+    return not inputCloseReported
 
   # Use select to check if input is available
   var readSet: TFdSet
@@ -779,6 +811,14 @@ proc pollEvents*(timeoutMs: int): bool =
   # select().
   if pendingByte.isSome:
     return true
+  if inputClosed:
+    if not inputCloseReported:
+      return true # The close itself is pending; `readKeyInput` emits it.
+    # Sleep out the timeout rather than return at once, or a poll loop such as
+    # `App.tick` would spin.
+    if timeoutMs > 0:
+      sleep(timeoutMs)
+    return false
 
   var readSet: TFdSet
   FD_ZERO(readSet)
