@@ -1,10 +1,11 @@
 # Test suite for events module
 
-import std/[unittest, posix, strutils, options]
+import std/[unittest, posix, strutils, options, atomics]
 from std/times import epochTime
 
 import ../celina/core/events {.all.}
 import ../celina/core/mouse_logic
+import stdout_capture
 
 # --- Test helpers: drive the non-blocking byte readers from a controlled pipe.
 # dup2 a pipe's read end onto STDIN_FILENO so the readers consume bytes we write
@@ -47,6 +48,30 @@ proc delayedArrowWriter(wfd: cint) {.thread.} =
   discard usleep(Useconds(10_000)) # 10ms
   var b = "A"
   discard posix.write(wfd, addr b[0], b.len.cint)
+
+# Thread body: close a pipe's write end after a short delay, so a blocking read
+# parked on the read end sees end of input. Same no-capture rule as above.
+proc delayedPipeClose(wfd: cint) {.thread.} =
+  discard usleep(Useconds(50_000)) # 50ms
+  discard close(wfd)
+
+# Thread body: send ESC, interrupt the reader with a signal while it waits for
+# the rest, then send `[A`.
+proc interruptedArrowWriter(args: tuple[wfd: cint, reader: Pthread]) {.thread.} =
+  var esc = '\x1b'
+  discard posix.write(args.wfd, addr esc, 1)
+  discard usleep(Useconds(30_000))
+  discard pthread_kill(args.reader, SIGUSR1)
+  discard usleep(Useconds(30_000))
+  var rest = "[A"
+  discard posix.write(args.wfd, addr rest[0], rest.len.cint)
+
+proc ignoreSignal(sig: cint) {.noconv.} =
+  discard
+
+# Thread body: forget the end of input from another thread.
+proc clearInputClosedOnThread() {.thread.} =
+  clearInputClosed()
 
 suite "Events Module Tests":
   suite "EventKind Tests":
@@ -1974,6 +1999,13 @@ suite "Events Module Tests":
           restoreStdin(p)
 
   suite "End of input":
+    # A wait that misses the end blocks forever on a closed pipe.
+    setup:
+      armWatchdog("a test in \"End of input\"")
+
+    teardown:
+      disarmWatchdog()
+
     test "readKeyInput emits InputClosed once, after the bytes ahead of the end":
       var p = redirectStdinFromPipe()
       if p.saved != -1:
@@ -2031,3 +2063,274 @@ suite "Events Module Tests":
           check not pollEvents(0)
         finally:
           restoreStdin(p)
+
+    test "readKey emits InputClosed once, after the bytes ahead of the end":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          feedPipe(p, "a")
+          discard close(p.wfd)
+          p.wfd = -1
+          let a = readKey()
+          check a.kind == EventKind.Key and a.key.char == "a"
+          check readKey().kind == InputClosed
+          check readKey().kind == EventKind.Unknown
+          check not hasInput()
+        finally:
+          restoreStdin(p)
+
+    test "the blocking and non-blocking readers share one stdin":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          feedPipe(p, "abc")
+          discard close(p.wfd)
+          p.wfd = -1
+          let a = readKey()
+          check a.kind == EventKind.Key and a.key.char == "a"
+          check hasInput()
+          let b = pollKey()
+          check b.kind == EventKind.Key and b.key.char == "b"
+          let c = readKey()
+          check c.kind == EventKind.Key and c.key.char == "c"
+          check pollKey().kind == InputClosed
+          check readKey().kind == EventKind.Unknown
+          check waitForKey().kind == InputClosed
+        finally:
+          restoreStdin(p)
+
+    test "an end inside a multi-byte character latches the close at once":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          feedPipe(p, "\xc3")
+          discard close(p.wfd)
+          p.wfd = -1
+          # The continuation read finds the end: the truncated character still
+          # yields U+FFFD, and the close is latched by that same read.
+          let e = readKey()
+          check e.kind == EventKind.Key and e.key.char == Utf8ReplacementChar
+          check inputClosed.load
+          check waitForKey().kind == InputClosed
+        finally:
+          restoreStdin(p)
+
+    test "readKeyInput latches an end inside a multi-byte character":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          feedPipe(p, "\xc3")
+          discard close(p.wfd)
+          p.wfd = -1
+          # Same as above: the close is latched on the truncated character.
+          let e = pollKey()
+          check e.kind == EventKind.Key and e.key.char == Utf8ReplacementChar
+          check inputClosed.load
+          check hasInput()
+          check pollKey().kind == InputClosed
+        finally:
+          restoreStdin(p)
+
+    test "waitForKey skips an Unknown event to the key behind it":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          feedPipe(p, "\x1b[201~b")
+          discard close(p.wfd)
+          p.wfd = -1
+          # The orphan paste end parses as Unknown; the wait goes on to "b".
+          let b = waitForKey()
+          check b.kind == EventKind.Key and b.key.char == "b"
+          check waitForKey().kind == InputClosed
+        finally:
+          restoreStdin(p)
+
+    test "waitForKey spends the close notice it reports":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          feedPipe(p, "\x1b[<0;1")
+          discard close(p.wfd)
+          p.wfd = -1
+          check waitForKey().kind == InputClosed
+          check not hasInput()
+          check readKey().kind == EventKind.Unknown
+        finally:
+          restoreStdin(p)
+
+    test "waitForKey reports the end instead of waiting for a key":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          var closer: Thread[cint]
+          createThread(closer, delayedPipeClose, p.wfd)
+          # No key is coming: the wait must report the end, not loop until
+          # something writes to the pipe.
+          check waitForKey().kind == InputClosed
+          joinThread(closer)
+          p.wfd = -1
+          # The notice is spent; the wait still reports the end.
+          check waitForKey().kind == InputClosed
+        finally:
+          restoreStdin(p)
+
+    test "waitForAnyKey stops once stdin has ended":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          discard close(p.wfd)
+          p.wfd = -1
+          check not waitForAnyKey()
+        finally:
+          restoreStdin(p)
+
+    test "clearInputClosed lets the blocking reader read a new stdin":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          discard close(p.wfd)
+          p.wfd = -1
+          check readKey().kind == InputClosed
+          var fds: array[2, cint]
+          let piped = pipe(fds) == 0
+          check piped
+          if piped:
+            try:
+              discard dup2(fds[0], STDIN_FILENO)
+              var b = 'z'
+              discard posix.write(fds[1], addr b, 1)
+              clearInputClosed()
+              let z = readKey()
+              check z.kind == EventKind.Key and z.key.char == "z"
+            finally:
+              discard close(fds[0])
+              discard close(fds[1])
+        finally:
+          restoreStdin(p)
+
+    test "clearInputClosed from another thread reaches the reading thread":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          discard close(p.wfd)
+          p.wfd = -1
+          check readKey().kind == InputClosed
+          var fds: array[2, cint]
+          let piped = pipe(fds) == 0
+          check piped
+          if piped:
+            try:
+              discard dup2(fds[0], STDIN_FILENO)
+              var b = 'z'
+              discard posix.write(fds[1], addr b, 1)
+              var clearer: Thread[void]
+              createThread(clearer, clearInputClosedOnThread)
+              joinThread(clearer)
+              let z = readKey()
+              check z.kind == EventKind.Key and z.key.char == "z"
+            finally:
+              discard close(fds[0])
+              discard close(fds[1])
+        finally:
+          restoreStdin(p)
+
+    test "a signal inside an escape sequence does not split it":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        var act, oldAct: Sigaction
+        act.sa_handler = ignoreSignal
+        discard sigemptyset(act.sa_mask)
+        act.sa_flags = 0 # no SA_RESTART: the parked read fails with EINTR
+        check sigaction(SIGUSR1, act, oldAct) == 0
+        try:
+          clearPendingByte()
+          var writer: Thread[tuple[wfd: cint, reader: Pthread]]
+          createThread(writer, interruptedArrowWriter, (p.wfd, pthread_self()))
+          let e = readKey()
+          joinThread(writer)
+          check e.kind == EventKind.Key and e.key.code == ArrowUp
+        finally:
+          discard sigaction(SIGUSR1, oldAct, nil)
+          restoreStdin(p)
+
+    test "a busy non-blocking stdin is not an end of input":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          # O_NONBLOCK with nothing to read: the reader must report no key,
+          # not latch the input closed.
+          let flags = fcntl(STDIN_FILENO, F_GETFL, 0)
+          check flags != -1
+          check fcntl(STDIN_FILENO, F_SETFL, flags or O_NONBLOCK) != -1
+          check readKey().kind == EventKind.Unknown
+          check not inputClosed.load
+          var b = 'k'
+          discard posix.write(p.wfd, addr b, 1)
+          let key = readKey()
+          check key.kind == EventKind.Key and key.key.char == "k"
+        finally:
+          restoreStdin(p)
+
+    test "a cooked-mode Ctrl-D on a live terminal does not end the input":
+      let (master, slave) = openPtyPair()
+      if master != -1:
+        let saved = dup(STDIN_FILENO)
+        if saved != -1:
+          try:
+            discard dup2(slave, STDIN_FILENO)
+            discard close(slave)
+            clearPendingByte()
+            clearInputClosed()
+            # 0x04 is VEOF in canonical mode: on an empty line one read returns
+            # 0 while the terminal stays open.
+            var eof: char = '\x04'
+            discard posix.write(master, addr eof, 1)
+            check readKey().kind == EventKind.Unknown
+            check not inputClosed.load
+            # After a partial line the same byte flushes it without a newline.
+            var line = "x\x04"
+            discard posix.write(master, addr line[0], line.len.cint)
+            let key = readKey()
+            check key.kind == EventKind.Key and key.key.char == "x"
+          finally:
+            discard dup2(saved, STDIN_FILENO)
+            discard close(saved)
+            discard close(master)
+            clearInputClosed()
+
+    test "a hung-up terminal on stdin ends the blocking read on Linux":
+      var (master, slave) = openPtyPair()
+      if master != -1:
+        let saved = dup(STDIN_FILENO)
+        if saved != -1:
+          try:
+            discard dup2(slave, STDIN_FILENO)
+            discard close(slave)
+            clearPendingByte()
+            clearInputClosed()
+            # Closing the master hangs up the slave on stdin: Linux fails
+            # isatty on it and the read ends the input, XNU keeps serving the
+            # zombie pty (the async suite pins that half).
+            check close(master) == 0
+            master = -1
+            if isatty(STDIN_FILENO) == 0:
+              check readKey().kind == InputClosed
+              check inputClosed.load
+          finally:
+            discard dup2(saved, STDIN_FILENO)
+            discard close(saved)
+            if master != -1:
+              discard close(master)
+            # The read latched an end; the next module must not inherit it.
+            clearInputClosed()

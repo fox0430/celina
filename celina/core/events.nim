@@ -3,9 +3,9 @@
 ## This module provides comprehensive event handling for keyboard input,
 ## including escape sequences and arrow keys for POSIX systems.
 
-import std/[os, posix, options, strutils, strformat]
+import std/[os, posix, options, strutils, strformat, atomics]
 
-import errors, mouse_logic, utf8_utils, key_logic, escape_sequence_logic
+import mouse_logic, utf8_utils, key_logic, escape_sequence_logic
 from terminal_common import ReadOutcome, classifyReadResult
 
 # Re-export types to maintain API compatibility
@@ -43,8 +43,18 @@ type
     Quit
     InputClosed
       ## Stdin has ended (end of file, or a read error on a fd that is not a
-      ## live terminal), so no more input will arrive. Delivered once, to the
-      ## global handler only; the loop keeps running at its normal pace.
+      ## live terminal), so no more input will arrive. The event loop delivers
+      ## it once, to the global handler only, and keeps running at its normal
+      ## pace.
+      ##
+      ## The first read path to see the end owns that one event; a bulk
+      ## `readStdinAsync` consumes it silently, leaving `isClosed` as the
+      ## durable signal there. `waitForKey` / `waitForKeyAsync` report it on
+      ## every call while the input stays closed, so a caller loop ends instead
+      ## of waiting for a key that cannot arrive.
+      ##
+      ## Only Linux reads a hung-up terminal as ended; XNU keeps answering
+      ## `isatty` on the zombie pty, so it stays a live input there.
     Unknown
 
   MouseEvent* = object
@@ -135,58 +145,6 @@ proc toEvent(data: mouse_logic.MouseEventData): Event =
     ),
   )
 
-proc parseMouseEventX10(): Event =
-  ## Parse X10 mouse format: ESC[Mbxy (blocking mode)
-  ## where b is button byte, x,y are coordinate bytes
-  ##
-  ## This function handles I/O and delegates parsing to shared mouse_logic module
-  var data: array[3, char]
-  # Use a timeout to prevent hanging on incomplete sequences
-  if stdin.readBuffer(addr data[0], 3) == 3:
-    # Use shared parsing logic - no duplication with async version!
-    return parseMouseDataX10(data).toEvent()
-
-  return Event(kind: Unknown)
-
-proc parseMouseEventSGR(): Event =
-  ## Parse SGR mouse format: ESC[<button;x;y;M/m (blocking mode)
-  ## M for press, m for release
-  ##
-  ## This function handles I/O and delegates parsing to shared mouse_logic module
-  var buffer: string
-  var ch: char
-  var readCount = 0
-
-  # Read until we get M or m, with safety limits
-  while readCount < MaxSGRMouseReadBytes and stdin.readBuffer(addr ch, 1) == 1:
-    readCount.inc()
-    if ch == 'M' or ch == 'm':
-      break
-    buffer.add(ch)
-
-  if ch != 'M' and ch != 'm':
-    # If we didn't find a terminator, return unknown event. A terminator found on
-    # the MaxSGRMouseReadBytes-th byte is still valid, so guard on the terminator
-    # alone: if the loop instead exited at the byte limit, `ch` holds a
-    # non-terminator byte and this check rejects it anyway.
-    return Event(kind: Unknown)
-
-  # Parse the SGR format: button;x;y
-  let parts = buffer.split(';')
-  if parts.len >= 3:
-    try:
-      let buttonCode = parseInt(parts[0])
-      let x = parseInt(parts[1]) - 1 # SGR uses 1-based coordinates
-      let y = parseInt(parts[2]) - 1
-      let isRelease = (ch == 'm')
-
-      # Use shared parsing logic - no duplication with async version!
-      return parseMouseDataSGR(buttonCode, x, y, isRelease).toEvent()
-    except ValueError:
-      return Event(kind: Unknown)
-
-  return Event(kind: Unknown)
-
 # Pushback buffer for one byte that was read but rejected as a UTF-8
 # continuation. It must be presented as the *first* byte of the next event so
 # we don't lose its information (Unicode §3.9 resync byte). Set by readKey /
@@ -226,43 +184,122 @@ proc isStdinNonBlockingPinned*(): bool {.inline.} =
   ## Read-only accessor for the pin flag, intended for tests and diagnostics.
   stdinNonBlockingPinned
 
-# Set once a non-blocking read finds stdin gone (`roClosed`); stdin is not read
-# again until `clearInputClosed`. Thread-local like `pendingByte`.
-var inputClosed {.threadvar.}: bool
-var inputCloseReported {.threadvar.}: bool
+# Set once a read finds stdin gone (`roClosed`); stdin is not read again until
+# `clearInputClosed`. Process-wide like fd 0, so a clear from any thread counts.
+var inputClosed: Atomic[bool]
+var inputCloseReported: Atomic[bool]
 
 proc clearInputClosed*() =
-  ## Forget an earlier end of input. `Terminal.enableRawMode` calls this once
-  ## it succeeds, since stdin is then a live terminal.
-  inputClosed = false
-  inputCloseReported = false
+  ## Forget an earlier end of input. `Terminal.enableRawMode` calls this once it
+  ## succeeds, and a caller that replaces stdin's fd must do the same.
+  inputClosed.store(false)
+  inputCloseReported.store(false)
 
 proc takeCloseNotice(): bool =
   ## True exactly once after stdin closes; the caller then emits the one
   ## `InputClosed` event.
-  if not inputClosed or inputCloseReported:
-    return false
-  inputCloseReported = true
-  true
+  inputClosed.load and not inputCloseReported.exchange(true)
+
+proc readRawByte(
+    fd: cint
+): tuple[success: bool, ch: char, wouldBlock: bool, interrupted: bool] =
+  ## One `read(2)` of a byte from `fd`, latching `inputClosed` when it finds the
+  ## end. Reads the fd directly, not Nim's `stdin` File, so bytes left in the C
+  ## stdio buffer are not seen.
+  if inputClosed.load:
+    return (false, '\0', false, false)
+  var ch: char
+  let bytesRead = read(fd, addr ch, 1)
+  let wouldBlock = bytesRead == -1 and (errno == EAGAIN or errno == EWOULDBLOCK)
+  let interrupted = bytesRead == -1 and errno == EINTR
+  case classifyReadResult(bytesRead, fd)
+  of roData:
+    (true, ch, false, false)
+  of roNoData:
+    (false, '\0', wouldBlock, interrupted)
+  of roClosed:
+    inputClosed.store(true)
+    (false, '\0', false, false)
 
 # Blocking I/O helper functions
+proc readNextByteBlocking(): tuple[success: bool, ch: char] =
+  ## Read the next byte of a sequence, retrying after a signal so a resize
+  ## cannot split it. `pendingByte` is not consulted: it belongs to event start
+  ## bytes.
+  while true:
+    let r = readRawByte(STDIN_FILENO)
+    if not r.interrupted:
+      return (r.success, r.ch)
+
 proc readByteBlocking(): tuple[success: bool, ch: char] =
-  ## Read a single byte in blocking mode
-  ## Returns (success, char) where success is true if read succeeded
+  ## Read the first byte of an event, taking a stashed UTF-8 resync byte before
+  ## stdin. A signal ends the read with no byte, so the caller can react to it.
   if pendingByte.isSome:
     let b = pendingByte.get
     pendingByte = none(byte)
     return (true, char(b))
+  let r = readRawByte(STDIN_FILENO)
+  (r.success, r.ch)
+
+proc parseMouseEventX10(): Event =
+  ## Parse X10 mouse format: ESC[Mbxy (blocking mode)
+  ## where b is button byte, x,y are coordinate bytes
+  ##
+  ## This function handles I/O and delegates parsing to shared mouse_logic module
+  var data: array[3, char]
+  # A byte missing mid-sequence (end of input, or a transient failure) reports
+  # no event.
+  for i in 0 .. 2:
+    let r = readNextByteBlocking()
+    if not r.success:
+      return Event(kind: Unknown)
+    data[i] = r.ch
+
+  # Use shared parsing logic - no duplication with async version!
+  return parseMouseDataX10(data).toEvent()
+
+proc parseMouseEventSGR(): Event =
+  ## Parse SGR mouse format: ESC[<button;x;y;M/m (blocking mode)
+  ## M for press, m for release
+  ##
+  ## This function handles I/O and delegates parsing to shared mouse_logic module
+  var buffer: string
   var ch: char
-  let bytesRead = tryRecover(
-    proc(): int =
-      stdin.readBuffer(addr ch, 1),
-    fallback = 0,
-  )
-  if bytesRead == 1:
-    return (true, ch)
-  else:
-    return (false, '\0')
+  var readCount = 0
+
+  # Read until we get M or m, with safety limits
+  while readCount < MaxSGRMouseReadBytes:
+    let r = readNextByteBlocking()
+    if not r.success:
+      break
+    ch = r.ch
+    readCount.inc()
+    if ch == 'M' or ch == 'm':
+      break
+    buffer.add(ch)
+
+  if ch != 'M' and ch != 'm':
+    # If we didn't find a terminator, return unknown event. A terminator found on
+    # the MaxSGRMouseReadBytes-th byte is still valid, so guard on the terminator
+    # alone: if the loop instead exited at the byte limit, `ch` holds a
+    # non-terminator byte and this check rejects it anyway.
+    return Event(kind: Unknown)
+
+  # Parse the SGR format: button;x;y
+  let parts = buffer.split(';')
+  if parts.len >= 3:
+    try:
+      let buttonCode = parseInt(parts[0])
+      let x = parseInt(parts[1]) - 1 # SGR uses 1-based coordinates
+      let y = parseInt(parts[2]) - 1
+      let isRelease = (ch == 'm')
+
+      # Use shared parsing logic - no duplication with async version!
+      return parseMouseDataSGR(buttonCode, x, y, isRelease).toEvent()
+    except ValueError:
+      return Event(kind: Unknown)
+
+  return Event(kind: Unknown)
 
 # Bracketed paste content reader (blocking mode)
 # Uses the shared paste-end state machine from escape_sequence_logic.
@@ -274,7 +311,7 @@ proc readPasteContentBlocking(): string =
   var state = PesNone
   var pending = ""
   while true:
-    let r = readByteBlocking()
+    let r = readNextByteBlocking()
     if not r.success:
       # On read failure, flush any buffered partial-match bytes and return.
       result.add(pending)
@@ -406,14 +443,9 @@ proc readUtf8Char(firstByte: byte): Utf8AssemblyResult =
   assembleUtf8Char(
     firstByte,
     proc(): tuple[ok: bool, b: byte] =
-      var nextByte: char
-      let bytesRead = tryRecover(
-        proc(): int =
-          stdin.readBuffer(addr nextByte, 1),
-        fallback = 0,
-      )
-      if bytesRead == 1:
-        (true, nextByte.byte)
+      let r = readNextByteBlocking()
+      if r.success:
+        (true, r.ch.byte)
       else:
         (false, 0.byte),
   )
@@ -422,73 +454,77 @@ proc readUtf8CharNonBlocking(firstByte: byte): Utf8AssemblyResult =
   ## Read a complete UTF-8 character in non-blocking mode. Thin stdin-backed
   ## adapter over `assembleUtf8Char`. EAGAIN/EWOULDBLOCK, other read errors,
   ## and short reads all collapse to "truncated sequence" and yield U+FFFD
-  ## with no leftover.
+  ## with no leftover. An end of input latches the close like any other read.
   assembleUtf8Char(
     firstByte,
     proc(): tuple[ok: bool, b: byte] =
-      var nextByte: char
-      let bytesRead = read(STDIN_FILENO, addr nextByte, 1)
-      if bytesRead == 1:
-        (true, nextByte.byte)
+      let r = readRawByte(STDIN_FILENO)
+      if r.success:
+        (true, r.ch.byte)
       else:
         (false, 0.byte),
   )
 
 # Advanced key reading with escape sequence support
 proc readKey*(): Event =
-  ## Read a key event (blocking mode)
-  ## Raises IOError if unable to read from stdin
-  try:
-    let readResult = readByteBlocking()
-
-    if not readResult.success:
-      return Event(kind: Unknown)
-
-    let ch = readResult.ch
-
-    # Handle Ctrl+C (quit signal)
-    if ch == '\x03':
-      return Event(kind: Quit)
-
-    # Handle Ctrl-letter combinations
-    let ctrlLetterResult = mapCtrlLetterKey(ch)
-    if ctrlLetterResult.isCtrlKey:
-      return Event(kind: Key, key: ctrlLetterResult.keyEvent)
-
-    # Handle Ctrl-number combinations
-    let ctrlNumberResult = mapCtrlNumberKey(ch)
-    if ctrlNumberResult.isCtrlKey:
-      return Event(kind: Key, key: ctrlNumberResult.keyEvent)
-
-    # Handle basic keys (Enter, Tab, Space, Backspace)
-    let basicKey = mapBasicKey(ch)
-    if basicKey.code in {Enter, Tab, Space, Backspace}:
-      return Event(kind: Key, key: basicKey)
-
-    # Handle escape sequences via the unified routing template (blocking I/O)
-    if ch == '\x1b':
-      return parseEscapeSequenceUnified(
-        readByteBlocking(),
-        readPasteContentBlocking(),
-        parseMouseEventX10(),
-        parseMouseEventSGR(),
-      )
-
-    # Handle regular UTF-8 characters
-    let assembly = readUtf8Char(ch.byte)
-    if assembly.leftover.isSome:
-      # Resync byte: an invalid continuation that should be processed as the
-      # first byte of the next event (Unicode §3.9 best practice). Stash it
-      # for the next readByteBlocking call to consume.
-      pendingByte = some(assembly.leftover.get)
-    if assembly.text.len > 0:
-      return Event(kind: Key, key: KeyEvent(code: Char, char: assembly.text))
-    else:
-      # Invalid UTF-8 start byte — emit U+FFFD so Char events always carry
-      # a valid UTF-8 codepoint (see KeyEvent invariant).
-      return Event(kind: Key, key: KeyEvent(code: Char, char: Utf8ReplacementChar))
-  except IOError:
+  ## Read a key event (blocking mode).
+  ##
+  ## Returns `Event(kind: InputClosed)` once when stdin has ended, then
+  ## `Unknown`. A caller loop must leave on `InputClosed` or use `waitForKey`:
+  ## a closed stdin then answers `Unknown` without a syscall, so the loop would
+  ## spin. Reads never raise; a failed read on a live terminal (such as a
+  ## cooked-mode Ctrl-D) also returns `Unknown` and does not end the input.
+  ##
+  ## Reads fd 0 directly: bytes Nim's `stdin` File has already buffered are not
+  ## seen, so do not mix the two.
+  let readResult = readByteBlocking()
+  if not readResult.success:
+    if takeCloseNotice():
+      return Event(kind: InputClosed)
     return Event(kind: Unknown)
+  let ch = readResult.ch
+
+  # Handle Ctrl+C (quit signal)
+  if ch == '\x03':
+    return Event(kind: Quit)
+
+  # Handle Ctrl-letter combinations
+  let ctrlLetterResult = mapCtrlLetterKey(ch)
+  if ctrlLetterResult.isCtrlKey:
+    return Event(kind: Key, key: ctrlLetterResult.keyEvent)
+
+  # Handle Ctrl-number combinations
+  let ctrlNumberResult = mapCtrlNumberKey(ch)
+  if ctrlNumberResult.isCtrlKey:
+    return Event(kind: Key, key: ctrlNumberResult.keyEvent)
+
+  # Handle basic keys (Enter, Tab, Space, Backspace)
+  let basicKey = mapBasicKey(ch)
+  if basicKey.code in {Enter, Tab, Space, Backspace}:
+    return Event(kind: Key, key: basicKey)
+
+  # Handle escape sequences via the unified routing template (blocking I/O)
+  if ch == '\x1b':
+    return parseEscapeSequenceUnified(
+      readNextByteBlocking(),
+      readPasteContentBlocking(),
+      parseMouseEventX10(),
+      parseMouseEventSGR(),
+    )
+
+  # Handle regular UTF-8 characters
+  let assembly = readUtf8Char(ch.byte)
+  if assembly.leftover.isSome:
+    # Resync byte: an invalid continuation that should be processed as the
+    # first byte of the next event (Unicode §3.9 best practice). Stash it
+    # for the next readByteBlocking call to consume.
+    pendingByte = some(assembly.leftover.get)
+  if assembly.text.len > 0:
+    return Event(kind: Key, key: KeyEvent(code: Char, char: assembly.text))
+  else:
+    # Invalid UTF-8 start byte — emit U+FFFD so Char events always carry
+    # a valid UTF-8 codepoint (see KeyEvent invariant).
+    return Event(kind: Key, key: KeyEvent(code: Char, char: Utf8ReplacementChar))
 
 # File descriptor management helpers
 type FdFlags = object ## RAII-style file descriptor flags manager
@@ -527,20 +563,8 @@ proc readByteNonBlocking(fd: cint): tuple[success: bool, ch: char, isTimeout: bo
     let b = pendingByte.get
     pendingByte = none(byte)
     return (true, char(b), false)
-  if inputClosed:
-    return (false, '\0', false)
-  var ch: char
-  let bytesRead = read(fd, addr ch, 1)
-  let wouldBlock = bytesRead == -1 and (errno == EAGAIN or errno == EWOULDBLOCK)
-
-  case classifyReadResult(bytesRead, fd)
-  of roData:
-    return (true, ch, false)
-  of roNoData:
-    return (false, '\0', wouldBlock)
-  of roClosed:
-    inputClosed = true
-    return (false, '\0', false)
+  let r = readRawByte(fd)
+  (r.success, r.ch, r.wouldBlock)
 
 proc readByteWithTimeoutNonBlocking(
     timeoutUs: int = 50000
@@ -776,8 +800,8 @@ proc hasInput*(): bool =
   # available so the byte isn't stranded until fresh fd input arrives.
   if pendingByte.isSome:
     return true
-  if inputClosed:
-    return not inputCloseReported
+  if inputClosed.load:
+    return not inputCloseReported.load
 
   # Use select to check if input is available
   var readSet: TFdSet
@@ -789,17 +813,24 @@ proc hasInput*(): bool =
 
 # Event loop utilities
 proc waitForKey*(): Event =
-  ## Wait for a key press (blocking)
+  ## Wait for a key press (blocking).
+  ##
+  ## Returns `Event(kind: InputClosed)` while stdin is closed, rather than
+  ## waiting for a key that cannot arrive.
   while true:
     let event = readKey()
     if event.kind != Unknown:
       return event
+    if inputClosed.load:
+      discard takeCloseNotice()
+      return Event(kind: InputClosed)
     sleep(10) # Small delay to prevent busy waiting
 
 proc waitForAnyKey*(): bool =
-  ## Wait for any key press, return true if not quit
+  ## Wait for any key press. False on a quit request or once stdin has ended;
+  ## use `waitForKey` to tell the two apart.
   let event = waitForKey()
-  return event.kind != Quit
+  return event.kind notin {Quit, InputClosed}
 
 # Event polling with timeout
 proc pollEvents*(timeoutMs: int): bool =
@@ -811,8 +842,8 @@ proc pollEvents*(timeoutMs: int): bool =
   # select().
   if pendingByte.isSome:
     return true
-  if inputClosed:
-    if not inputCloseReported:
+  if inputClosed.load:
+    if not inputCloseReported.load:
       return true # The close itself is pending; `readKeyInput` emits it.
     # Sleep out the timeout rather than return at once, or a poll loop such as
     # `App.tick` would spin.

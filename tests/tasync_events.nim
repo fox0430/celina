@@ -561,6 +561,13 @@ suite "Performance and Resource Management":
       reader.closeAsyncInputReader()
 
   suite "End of input":
+    # A wait that misses the end blocks forever on a closed pipe.
+    setup:
+      armWatchdog("a test in \"End of input\"")
+
+    teardown:
+      disarmWatchdog()
+
     test "readKeyAsync emits InputClosed once, after the bytes ahead of the end":
       var p = redirectStdinFromPipe()
       if p.saved != -1:
@@ -615,6 +622,58 @@ suite "Performance and Resource Management":
           let started = epochTime()
           check not (waitFor reader.hasInputAsync(50))
           check epochTime() - started >= 0.04
+        finally:
+          reader.closeAsyncInputReader()
+          restoreStdin(p)
+
+    test "waitForKeyAsync reports the end instead of waiting for a key":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        let reader = newAsyncInputReader()
+        try:
+          discard close(p.wfd)
+          p.wfd = -1
+          check (waitFor reader.waitForKeyAsync()).kind == InputClosed
+          check reader.isClosed
+          # The notice is spent; the wait still reports the end.
+          check (waitFor reader.waitForKeyAsync()).kind == InputClosed
+          check not (waitFor reader.waitForAnyKeyAsync())
+        finally:
+          reader.closeAsyncInputReader()
+          restoreStdin(p)
+
+    test "waitForKeyAsync spends the close notice it reports":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        let reader = newAsyncInputReader()
+        try:
+          feedPipe(p, "\x1b[<0;1")
+          discard close(p.wfd)
+          p.wfd = -1
+          check (waitFor reader.waitForKeyAsync()).kind == InputClosed
+          check not (waitFor reader.hasInputAsync(1))
+          check (waitFor reader.pollKeyAsync()).isNone
+        finally:
+          reader.closeAsyncInputReader()
+          restoreStdin(p)
+
+    test "a bulk read that sees the end consumes the one notice":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        let reader = newAsyncInputReader()
+        try:
+          feedPipe(p, "hi")
+          discard close(p.wfd)
+          p.wfd = -1
+          check (waitFor reader.readStdinAsync(1)) == "hi"
+          check not reader.isClosed
+          # The second read finds the end and owns the notice.
+          check (waitFor reader.readStdinAsync(1)) == ""
+          check reader.isClosed
+          # No event is offered any more; the end stays visible through
+          # `isClosed` and through the wait.
+          check (waitFor reader.pollKeyAsync()).isNone
+          check (waitFor reader.waitForKeyAsync()).kind == InputClosed
         finally:
           reader.closeAsyncInputReader()
           restoreStdin(p)
