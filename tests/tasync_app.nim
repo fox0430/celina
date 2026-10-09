@@ -6,7 +6,7 @@ import ../celina/async/async_backend
 
 when hasAsyncSupport:
   import std/[strutils, importutils, monotimes]
-  from std/times import initDuration, `<`
+  from std/times import initDuration, inMilliseconds, `<`
   from ../celina/async/async_io import newAsyncInputReader, closeAsyncInputReader
   import ../celina/async/async_app {.all.}
   import ../celina/async/async_terminal {.all.}
@@ -927,6 +927,46 @@ when hasAsyncSupport:
         check handlerReturnedAt != default(MonoTime)
         check app.timings.lastEventTime >= handlerReturnedAt
         check timeoutCalls == 1
+
+      test "A closed stdin reaches the global handler once and later ticks wait":
+        # A window that consumes every event must not hide the close, and once
+        # it is reported the poll waits out the frame instead of spinning.
+        let app = newAsyncApp(
+          AppConfig(
+            alternateScreen: false, rawMode: false, targetFps: 60, windowMode: true
+          )
+        )
+        let window = newWindow(rect(0, 0, 10, 5), "Swallow")
+        window.setEventHandler proc(w: Window, e: Event): EventResult =
+          erConsume
+        discard app.addWindow(window)
+        var closedEvents = 0
+        app.onEventAsync proc(event: Event): Future[EventResult] {.async.} =
+          if event.kind == InputClosed:
+            closedEvents.inc
+          return erContinue
+        var laterTicksMs: int64
+        proc tickSome() =
+          app.inputReader = newAsyncInputReader()
+          try:
+            discard captureStdout(
+              proc() =
+                let size = getTerminalSizeOrDefault()
+                app.state.resizeState = initResizeState(size.width, size.height)
+                discard waitFor app.tickAsync()
+                let started = getMonoTime()
+                for _ in 1 .. 5:
+                  discard waitFor app.tickAsync()
+                laterTicksMs = (getMonoTime() - started).inMilliseconds
+            )
+          finally:
+            app.inputReader.closeAsyncInputReader()
+            app.inputReader = nil
+
+        withEndedStdin("", tickSome)
+        check closedEvents == 1
+        # Five paced ticks at 60 fps take about 80ms; spinning takes under 1ms.
+        check laterTicksMs >= 30
 
       test "A slow resize handler does not use up the idle time":
         let app =

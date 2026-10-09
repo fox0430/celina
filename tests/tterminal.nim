@@ -1,10 +1,13 @@
 # Test suite for Terminal module
 
-import std/[unittest, strutils]
+import std/[unittest, strutils, options]
 
 when defined(posix):
   import std/posix
   import ./stdout_capture
+  from ../celina/core/events import
+    EventKind, clearPendingByte, isStdinNonBlockingPinned, readKeyInput,
+    setStdinNonBlockingPinned
 
 import ../celina/core/[terminal, terminal_common, geometry, colors, buffer, errors]
 import ../celina/core/output_stream
@@ -921,6 +924,41 @@ suite "Terminal Module Tests":
           check raised
           check not terminal.alternateScreen
           check not terminal.rawMode
+
+  when defined(posix):
+    suite "Raw Mode Recovery":
+      test "enableRawMode forgets an earlier end of input":
+        # Latch a close on a non-tty stdin first, then move stdin onto a live
+        # terminal; only the raw-mode transition may clear the latch.
+        proc body() =
+          clearPendingByte()
+          let closed = readKeyInput()
+          check closed.isSome and closed.get.kind == EventKind.InputClosed
+
+          let (master, slave) = openPtyPair()
+          if master != -1:
+            let terminal = newTerminal()
+            let originalPin = isStdinNonBlockingPinned()
+            var rawEnabled = false
+            try:
+              discard dup2(slave, STDIN_FILENO)
+              discard close(slave)
+              terminal.enableRawMode()
+              rawEnabled = true
+
+              # The stale close must not mute the new terminal.
+              var bytes = "x"
+              check posix.write(master, addr bytes[0], bytes.len.cint) == 1
+              let event = readKeyInput()
+              check event.isSome and event.get.kind == EventKind.Key
+              check event.get.key.char == "x"
+            finally:
+              if rawEnabled:
+                terminal.disableRawMode()
+              discard close(master)
+              setStdinNonBlockingPinned(originalPin)
+
+        withEndedStdin("", body)
 
   suite "Buffered stdout ordering":
     test "writeWithRetry flushes buffered stdout before control sequences":

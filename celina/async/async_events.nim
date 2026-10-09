@@ -174,11 +174,16 @@ proc readPasteContentAsync(reader: AsyncInputReader): Future[string] {.async.} =
 
 # Async key reading with escape sequence support
 proc readKeyAsync*(reader: AsyncInputReader): Future[Event] {.async.} =
-  ## Read a key event asynchronously using non-blocking I/O
+  ## Read a key event asynchronously using non-blocking I/O. While the close
+  ## notice is pending this returns `Event(kind: InputClosed)`; once it is spent
+  ## (or `readStdinAsync` took it) a closed reader reports `Unknown`, so a
+  ## caller loop should watch `isClosed`.
   try:
     let ch = await reader.readCharAsync()
 
     if ch == '\0':
+      if reader.takeCloseNotice():
+        return Event(kind: InputClosed)
       return Event(kind: Unknown)
 
     # Handle Ctrl+C (quit signal)
@@ -234,7 +239,9 @@ proc readKeyAsync*(reader: AsyncInputReader): Future[Event] {.async.} =
 
 # Non-blocking async event reading
 proc pollKeyAsync*(reader: AsyncInputReader): Future[Option[Event]] {.async.} =
-  ## Poll for a key event asynchronously (non-blocking)
+  ## Poll for a key event asynchronously (non-blocking). The close notice
+  ## surfaces as `some(Event(kind: InputClosed))`; a closed reader polls as
+  ## `none` once it is spent.
   try:
     # Check if input is available first
     let hasInput = await reader.hasInputAsync(1)
@@ -271,12 +278,16 @@ proc pollEventsAsync*(
 
 # Advanced async event waiting
 proc waitForKeyAsync*(reader: AsyncInputReader): Future[Event] {.async.} =
-  ## Wait for a key press asynchronously (blocking until event)
+  ## Wait for a key press asynchronously (blocking until event). While stdin is
+  ## closed, returns `Event(kind: InputClosed)` instead of waiting.
   while true:
     try:
       let event = await reader.readKeyAsync()
       if event.kind != Unknown:
         return event
+      if reader.isClosed:
+        discard reader.takeCloseNotice()
+        return Event(kind: InputClosed)
     except CancelledError as e:
       # Must precede `except CatchableError` so chronos cancellation propagates
       # to the caller instead of being wrapped into AsyncEventError.
@@ -288,9 +299,10 @@ proc waitForKeyAsync*(reader: AsyncInputReader): Future[Event] {.async.} =
     await sleepMs(10)
 
 proc waitForAnyKeyAsync*(reader: AsyncInputReader): Future[bool] {.async.} =
-  ## Wait for any key press asynchronously, return true if not quit
+  ## Wait for any key press asynchronously. False on a quit request or once
+  ## stdin has ended; use `waitForKeyAsync` to tell the two apart.
   let event = await reader.waitForKeyAsync()
-  return event.kind != Quit
+  return event.kind notin {Quit, InputClosed}
 
 # Multiple event source handling
 

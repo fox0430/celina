@@ -10,6 +10,7 @@ import async_backend
 # EINTR/EAGAIN/short-write policy in terminal_common and the pending reset);
 # this module only serializes them through the stdout lock.
 from ../core/output_stream import writeStream, writeStreamLocked
+from ../core/terminal_common import ReadOutcome, classifyReadResult
 
 type
   AsyncIOError* = object of CatchableError
@@ -25,6 +26,10 @@ type
       ## `readCharNonBlocking` before checking `buffer` or stdin.
     usePolling: bool # Use polling instead of selector for raw mode
     selectorRegistered: bool # Track if selector registration succeeded
+    closed: bool
+      ## Set once a read finds stdin gone (`roClosed`); the fd is not polled or
+      ## read after that.
+    closeReported: bool ## Whether the one `InputClosed` event has gone out.
 
 proc newAsyncInputReader*(): AsyncInputReader =
   ## Create a new async input reader
@@ -75,6 +80,10 @@ proc closeAsyncInputReader*(reader: AsyncInputReader) =
 
 proc hasDataAvailable*(reader: AsyncInputReader, timeoutMs: int = 0): bool =
   ## Check if data is available for reading (non-blocking)
+  if reader.closed:
+    # Nothing will arrive; wait out the timeout as an idle fd would.
+    discard posix.poll(nil, 0, timeoutMs.cint)
+    return false
   if reader.usePolling:
     # Polling mode: use direct POSIX poll() for raw terminal mode
     try:
@@ -84,7 +93,10 @@ proc hasDataAvailable*(reader: AsyncInputReader, timeoutMs: int = 0): bool =
       pollfd.revents = 0
 
       let r = posix.poll(addr pollfd, 1, timeoutMs.cint)
-      return r > 0 and (pollfd.revents.int and POLLIN.int) != 0
+      # Hang-up and error bits count too, so the read that follows sees the end
+      # instead of the poll returning at once without data.
+      let readable = POLLIN.int or POLLHUP.int or POLLERR.int or POLLNVAL.int
+      return r > 0 and (pollfd.revents.int and readable) != 0
     except Exception:
       return false
   else:
@@ -98,18 +110,38 @@ proc hasDataAvailable*(reader: AsyncInputReader, timeoutMs: int = 0): bool =
       return false
 
 proc readNonBlocking*(reader: AsyncInputReader): string =
-  ## Read available data non-blocking
+  ## Read available data non-blocking. Marks the reader closed when the read
+  ## finds stdin gone.
+  if reader.closed:
+    return ""
   try:
     var buffer: array[256, char]
     let bytesRead = posix.read(reader.stdinFd.cint, addr buffer[0], buffer.len.cint)
 
-    if bytesRead > 0:
+    case classifyReadResult(bytesRead, reader.stdinFd.cint)
+    of roData:
       result = newString(bytesRead)
       copyMem(addr result[0], addr buffer[0], bytesRead)
-    else:
+    of roNoData:
+      result = ""
+    of roClosed:
+      reader.closed = true
       result = ""
   except CatchableError:
     result = ""
+
+proc isClosed*(reader: AsyncInputReader): bool =
+  ## Whether stdin has ended for `reader` (see `EventKind.InputClosed`). Once
+  ## true it stays true.
+  not reader.isNil and reader.closed
+
+proc takeCloseNotice*(reader: AsyncInputReader): bool =
+  ## True exactly once after stdin closes; the caller then emits the one
+  ## `InputClosed` event.
+  if reader.isNil or not reader.closed or reader.closeReported:
+    return false
+  reader.closeReported = true
+  true
 
 proc readCharNonBlocking*(reader: AsyncInputReader): char =
   ## Read a single character non-blocking
@@ -159,6 +191,15 @@ proc hasInputAsync*(
   if reader.buffer.len > 0:
     return true
 
+  if reader.closed:
+    if not reader.closeReported:
+      # The close itself is pending; `readKeyAsync` turns it into an event.
+      return true
+    # Wait out the timeout rather than return at once, or a poll loop such as
+    # `tickAsync` would spin.
+    await sleepMs(timeoutMs)
+    return false
+
   return reader.hasDataAvailable(timeoutMs)
 
 proc readCharAsync*(reader: AsyncInputReader): Future[char] {.async.} =
@@ -174,7 +215,9 @@ proc readCharAsync*(reader: AsyncInputReader): Future[char] {.async.} =
 proc readStdinAsync*(
     reader: AsyncInputReader, timeoutMs: int = 10
 ): Future[string] {.async.} =
-  ## Read available stdin data asynchronously
+  ## Read available stdin data asynchronously. This always consumes a pending
+  ## close notice, even one an earlier call found, so a later `readKeyAsync`
+  ## reports `Unknown`; `isClosed` is the durable signal when mixing the two.
   if reader.isNil:
     return ""
 
@@ -193,10 +236,15 @@ proc readStdinAsync*(
     prefix.add(reader.buffer)
     reader.buffer = ""
 
-  if reader.hasDataAvailable(timeoutMs):
-    return prefix & reader.readNonBlocking()
-  else:
-    return prefix
+  let data =
+    if reader.hasDataAvailable(timeoutMs):
+      prefix & reader.readNonBlocking()
+    else:
+      prefix
+  # The end shows through `isClosed`; take the notice so hasInputAsync stops
+  # reporting it, or that loop would spin on the close.
+  discard reader.takeCloseNotice()
+  return data
 
 # Async Output Functions
 
@@ -415,7 +463,8 @@ proc bufferStats*(reader: AsyncInputReader): tuple[size: int, available: bool] =
   # reads on `available` must see them or the byte/buffer is stranded (the bug
   # this fixes).
   let available =
-    reader.pendingByte.isSome or reader.buffer.len > 0 or reader.hasDataAvailable(0)
+    reader.pendingByte.isSome or reader.buffer.len > 0 or
+    (reader.closed and not reader.closeReported) or reader.hasDataAvailable(0)
   return (reader.buffer.len, available)
 
 # Testing and Validation

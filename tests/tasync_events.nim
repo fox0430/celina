@@ -8,7 +8,8 @@ import ../celina/async/async_events {.all.}
 
 when hasAsyncSupport:
   import std/[options, times]
-  from std/posix import dup, dup2, pipe, close, write, STDIN_FILENO
+  from std/posix import dup, dup2, pipe, close, write, isatty, STDIN_FILENO
+  import ./stdout_capture
 
   # --- Test helpers: drive the async byte readers from a controlled pipe.
   # dup2 a pipe's read end onto STDIN_FILENO so the reader consumes bytes we
@@ -68,12 +69,17 @@ when hasAsyncDispatch:
 
 suite "Async Key Reading":
   test "readKeyAsync handles unknown input":
-    # This test simulates reading when no input is available
-    # Should return unknown event when no input
-    let reader = newAsyncInputReader()
-    let event = waitFor reader.readKeyAsync()
-    check event.kind == EventKind.Unknown
-    reader.closeAsyncInputReader()
+    # No input available (the pipe's writer stays open, so no end of input
+    # either): an unknown event.
+    let p = redirectStdinFromPipe()
+    if p.saved != -1:
+      let reader = newAsyncInputReader()
+      try:
+        let event = waitFor reader.readKeyAsync()
+        check event.kind == EventKind.Unknown
+      finally:
+        reader.closeAsyncInputReader()
+        restoreStdin(p)
 
   test "AsyncEventError type is properly defined":
     let error = newException(AsyncEventError, "Test error")
@@ -89,11 +95,14 @@ suite "Async Key Reading":
 
 suite "Non-blocking Event Polling":
   test "pollKeyAsync returns none when no input":
-    let reader = newAsyncInputReader()
-    let eventOpt = waitFor reader.pollKeyAsync()
-    # Should return none when no input is available
-    check eventOpt.isNone()
-    reader.closeAsyncInputReader()
+    let p = redirectStdinFromPipe()
+    if p.saved != -1:
+      let reader = newAsyncInputReader()
+      try:
+        check (waitFor reader.pollKeyAsync()).isNone()
+      finally:
+        reader.closeAsyncInputReader()
+        restoreStdin(p)
 
 suite "Event Polling with Timeout":
   test "pollEventsAsync handles timeout":
@@ -550,3 +559,145 @@ suite "Performance and Resource Management":
       check stream.eventCallback != nil
       check not stream.running
       reader.closeAsyncInputReader()
+
+  suite "End of input":
+    # A wait that misses the end blocks forever on a closed pipe.
+    setup:
+      armWatchdog("a test in \"End of input\"")
+
+    teardown:
+      disarmWatchdog()
+
+    test "readKeyAsync emits InputClosed once, after the bytes ahead of the end":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        let reader = newAsyncInputReader()
+        try:
+          feedPipe(p, "ab")
+          discard close(p.wfd)
+          p.wfd = -1
+          let a = waitFor reader.readKeyAsync()
+          check a.kind == EventKind.Key and a.key.char == "a"
+          let b = waitFor reader.readKeyAsync()
+          check b.kind == EventKind.Key and b.key.char == "b"
+          check (waitFor reader.readKeyAsync()).kind == InputClosed
+          check reader.isClosed
+          check (waitFor reader.readKeyAsync()).kind == EventKind.Unknown
+        finally:
+          reader.closeAsyncInputReader()
+          restoreStdin(p)
+
+    test "an ESC right before the end is a bare Escape, then a pending close":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        let reader = newAsyncInputReader()
+        try:
+          feedPipe(p, "\x1b")
+          discard close(p.wfd)
+          p.wfd = -1
+          let esc = waitFor reader.readKeyAsync()
+          check esc.kind == EventKind.Key and esc.key.code == Escape
+          # The ESC read found the end, so the close is pending until read:
+          # the poll path must offer it, not only a direct read.
+          check reader.bufferStats().available
+          let closed = waitFor reader.pollKeyAsync()
+          check closed.isSome and closed.get.kind == InputClosed
+          check reader.isClosed
+          check not reader.bufferStats().available
+        finally:
+          reader.closeAsyncInputReader()
+          restoreStdin(p)
+
+    test "pollKeyAsync offers the close once, then hasInputAsync waits out its timeout":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        let reader = newAsyncInputReader()
+        try:
+          discard close(p.wfd)
+          p.wfd = -1
+          let closed = waitFor reader.pollKeyAsync()
+          check closed.isSome and closed.get.kind == InputClosed
+          check (waitFor reader.pollKeyAsync()).isNone
+          check not reader.bufferStats().available
+          let started = epochTime()
+          check not (waitFor reader.hasInputAsync(50))
+          check epochTime() - started >= 0.04
+        finally:
+          reader.closeAsyncInputReader()
+          restoreStdin(p)
+
+    test "waitForKeyAsync reports the end instead of waiting for a key":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        let reader = newAsyncInputReader()
+        try:
+          discard close(p.wfd)
+          p.wfd = -1
+          check (waitFor reader.waitForKeyAsync()).kind == InputClosed
+          check reader.isClosed
+          # The notice is spent; the wait still reports the end.
+          check (waitFor reader.waitForKeyAsync()).kind == InputClosed
+          check not (waitFor reader.waitForAnyKeyAsync())
+        finally:
+          reader.closeAsyncInputReader()
+          restoreStdin(p)
+
+    test "waitForKeyAsync spends the close notice it reports":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        let reader = newAsyncInputReader()
+        try:
+          feedPipe(p, "\x1b[<0;1")
+          discard close(p.wfd)
+          p.wfd = -1
+          check (waitFor reader.waitForKeyAsync()).kind == InputClosed
+          check not (waitFor reader.hasInputAsync(1))
+          check (waitFor reader.pollKeyAsync()).isNone
+        finally:
+          reader.closeAsyncInputReader()
+          restoreStdin(p)
+
+    test "a bulk read that sees the end consumes the one notice":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        let reader = newAsyncInputReader()
+        try:
+          feedPipe(p, "hi")
+          discard close(p.wfd)
+          p.wfd = -1
+          check (waitFor reader.readStdinAsync(1)) == "hi"
+          check not reader.isClosed
+          # The second read finds the end and owns the notice.
+          check (waitFor reader.readStdinAsync(1)) == ""
+          check reader.isClosed
+          # No event is offered any more; the end stays visible through
+          # `isClosed` and through the wait.
+          check (waitFor reader.pollKeyAsync()).isNone
+          check (waitFor reader.waitForKeyAsync()).kind == InputClosed
+        finally:
+          reader.closeAsyncInputReader()
+          restoreStdin(p)
+
+    test "a hung-up terminal on stdin follows the isatty split":
+      let (master, slave) = openPtyPair()
+      if master != -1:
+        let saved = dup(STDIN_FILENO)
+        discard dup2(slave, STDIN_FILENO)
+        discard close(slave)
+        let reader = newAsyncInputReader()
+        try:
+          # Closing the master hangs up the slave now on stdin. Linux fails
+          # isatty on it and the read closes the input; XNU keeps serving the
+          # zombie pty, so the read stays transient there.
+          check close(master) == 0
+          let event = waitFor reader.readKeyAsync()
+          if isatty(STDIN_FILENO) == 1:
+            check event.kind == EventKind.Unknown
+            check not reader.isClosed
+          else:
+            check event.kind == InputClosed
+            check reader.isClosed
+        finally:
+          reader.closeAsyncInputReader()
+          discard dup2(saved, STDIN_FILENO)
+          discard close(saved)

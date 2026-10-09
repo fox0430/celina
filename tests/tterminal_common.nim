@@ -4,6 +4,7 @@ import std/[unittest, strutils, times, posix, unicode, importutils]
 
 import ../celina/core/terminal_common
 import ../celina/core/[geometry, colors, buffer]
+import stdout_capture
 
 suite "Terminal Common Module Tests":
   suite "ANSI Sequence Constants":
@@ -1352,6 +1353,60 @@ suite "Terminal Common Module Tests":
       check writeAllBlocking(fds[1], "abc", maxBlockedWaits = 1) == 0
       # The full budget would wait about 2s.
       check epochTime() - start < 1.0
+
+  suite "Low-level read classification":
+    test "classifyReadResult reports data and transient errors as open":
+      var fds: array[2, cint]
+      check posix.pipe(fds) == 0
+      defer:
+        discard posix.close(fds[0])
+        discard posix.close(fds[1])
+      errno = EIO
+      check classifyReadResult(3, fds[0]) == roData
+
+      # Set errno right before each call so nothing clobbers it in between.
+      for err in [EINTR, EAGAIN, EWOULDBLOCK]:
+        errno = err
+        let outcome = classifyReadResult(-1, fds[0])
+        check outcome == roNoData
+
+    test "classifyReadResult closes on end of file or a hard error off a terminal":
+      var fds: array[2, cint]
+      check posix.pipe(fds) == 0
+      defer:
+        discard posix.close(fds[0])
+        discard posix.close(fds[1])
+      check classifyReadResult(0, fds[0]) == roClosed
+      errno = EIO
+      let hard = classifyReadResult(-1, fds[0])
+      check hard == roClosed
+
+    test "classifyReadResult keeps a live terminal open":
+      # A 0-byte read there is a cooked-mode Ctrl-D, EIO a background read.
+      let (master, slave) = openPtyPair()
+      if master != -1:
+        defer:
+          discard posix.close(master)
+          discard posix.close(slave)
+        check classifyReadResult(0, slave) == roNoData
+        errno = EIO
+        let background = classifyReadResult(-1, slave)
+        check background == roNoData
+
+    test "classifyReadResult follows isatty on a hung-up terminal":
+      let (master, slave) = openPtyPair()
+      if master != -1:
+        defer:
+          discard posix.close(slave)
+        # Closing the master hangs up the slave, but whether isatty then fails
+        # differs by OS: Linux fails with EIO and the input closes, while XNU
+        # keeps serving TIOCGETA on the zombie pty, so it stays open there.
+        check posix.close(master) == 0
+        let outcome = classifyReadResult(0, slave)
+        if isatty(slave) == 1:
+          check outcome == roNoData
+        else:
+          check outcome == roClosed
 
 suite "EmergencyResetSeq":
   test "Turns off every mode a terminal can be left in":
