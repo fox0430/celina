@@ -1,6 +1,6 @@
 ## Shared test helper that captures what a block writes to stdout.
 
-import std/[os, posix, tempfiles, termios]
+import std/[os, posix, tempfiles, termios, atomics]
 
 from ../celina/core/events import clearInputClosed
 
@@ -207,3 +207,25 @@ proc withPtyStdout*(cols, rows: int, body: proc()): bool =
   ## `withPtyStdout` that discards the output.
   var output: string
   withPtyStdout(cols, rows, output, body)
+
+var watchdogArmed: Atomic[bool]
+var watchdog: Thread[tuple[name: string, ms: int]]
+
+proc watchdogBody(args: tuple[name: string, ms: int]) {.thread.} =
+  var waited = 0
+  while watchdogArmed.load and waited < args.ms:
+    sleep(10)
+    inc waited, 10
+  if watchdogArmed.load:
+    stderr.writeLine "  [FAILED] " & args.name & ": no return within " & $args.ms & "ms"
+    quit(1)
+
+proc armWatchdog*(name: string, ms = 5000) =
+  ## Fail the run with `name` unless `disarmWatchdog` comes within `ms`, so a
+  ## test that hangs fails instead of stalling the suite.
+  watchdogArmed.store(true)
+  createThread(watchdog, watchdogBody, (name, ms))
+
+proc disarmWatchdog*() =
+  watchdogArmed.store(false)
+  joinThread(watchdog)

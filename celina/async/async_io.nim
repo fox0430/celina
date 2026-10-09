@@ -215,8 +215,9 @@ proc readCharAsync*(reader: AsyncInputReader): Future[char] {.async.} =
 proc readStdinAsync*(
     reader: AsyncInputReader, timeoutMs: int = 10
 ): Future[string] {.async.} =
-  ## Read available stdin data asynchronously. Once stdin ends, `isClosed`
-  ## turns true and `readKeyAsync` no longer reports `InputClosed`.
+  ## Read available stdin data asynchronously. This always consumes a pending
+  ## close notice, even one an earlier call found, so a later `readKeyAsync`
+  ## reports `Unknown`; `isClosed` is the durable signal when mixing the two.
   if reader.isNil:
     return ""
 
