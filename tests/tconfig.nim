@@ -90,6 +90,11 @@ suite "Config Module Tests":
       let config = DefaultAppConfig.withTargetFps(144)
       check config.targetFps == 144
 
+    test "withViewport sets the viewport":
+      let config = DefaultAppConfig.withViewport(Viewport(kind: vkInline, height: 5))
+      check config.viewport == Viewport(kind: vkInline, height: 5)
+      check config.alternateScreen == true
+
     test "withTargetFps with zero":
       let config = DefaultAppConfig.withTargetFps(0)
       check config.targetFps == 0
@@ -176,6 +181,7 @@ suite "Config Module Tests":
       # These are false by default, should not appear
       check "mouseCapture" notin s
       check "windowMode" notin s
+      check "viewport" notin s
 
     test "custom config string representation":
       let config =
@@ -186,3 +192,20 @@ suite "Config Module Tests":
       check "targetFps: 30" in s
       # rawMode is false, should not appear
       check "rawMode" notin s
+
+  suite "Viewport Tests":
+    test "a config that leaves the viewport out is fullscreen":
+      check DefaultAppConfig.viewport.kind == vkFullscreen
+      check AppConfig(title: "x").viewport == Viewport(kind: vkFullscreen)
+
+    test "viewports compare by kind and height":
+      check Viewport(kind: vkInline, height: 5) == Viewport(kind: vkInline, height: 5)
+      check Viewport(kind: vkInline, height: 5) != Viewport(kind: vkInline, height: 6)
+      check Viewport(kind: vkInline, height: 5) != Viewport(kind: vkFullscreen)
+      check DefaultAppConfig.withViewport(Viewport(kind: vkInline, height: 5)) !=
+        DefaultAppConfig
+
+    test "an inline viewport shows in the string representation":
+      check $Viewport(kind: vkFullscreen) == "fullscreen"
+      let config = DefaultAppConfig.withViewport(Viewport(kind: vkInline, height: 5))
+      check "viewport: inline(5)" in $config

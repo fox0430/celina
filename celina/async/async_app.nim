@@ -75,7 +75,8 @@ defineShow(AsyncApp)
 # AsyncApp Creation and Configuration
 
 proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
-  ## Create a new async CLI application with the specified configuration
+  ## Create a new async CLI application with the specified configuration.
+  ## Raises ValueError for an inline viewport shorter than 1 row.
   ##
   ## Example:
   ## ```nim
@@ -87,6 +88,8 @@ proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
   ## )
   ## var app = newAsyncApp(config)
   ## ```
+  if config.viewport.kind == vkInline and config.viewport.height < 1:
+    raise newException(ValueError, "Inline viewport height must be at least 1")
   let terminal = newAsyncTerminal()
   let termSize = terminal.getSize()
   result = AsyncApp(
@@ -157,11 +160,14 @@ proc isInputReaderLive*(app: AsyncApp): bool =
   ## `runAsync` re-creates a usable reader instead of reusing a closed one.
   app.inputReader.isLive()
 
+proc isInline(app: AsyncApp): bool {.inline.} =
+  app.config.viewport.kind == vkInline
+
 proc setupAsync(app: AsyncApp) {.async.} =
   if app.inputReader.isNil:
     app.inputReader = newAsyncInputReader()
 
-  if app.config.alternateScreen:
+  if app.config.alternateScreen and not app.isInline:
     await app.terminal.enableAlternateScreenAsync()
 
   if app.config.rawMode:
@@ -179,11 +185,15 @@ proc setupAsync(app: AsyncApp) {.async.} =
     await app.terminal.enableFocusEventsAsync()
 
   await hideCursorAsync()
+  if app.isInline:
+    await app.terminal.anchorInlineAsync(app.inputReader, app.config.viewport.height)
+    app.renderer.resize()
   # Records the blank screen, so the first frame is a diff against it.
   await app.terminal.clearScreenAsync()
 
   # Idle time counts from this run's start, not from `new` or a previous run.
   app.timings.lastEventTime = getMonoTime()
+  app.state.quitDrawn = false
 
 proc cleanupAsync(app: AsyncApp) {.async.} =
   ## Internal async cleanup procedure to restore terminal state.
@@ -197,6 +207,8 @@ proc cleanupAsync(app: AsyncApp) {.async.} =
 proc handleResizeAsync(app: AsyncApp) {.async.} =
   ## Handle terminal resize events asynchronously
   app.terminal.updateSize()
+  if app.isInline:
+    await app.terminal.reanchorInlineAsync(app.inputReader)
   app.renderer.resize()
   # Clear screen to avoid artifacts from old content
   await app.terminal.clearScreenAsync()
@@ -259,9 +271,27 @@ proc renderAsync(app: AsyncApp) {.async.} =
   # If window mode is enabled, render windows on top
   if app.state.windowMode and not app.windowManager.isNil:
     app.windowManager.render(app.renderer.getBuffer())
+  # Before the write: another task may call `quit()` while it waits.
+  app.state.quitDrawn = app.state.shouldQuit
 
   # Render to terminal
   await app.renderer.renderAsync()
+
+proc renderFrameAsync(app: AsyncApp) {.async.} =
+  app.fpsMonitor.startFrame()
+  await app.renderAsync()
+  app.fpsMonitor.endFrame()
+  app.timings.frameCounter.inc()
+  app.timings.lastFrameTime = getMonoTime()
+
+proc drawLastFrameAsync(app: AsyncApp) {.async.} =
+  ## Async `App.drawLastFrame`.
+  let (width, height, read) = getTerminalSizeFromSystem()
+  let resized = read and app.state.resizeState.checkResize(width, height)
+  if resized:
+    await app.handleResizeAsync()
+  if resized or not app.state.quitDrawn:
+    await app.renderFrameAsync()
 
 proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
   ## Process one async application tick (events + render).
@@ -376,11 +406,7 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
 
     # Render only if enough time has passed for target FPS
     if app.fpsMonitor.shouldRender():
-      app.fpsMonitor.startFrame()
-      await app.renderAsync()
-      app.fpsMonitor.endFrame()
-      app.timings.frameCounter.inc()
-      app.timings.lastFrameTime = getMonoTime()
+      await app.renderFrameAsync()
 
     return not app.state.shouldQuit
   except CancelledError as e:
@@ -441,6 +467,8 @@ proc runAsyncInner(app: AsyncApp) {.async.} =
     # Main async application loop
     while await app.tickAsync():
       discard
+    if app.isInline:
+      await app.drawLastFrameAsync()
   finally:
     app.state.running = false
     when hasChronos:

@@ -40,6 +40,9 @@ type
     ## this exposure is internal to the library; user code should drive state
     ## via `quit` / `isRunning` and related procs rather than touching fields.
     shouldQuit*: bool
+    quitDrawn*: bool
+      ## The last frame was built after `quit()`; inline then needs no last
+      ## frame of its own
     running*: bool ## Whether app is currently running
     windowMode*: bool ## Whether to use window management
     resizeState*: ResizeState ## Shared resize detection state (from tick_common)
@@ -61,7 +64,10 @@ type
 defineShow(App)
 
 proc newApp*(config: AppConfig = DefaultAppConfig): App =
-  ## Create a new CLI application with the specified configuration
+  ## Create a new CLI application with the specified configuration.
+  ## Raises ValueError for an inline viewport shorter than 1 row.
+  if config.viewport.kind == vkInline and config.viewport.height < 1:
+    raise newException(ValueError, "Inline viewport height must be at least 1")
   let terminal = newTerminal()
   let termSize = terminal.getSize()
   result = App(
@@ -123,8 +129,11 @@ defineTimeoutHandlerSetters(App)
 defineTimeoutAccessors(App)
 
 # Lifecycle management
+proc isInline(app: App): bool {.inline.} =
+  app.config.viewport.kind == vkInline
+
 proc setup(app: App) =
-  if app.config.alternateScreen:
+  if app.config.alternateScreen and not app.isInline:
     app.terminal.enableAlternateScreen()
 
   if app.config.rawMode:
@@ -142,15 +151,21 @@ proc setup(app: App) =
     app.terminal.enableFocusEvents()
 
   terminal.hideCursor()
+  if app.isInline:
+    app.terminal.anchorInline(app.config.viewport.height)
+    app.renderer.resize()
   # Records the blank screen, so the first frame is a diff against it.
   app.terminal.clearScreen()
 
   # Idle time counts from this run's start, not from `new` or a previous run.
   app.timings.lastEventTime = getMonoTime()
+  app.state.quitDrawn = false
 
 proc handleResize(app: App) =
   ## Handle terminal resize events
   app.terminal.updateSize()
+  if app.isInline:
+    app.terminal.reanchorInline()
   app.renderer.resize()
   # Clear screen to avoid artifacts from old content
   app.terminal.clearScreen()
@@ -211,9 +226,28 @@ proc render(app: App) =
   # If window mode is enabled, render windows on top
   if app.state.windowMode and not app.windowManager.isNil:
     app.windowManager.render(app.renderer.getBuffer())
+  app.state.quitDrawn = app.state.shouldQuit
 
   # Render to terminal
   app.renderer.render()
+
+proc renderFrame(app: App) =
+  app.fpsMonitor.startFrame()
+  app.render()
+  app.fpsMonitor.endFrame()
+  app.timings.frameCounter.inc()
+  app.timings.lastFrameTime = getMonoTime()
+
+proc drawLastFrame(app: App) =
+  ## Inline, the last frame stays in the scrollback, so it must show the last
+  ## events at the size the terminal has now.
+  let (width, height, read) = getTerminalSizeFromSystem()
+  # A size that cannot be read, as on a hung-up terminal, is no resize.
+  let resized = read and app.state.resizeState.checkResize(width, height)
+  if resized:
+    app.handleResize()
+  if resized or not app.state.quitDrawn:
+    app.renderFrame()
 
 proc tick(app: App): bool =
   ## Process one application tick (events + render).
@@ -315,11 +349,7 @@ proc tick(app: App): bool =
 
     # Render only if enough time has passed for target FPS
     if app.fpsMonitor.shouldRender():
-      app.fpsMonitor.startFrame()
-      app.render()
-      app.fpsMonitor.endFrame()
-      app.timings.frameCounter.inc()
-      app.timings.lastFrameTime = getMonoTime()
+      app.renderFrame()
 
     return not app.state.shouldQuit
   except TerminalError:
@@ -461,6 +491,8 @@ proc run*(app: App) =
     # Main application loop
     while app.tick():
       discard
+    if app.isInline:
+      app.drawLastFrame()
   finally:
     app.state.running = false
     # Clear on exit, not entry, so a `quit()` before `run` still counts.

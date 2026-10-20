@@ -7,12 +7,14 @@ import ../celina/async/async_backend
 when hasAsyncSupport:
   import std/[strutils, importutils, monotimes]
   from std/times import initDuration, inMilliseconds, `<`
-  from ../celina/async/async_io import newAsyncInputReader, closeAsyncInputReader
+  from ../celina/async/async_io import
+    newAsyncInputReader, closeAsyncInputReader, withStdoutLock
   import ../celina/async/async_app {.all.}
   import ../celina/async/async_terminal {.all.}
   import
     ../celina/core/[geometry, events, windows, buffer, terminal_common, tick_common]
   from ../celina/core/terminal import getTerminalSizeOrDefault
+  from ../celina/core/screen_state import originRow
 
   when defined(posix):
     import std/posix
@@ -1596,6 +1598,361 @@ when hasAsyncSupport:
         check not compiles(quickRunAsync(testEventHandlerWithApp, testRenderHandler))
       else:
         fail("quickRunAsync should be available")
+
+  suite "AsyncApp inline viewport":
+    privateAccess(AsyncApp)
+    privateAccess(AsyncTerminal)
+
+    test "newAsyncApp rejects an inline viewport shorter than 1 row":
+      expect ValueError:
+        discard newAsyncApp(
+          DefaultAppConfig.withViewport(Viewport(kind: vkInline, height: 0))
+        )
+
+    when defined(posix):
+      proc inlineApp(height: int): AsyncApp =
+        # As in the sync suite: `alternateScreen` stays on, raw mode is off.
+        newAsyncApp(
+          DefaultAppConfig.withRawMode(false).withViewport(
+            Viewport(kind: vkInline, height: height)
+          )
+        )
+
+      test "a run starts at the cursor row and leaves the cursor below the frame":
+        var output: string
+        let ran = withRawPty(
+          20,
+          10,
+          "\e[3;5R",
+          output,
+          proc() =
+            let app = inlineApp(3)
+            app.onRenderAsync proc(buffer: var Buffer, app: AsyncApp) =
+              check buffer.area == rect(0, 0, 20, 3)
+              buffer.setString(0, 0, "hello")
+              app.quit()
+            waitFor(app.runAsync()),
+        )
+        if not ran:
+          skip()
+        else:
+          check AlternateScreenEnter notin output
+          check ClearScreenSeq notin output
+          check CursorPositionQuerySeq & "\n\n\n" & makeResetAndClearBelowSeq(3) in
+            output
+          # The clear records the viewport, so the first frame is a diff.
+          check output.count(makeResetAndClearBelowSeq(3)) == 1
+          check makeCursorPositionSeq(0, 3) & "hello" in output
+          check output.endsWith(makeCursorPositionSeq(0, 5) & "\r\n" & ShowCursorSeq)
+
+      test "without a reply, a run uses the bottom rows":
+        var output: string
+        let ran = withRawPty(
+          20,
+          10,
+          "",
+          output,
+          proc() =
+            withStdinInput(
+              "",
+              proc() =
+                let app = inlineApp(3)
+                app.onRenderAsync proc(buffer: var Buffer, app: AsyncApp) =
+                  buffer.setString(0, 0, "hello")
+                  app.quit()
+                waitFor(app.runAsync()),
+            ),
+        )
+        if not ran:
+          skip()
+        else:
+          check CursorPositionQuerySeq notin output
+          check "\n\n\n" & makeResetAndClearBelowSeq(7) in output
+          check output.endsWith(makeCursorPositionSeq(0, 9) & "\r\n" & ShowCursorSeq)
+
+      test "the frame after a quit shows the last event":
+        var output: string
+        let ran = withRawPty(
+          20,
+          10,
+          "\e[1;1Rx",
+          output,
+          proc() =
+            let app = inlineApp(2)
+            var text = "waiting"
+            app.onEventAsync proc(event: Event): Future[EventResult] {.async.} =
+              if event.kind == EventKind.Key and event.key.char == "x":
+                text = "pressed"
+                return erQuit
+              return erContinue
+            app.onRenderAsync proc(buffer: var Buffer) =
+              buffer.setString(0, 0, text)
+            waitFor(app.runAsync()),
+        )
+        if not ran:
+          skip()
+        else:
+          check "pressed" in output
+
+      test "a tick that drew before quitting is not drawn again":
+        var renders = 0
+        var output: string
+        let ran = withRawPty(
+          20,
+          10,
+          "\e[1;1R",
+          output,
+          proc() =
+            let app = inlineApp(2)
+            app.onRenderAsync proc(buffer: var Buffer, app: AsyncApp) =
+              inc renders
+              app.quit()
+            waitFor(app.runAsync()),
+        )
+        if not ran:
+          skip()
+        else:
+          check renders == 1
+
+      test "a resize in the tick that quit is applied before the last frame":
+        var output: string
+        let ran = withRawPty(
+          20,
+          10,
+          output,
+          proc(master: cint) =
+            typeInto(master, "\e[3;1Rx")
+            let app = inlineApp(3)
+            app.onEventAsync proc(event: Event): Future[EventResult] {.async.} =
+              if event.kind == EventKind.Key and event.key.char == "x":
+                resizePty(master, 20, 6)
+                typeInto(master, "\e[1;1R")
+                return erQuit
+              return erContinue
+            waitFor(app.runAsync()),
+        )
+        if not ran:
+          skip()
+        else:
+          check output.count(CursorPositionQuerySeq) == 2
+          check makeResetAndClearBelowSeq(0) in output
+          check output.endsWith(makeCursorPositionSeq(0, 2) & "\r\n" & ShowCursorSeq)
+
+      test "after a resize at quit, a tick that drew is drawn again":
+        var output: string
+        let ran = withRawPty(
+          20,
+          10,
+          output,
+          proc(master: cint) =
+            typeInto(master, "\e[3;1Rx")
+            let app = inlineApp(3)
+            var resized = false
+            app.onEventAsync proc(
+                event: Event, app: AsyncApp
+            ): Future[EventResult] {.async.} =
+              if event.kind == EventKind.Key and event.key.char == "x":
+                resizePty(master, 20, 6)
+                resized = true
+                app.quit()
+              return erContinue
+            app.onTickAsync proc(app: AsyncApp): Future[TickResult] {.async.} =
+              if resized:
+                typeInto(master, "\e[1;1R")
+                resized = false
+              return trContinue
+            app.onRenderAsync proc(buffer: var Buffer) =
+              buffer.setString(0, 0, "hello")
+            waitFor(app.runAsync()),
+        )
+        if not ran:
+          skip()
+        else:
+          let clear = output.rfind(makeResetAndClearBelowSeq(0))
+          check clear >= 0
+          check "hello" in output[max(clear, 0) .. ^1]
+
+      test "a quit when the size cannot be read is not taken for a resize":
+        var output: string
+        var raised = false
+        var app: AsyncApp
+        let ran = withRawPty(
+          20,
+          10,
+          "\e[3;1Rx",
+          output,
+          proc() =
+            app = inlineApp(3)
+            var fds: array[2, cint]
+            doAssert pipe(fds) == 0
+            app.onEventAsync proc(event: Event): Future[EventResult] {.async.} =
+              if event.kind == EventKind.Key and event.key.char == "x":
+                discard dup2(fds[1], STDOUT_FILENO)
+                return erQuit
+              return erContinue
+            try:
+              waitFor app.runAsync()
+            except CatchableError:
+              raised = true
+            finally:
+              discard close(fds[0])
+              discard close(fds[1]),
+        )
+        if not ran:
+          skip()
+        else:
+          check not raised
+          check app.getBuffer().area == rect(0, 0, 20, 3)
+
+      proc holdStdoutLock(release: Future[void]) {.async.} =
+        withStdoutLock:
+          await release
+
+      template withInlineSetup(app: AsyncApp, body: untyped) =
+        app.inputReader = newAsyncInputReader()
+        try:
+          waitFor app.setupAsync()
+          body
+        finally:
+          waitFor app.cleanupAsync()
+          app.inputReader.closeAsyncInputReader()
+          app.inputReader = nil
+
+      test "a quit from another task while the frame is written gets a last frame":
+        var output: string
+        var renders = 0
+        let ran = withRawPty(
+          20,
+          10,
+          output,
+          proc(master: cint) =
+            typeInto(master, "\e[3;1R")
+            let app = inlineApp(3)
+            app.onRenderAsync proc(buffer: var Buffer) =
+              inc renders
+            app.withInlineSetup:
+              let release = newFuture[void]("release")
+              let holder = holdStdoutLock(release)
+              # The frame is built, then waits for the lock to be written.
+              let frame = app.renderAsync()
+              app.quit()
+              release.complete()
+              waitFor frame
+              waitFor holder
+              waitFor app.drawLastFrameAsync()
+              check(renders == 2),
+        )
+        if not ran:
+          skip()
+
+      test "a second run draws its own last frame":
+        var output: string
+        var renders = 0
+        let ran = withRawPty(
+          20,
+          10,
+          output,
+          proc(master: cint) =
+            let app = inlineApp(2)
+            var quitInRender = true
+            app.onRenderAsync proc(buffer: var Buffer, app: AsyncApp) =
+              inc renders
+              if quitInRender:
+                app.quit()
+            app.onEventAsync proc(event: Event): Future[EventResult] {.async.} =
+              if event.kind == EventKind.Key and event.key.char == "x":
+                return erQuit
+              return erContinue
+            typeInto(master, "\e[1;1R")
+            waitFor app.runAsync()
+            check renders == 1
+
+            quitInRender = false
+            typeInto(master, "\e[1;1Rx")
+            waitFor app.runAsync()
+            check(renders == 2),
+        )
+        if not ran:
+          skip()
+
+      test "a resize asks again and caps the height at the terminal's":
+        var output: string
+        let ran = withRawPty(
+          20,
+          10,
+          output,
+          proc(master: cint) =
+            typeInto(master, "\e[3;1R")
+            let app = inlineApp(8)
+            app.withInlineSetup:
+              check app.terminal.screen.originRow == 2
+              waitFor app.renderAsync()
+
+              resizePty(master, 20, 5)
+              typeInto(master, "\e[5;1R")
+              waitFor app.handleResizeAsync()
+              check app.terminal.screen.originRow == 0
+              check app.getBuffer().area == rect(0, 0, 20, 5)
+              waitFor app.renderAsync()
+
+              resizePty(master, 20, 10)
+              typeInto(master, "\e[1;1R")
+              waitFor app.handleResizeAsync()
+              check app.terminal.screen.originRow == 0
+              check(app.getBuffer().area == rect(0, 0, 20, 8)),
+        )
+        if not ran:
+          skip()
+        else:
+          check output.count(CursorPositionQuerySeq) == 3
+          check makeResetAndClearBelowSeq(0) in output
+          check output.endsWith(makeCursorPositionSeq(0, 7) & "\r\n" & ShowCursorSeq)
+
+      test "after a timeout, a resize moves to the bottom rows without asking":
+        var output: string
+        let ran = withRawPty(
+          20,
+          10,
+          output,
+          proc(master: cint) =
+            typeInto(master, "\e[3;1R")
+            let app = inlineApp(3)
+            app.withInlineSetup:
+              app.terminal.cursorReplies = false
+              resizePty(master, 20, 6)
+              waitFor app.handleResizeAsync()
+              check(app.terminal.screen.originRow == 3),
+        )
+        if not ran:
+          skip()
+        else:
+          check output.count(CursorPositionQuerySeq) == 1
+          # Only setup's 2 and the exit move's.
+          check output.count('\n') == 3
+          check makeResetAndClearBelowSeq(3) in output
+
+      test "the blocking restore moves the cursor below the viewport once":
+        var output: string
+        let ran = withRawPty(
+          20,
+          10,
+          "\e[3;1R",
+          output,
+          proc() =
+            let app = inlineApp(3)
+            app.inputReader = newAsyncInputReader()
+            try:
+              waitFor app.setupAsync()
+              app.restoreTerminal()
+              app.restoreTerminal()
+            finally:
+              app.inputReader.closeAsyncInputReader()
+              app.inputReader = nil,
+        )
+        if not ran:
+          skip()
+        else:
+          check output.count(makeCursorPositionSeq(0, 4) & "\r\n") == 1
 
   {.pop.}
 else:
