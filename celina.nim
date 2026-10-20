@@ -81,7 +81,7 @@ export
 # readers (events, async_io).
 export terminal_common except
   appendCursorCommands, needsFullRender, AbortPartialSeq, ResetAndClearScreenSeq,
-  EmergencyAltScreenTail, ReadOutcome, classifyReadResult
+  EmergencyAltScreenTail, ReadOutcome, classifyReadResult, canQueryCursor
 
 export async_backend, hasAsyncSupport, hasChronos, hasAsyncDispatch
 

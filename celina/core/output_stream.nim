@@ -88,6 +88,11 @@ proc markPartialWrite*(onPartial: set[StreamReset]) =
   if writeAllBlocking(STDOUT_FILENO.cint, reset, maxBlockedWaits = 1) == reset.len:
     pendingReset = {}
 
+proc c_fflush(f: File): cint {.importc: "fflush", header: "<stdio.h>".}
+  ## `flushFile` discards the result, so a failed flush would go unnoticed.
+
+proc c_clearerr(f: File) {.importc: "clearerr", header: "<stdio.h>".}
+
 proc sendPendingReset*(): bool =
   ## Write a pending reset to stdout with the normal wait budget. Returns true
   ## when no reset is pending any more. Never raises.
@@ -96,6 +101,23 @@ proc sendPendingReset*(): bool =
     if writeAllBlocking(STDOUT_FILENO.cint, reset) == reset.len:
       pendingReset = {}
   pendingReset == {}
+
+proc flushStdio*(): bool =
+  ## Send a pending reset, then flush C stdio (`stdout`), ahead of a raw write,
+  ## so text the app left there goes out first and outside any sequence a cut
+  ## write left open. Returns false, without flushing, while the reset is still
+  ## pending. A failed flush is followed by a reset, since stdio does not say
+  ## how much went out; the reset is harmless if nothing did.
+  if not sendPendingReset():
+    return false
+  if c_fflush(stdout) != 0:
+    when defined(celinaDebug):
+      stderr.writeLine("Warning: stdio flush failed")
+    # The failure is handled here, so the app's next `stdout.write` must not
+    # raise on the error flag it left set.
+    c_clearerr(stdout)
+    markPartialWrite({})
+  true
 
 proc writeStream*(data: string, onPartial: set[StreamReset]): int =
   ## Blocking `data` write via `writeAllBlocking`. Pending reset goes first;

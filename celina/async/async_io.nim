@@ -3,14 +3,18 @@
 ## This module provides non-blocking I/O for terminal input/output
 ## that works with both Chronos and std/asyncdispatch.
 
-import std/[options, posix, selectors, deques]
+import std/[options, posix, selectors, deques, monotimes]
+from std/times import initDuration, inMilliseconds
 
 import async_backend
 # The write loops live in core/output_stream.nim (which owns the shared
 # EINTR/EAGAIN/short-write policy in terminal_common and the pending reset);
 # this module only serializes them through the stdout lock.
-from ../core/output_stream import writeStream, writeStreamLocked
-from ../core/terminal_common import ReadOutcome, classifyReadResult
+from ../core/output_stream import writeStream, writeStreamLocked, flushStdio
+from ../core/terminal_common import
+  ReadOutcome, classifyReadResult, canQueryCursor, CursorPositionQuerySeq
+from ../core/escape_sequence_logic import extractCursorReply
+from ../core/geometry import Position, pos
 
 type
   AsyncIOError* = object of CatchableError
@@ -466,6 +470,51 @@ proc bufferStats*(reader: AsyncInputReader): tuple[size: int, available: bool] =
     reader.pendingByte.isSome or reader.buffer.len > 0 or
     (reader.closed and not reader.closeReported) or reader.hasDataAvailable(0)
   return (reader.buffer.len, available)
+
+# Cursor position query
+
+proc readCursorReplyAsync(
+    reader: AsyncInputReader, timeoutMs: int
+): Future[Option[Position]] {.async.} =
+  ## Read stdin until a cursor position report arrives or `timeoutMs` passes.
+  ## Other bytes read on the way go to the end of `reader.buffer`, after the
+  ## older bytes there, which are not searched.
+  # Capped so the deadline cannot overflow.
+  let deadline = getMonoTime() + initDuration(milliseconds = min(timeoutMs, int32.high))
+  var bytes = ""
+  try:
+    while not reader.closed:
+      let left = max((deadline - getMonoTime()).inMilliseconds, 0)
+      # Short polls, so other tasks run while the terminal answers.
+      if reader.hasDataAvailable(min(left, 10).int):
+        let data = reader.readNonBlocking()
+        if data.len == 0:
+          break # readable but empty: a hung-up terminal sends no reply either
+        bytes.add(data)
+        let reply = extractCursorReply(bytes)
+        if reply.found:
+          bytes = reply.typeahead
+          return some(pos(reply.col, reply.row))
+      elif left == 0:
+        break
+      await sleepMs(0)
+  finally:
+    reader.buffer.add(bytes)
+
+proc queryCursorPositionAsync*(
+    reader: AsyncInputReader, timeoutMs: int
+): Future[Option[Position]] {.async.} =
+  ## Async `queryCursorPosition`: same contract, reading through `reader`.
+  ## Keys typed while waiting stay in `reader`'s buffer.
+  if not reader.isLive() or reader.closed or not canQueryCursor():
+    return none(Position)
+  var written = 0
+  withStdoutLock:
+    if flushStdio():
+      written = await writeStreamLocked(CursorPositionQuerySeq, {})
+  if written != CursorPositionQuerySeq.len:
+    return none(Position)
+  return await reader.readCursorReplyAsync(timeoutMs)
 
 # Testing and Validation
 

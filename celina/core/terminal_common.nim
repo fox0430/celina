@@ -104,6 +104,7 @@ const
   ShowCursorSeq* = "\e[?25h"
   SaveCursorSeq* = "\e[s"
   RestoreCursorSeq* = "\e[u"
+  CursorPositionQuerySeq* = "\e[6n" ## DSR 6; the reply is `ESC [ row ; col R`
 
   # Cursor movement sequences (relative)
   CursorUpSeq* = "\e[A"
@@ -885,6 +886,16 @@ proc calculateRenderMetrics*(
 proc isTerminalInteractive*(): bool =
   ## Check if we're running in an interactive terminal
   isatty(STDIN_FILENO) == 1 and isatty(STDOUT_FILENO) == 1
+
+proc canQueryCursor*(): bool =
+  ## Whether a cursor position query can get its reply: stdin and stdout are
+  ## terminals, and stdin neither echoes the reply nor holds it until Enter.
+  if not isTerminalInteractive():
+    return false
+  var t: Termios
+  if tcgetattr(STDIN_FILENO, addr t) != 0:
+    return false
+  (t.c_lflag and (ECHO or ICANON)) == 0
 
 # Cursor-aware rendering functions
 

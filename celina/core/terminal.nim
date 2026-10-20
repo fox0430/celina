@@ -20,7 +20,7 @@ import std/[termios, posix]
 import geometry, colors, buffer, errors, terminal_common, screen_state
 from output_stream import
   StreamReset, swAll, swPartial, srAbort, srOsc8, srSgr, srSyncEnd, outcomeOf,
-  sendPendingReset, markPartialWrite, writeStream, setPendingReset
+  flushStdio, writeStream, setPendingReset
 from events import clearPendingByte, clearInputClosed, setStdinNonBlockingPinned
 
 export errors.TerminalError
@@ -164,8 +164,8 @@ proc enableRawMode*(terminal: Terminal) =
         )
     terminal.rawMode = true
     terminal.rawModeEnabled = true
-    # Drop any UTF-8 resync byte buffered before mode transition so it
-    # cannot leak across modes as a phantom keypress.
+    # Drop any UTF-8 resync byte or queued typeahead buffered before mode
+    # transition so it cannot leak across modes as a phantom keypress.
     clearPendingByte()
     # Raw mode took, so stdin is a live terminal; an earlier end is stale.
     clearInputClosed()
@@ -203,11 +203,6 @@ proc disableRawMode*(terminal: Terminal) =
   terminal.rawModeEnabled = false
   clearPendingByte()
 
-proc c_fflush(f: File): cint {.importc: "fflush", header: "<stdio.h>".}
-  ## `flushFile` discards the result, so a failed flush would go unnoticed.
-
-proc c_clearerr(f: File) {.importc: "clearerr", header: "<stdio.h>".}
-
 # Safe write helper that handles EAGAIN
 proc writeWithRetry(data: string, onPartial: set[StreamReset] = {}): int =
   ## Write with EAGAIN/EINTR retry. Returns bytes written; short count = gave up.
@@ -220,17 +215,8 @@ proc writeWithRetry(data: string, onPartial: set[StreamReset] = {}): int =
     # Early return for empty data
     return 0
 
-  if not sendPendingReset():
+  if not flushStdio():
     return 0
-
-  if c_fflush(stdout) != 0:
-    # stdio does not say how much went out; the reset is harmless if nothing did.
-    when defined(celinaDebug):
-      stderr.writeLine("Warning: writeWithRetry flush failed")
-    # The failure is handled here, so the app's next `stdout.write` must not
-    # raise on the error flag it left set.
-    c_clearerr(stdout)
-    markPartialWrite({})
 
   writeStream(data, onPartial)
 

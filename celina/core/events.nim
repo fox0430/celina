@@ -3,10 +3,13 @@
 ## This module provides comprehensive event handling for keyboard input,
 ## including escape sequences and arrow keys for POSIX systems.
 
-import std/[os, posix, options, strutils, strformat, atomics]
+import std/[os, posix, options, strutils, strformat, atomics, monotimes]
+from std/times import initDuration, inMilliseconds
 
-import mouse_logic, utf8_utils, key_logic, escape_sequence_logic
-from terminal_common import ReadOutcome, classifyReadResult
+import geometry, mouse_logic, utf8_utils, key_logic, escape_sequence_logic
+from terminal_common import
+  ReadOutcome, classifyReadResult, canQueryCursor, CursorPositionQuerySeq
+from output_stream import flushStdio, writeStream
 
 # Re-export types to maintain API compatibility
 export mouse_logic.MouseButton, mouse_logic.MouseEventKind, mouse_logic.KeyModifier
@@ -157,11 +160,16 @@ proc toEvent(data: mouse_logic.MouseEventData): Event =
 # bytes that follow within the same event.
 var pendingByte* {.threadvar.}: Option[byte]
 
+# Typeahead a cursor position query read past its reply. Every stdin byte read
+# takes it before the fd; `pendingByte` comes first, as it is always older.
+var queuedInput {.threadvar.}: string
+
 proc clearPendingByte*() =
-  ## Drop any byte waiting to be re-injected as the next event's first byte.
-  ## Call this from raw-mode toggles to prevent stale bytes from leaking
-  ## across mode transitions.
+  ## Drop any byte waiting to be re-injected as the next event's first byte,
+  ## and any queued typeahead. Call this from raw-mode toggles to prevent stale
+  ## bytes from leaking across mode transitions.
   pendingByte = none(byte)
+  queuedInput = ""
 
 # Tracks whether Terminal.enableRawMode has pinned stdin to O_NONBLOCK for the
 # lifetime of the current raw-mode session. When true, pollKey/readKeyInput
@@ -205,7 +213,11 @@ proc readRawByte(
 ): tuple[success: bool, ch: char, wouldBlock: bool, interrupted: bool] =
   ## One `read(2)` of a byte from `fd`, latching `inputClosed` when it finds the
   ## end. Reads the fd directly, not Nim's `stdin` File, so bytes left in the C
-  ## stdio buffer are not seen.
+  ## stdio buffer are not seen. Queued typeahead goes before stdin's fd.
+  if fd == STDIN_FILENO and queuedInput.len > 0:
+    let ch = queuedInput[0]
+    queuedInput = queuedInput[1 ..^ 1]
+    return (true, ch, false, false)
   if inputClosed.load:
     return (false, '\0', false, false)
   var ch: char
@@ -572,8 +584,9 @@ proc readByteWithTimeoutNonBlocking(
   ## Wait up to `timeoutUs` for stdin to become readable, then read one byte.
   ## All non-blocking sub-parsers (escape, mouse, paste) read continuation bytes
   ## through this, so a byte split across packets (slow SSH/tmux) is still picked
-  ## up rather than misread as a timeout. A buffered `pendingByte` skips the wait.
-  if pendingByte.isSome:
+  ## up rather than misread as a timeout. A buffered `pendingByte` or queued
+  ## typeahead skips the wait.
+  if pendingByte.isSome or queuedInput.len > 0:
     return readByteNonBlocking(STDIN_FILENO)
 
   var readSet: TFdSet
@@ -797,8 +810,9 @@ proc hasInput*(): bool =
   ## Check if input is available without blocking
   # A stashed UTF-8 resync byte is a real keystroke that the next readKey will
   # emit; select() can't see it because it never reached the fd. Report it as
-  # available so the byte isn't stranded until fresh fd input arrives.
-  if pendingByte.isSome:
+  # available so the byte isn't stranded until fresh fd input arrives. Queued
+  # typeahead has already left the fd too.
+  if pendingByte.isSome or queuedInput.len > 0:
     return true
   if inputClosed.load:
     return not inputCloseReported.load
@@ -839,8 +853,8 @@ proc pollEvents*(timeoutMs: int): bool =
   ## Similar to crossterm::event::poll()
   # A stashed UTF-8 resync byte already constitutes an available event; return
   # immediately rather than sleeping out the timeout while it sits invisible to
-  # select().
-  if pendingByte.isSome:
+  # select(). So does queued typeahead.
+  if pendingByte.isSome or queuedInput.len > 0:
     return true
   if inputClosed.load:
     if not inputCloseReported.load:
@@ -862,3 +876,56 @@ proc pollEvents*(timeoutMs: int): bool =
   # Use select to check if input is available with timeout
   let r = select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout)
   return r > 0
+
+# Cursor position query
+
+proc readCursorReply(timeoutMs: int): Option[Position] =
+  ## Read stdin until a cursor position report arrives or `timeoutMs` passes.
+  ## Other bytes read on the way are queued for the event readers. Typeahead
+  ## queued before the call is not searched.
+  # Capped so the deadline cannot overflow and the time left fits a cint.
+  let deadline = getMonoTime() + initDuration(milliseconds = min(timeoutMs, int32.high))
+  var bytes = ""
+  try:
+    var chunk = newString(64)
+    while not inputClosed.load:
+      var pfd = TPollfd(fd: STDIN_FILENO, events: POLLIN)
+      let left = max((deadline - getMonoTime()).inMilliseconds, 0)
+      let r = poll(addr pfd, 1, left.cint)
+      if r < 0 and errno == EINTR:
+        continue
+      if r <= 0:
+        break
+      let n = read(STDIN_FILENO, addr chunk[0], chunk.len)
+      case classifyReadResult(n, STDIN_FILENO)
+      of roData:
+        bytes.add(chunk[0 ..< n])
+      of roNoData:
+        if n == 0:
+          break # a terminal that reads empty sends no reply either
+      of roClosed:
+        inputClosed.store(true)
+      let reply = extractCursorReply(bytes)
+      if reply.found:
+        bytes = reply.typeahead
+        return some(pos(reply.col, reply.row))
+  finally:
+    queuedInput.add(bytes)
+
+proc queryCursorPosition*(timeoutMs: int): Option[Position] =
+  ## Ask the terminal where the cursor is (DSR 6) and wait up to `timeoutMs`
+  ## for the reply. Returns the 0-based position, or `none` if no reply came in
+  ## time. Returns `none` at once unless stdin and stdout are terminals and
+  ## stdin is in raw mode: otherwise the reply is echoed or held until Enter.
+  ##
+  ## Keys typed while waiting stay queued for the event readers. A reply that
+  ## comes after the deadline is read as keys, or taken by the next query if
+  ## that comes first. Reads stdin, so nothing else may read it meanwhile; `App`
+  ## reads input only inside its tick.
+  if inputClosed.load or not canQueryCursor():
+    return none(Position)
+  if not flushStdio():
+    return none(Position)
+  if writeStream(CursorPositionQuerySeq, {}) != CursorPositionQuerySeq.len:
+    return none(Position)
+  readCursorReply(timeoutMs)
