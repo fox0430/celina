@@ -1,10 +1,11 @@
 # Test suite for events module
 
-import std/[unittest, posix, strutils, options, atomics]
+import std/[unittest, posix, strutils, options, atomics, termios]
 from std/times import epochTime
 
 import ../celina/core/events {.all.}
-import ../celina/core/mouse_logic
+import ../celina/core/[mouse_logic, geometry]
+from ../celina/core/terminal_common import getRawModeConfig, applyTerminalConfig
 import stdout_capture
 
 # --- Test helpers: drive the non-blocking byte readers from a controlled pipe.
@@ -47,6 +48,13 @@ proc feedPipe(p: StdinPipe, data: string) =
 proc delayedArrowWriter(wfd: cint) {.thread.} =
   discard usleep(Useconds(10_000)) # 10ms
   var b = "A"
+  discard posix.write(wfd, addr b[0], b.len.cint)
+
+# Thread body: write the tail of a cursor position report after a short delay,
+# so the query sees the reply split across reads.
+proc delayedReplyTail(wfd: cint) {.thread.} =
+  discard usleep(Useconds(10_000)) # 10ms
+  var b = "10R"
   discard posix.write(wfd, addr b[0], b.len.cint)
 
 # Thread body: close a pipe's write end after a short delay, so a blocking read
@@ -2334,3 +2342,192 @@ suite "Events Module Tests":
               discard close(master)
             # The read latched an end; the next module must not inherit it.
             clearInputClosed()
+
+  suite "Cursor position query":
+    proc nextChar(): string =
+      let ev = readKeyInput()
+      if ev.isSome and ev.get.kind == EventKind.Key: ev.get.key.char else: ""
+
+    test "the reply is taken out and the typeahead queued":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "ab\x1b[5;10Rc")
+          let started = epochTime()
+          check readCursorReply(1000) == some(pos(9, 4))
+          check epochTime() - started < 0.5
+          check nextChar() == "a"
+          check nextChar() == "b"
+          check nextChar() == "c"
+          check readKeyInput().isNone
+        finally:
+          queuedInput = ""
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "the deadline gives none and keeps the bytes":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "xy")
+          let started = epochTime()
+          check readCursorReply(50).isNone
+          check epochTime() - started >= 0.04
+          check nextChar() == "x"
+          check nextChar() == "y"
+        finally:
+          queuedInput = ""
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "a huge timeout does not overflow":
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          feedPipe(p, "\x1b[1;1R")
+          check readCursorReply(int.high) == some(pos(0, 0))
+        finally:
+          queuedInput = ""
+          restoreStdin(p)
+
+    test "a reply split across reads is still found":
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        var writer: Thread[cint]
+        try:
+          feedPipe(p, "\x1b[5;")
+          createThread(writer, delayedReplyTail, p.wfd)
+          check readCursorReply(1000) == some(pos(9, 4))
+          check queuedInput == ""
+        finally:
+          joinThread(writer)
+          queuedInput = ""
+          restoreStdin(p)
+
+    test "typeahead comes after pendingByte and before the fd":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "q\x1b[1;1R")
+          check readCursorReply(1000).isSome
+          pendingByte = some('p'.byte)
+          feedPipe(p, "f")
+          check nextChar() == "p"
+          check nextChar() == "q"
+          check nextChar() == "f"
+        finally:
+          clearPendingByte()
+          queuedInput = ""
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "the blocking reader joins a sequence split between queue and fd":
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          feedPipe(p, "\x1b[\x1b[1;1R")
+          check readCursorReply(1000).isSome
+          check queuedInput == "\x1b["
+          feedPipe(p, "A")
+          let ev = readKey()
+          check ev.kind == EventKind.Key
+          check ev.key.code == ArrowUp
+        finally:
+          queuedInput = ""
+          restoreStdin(p)
+
+    test "clearPendingByte drops queued typeahead":
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          feedPipe(p, "t\x1b[1;1R")
+          check readCursorReply(1000).isSome
+          check queuedInput == "t"
+          clearPendingByte()
+          check queuedInput == ""
+          check not hasInput()
+        finally:
+          queuedInput = ""
+          restoreStdin(p)
+
+    test "hasInput and pollEvents see queued typeahead":
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          feedPipe(p, "z\x1b[1;1R")
+          check readCursorReply(1000).isSome
+          check hasInput()
+          let started = epochTime()
+          check pollEvents(1000)
+          check epochTime() - started < 0.5
+        finally:
+          queuedInput = ""
+          restoreStdin(p)
+
+    test "queryCursorPosition gives none at once off a terminal":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "k")
+          let started = epochTime()
+          check queryCursorPosition(2000).isNone
+          check epochTime() - started < 0.5
+          check nextChar() == "k"
+        finally:
+          queuedInput = ""
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "queryCursorPosition asks a raw terminal and reads its reply":
+      let (master, slave) = openPtyPair()
+      if master != -1:
+        var t: Termios
+        discard tcgetattr(slave, addr t)
+        applyTerminalConfig(t, getRawModeConfig())
+        discard tcsetattr(slave, TCSANOW, addr t)
+        stdout.flushFile()
+        let savedIn = dup(STDIN_FILENO)
+        let savedOut = dup(STDOUT_FILENO)
+        var answer: Option[Position]
+        var sent = ""
+        try:
+          discard dup2(slave, STDIN_FILENO)
+          discard dup2(slave, STDOUT_FILENO)
+          clearPendingByte()
+          clearInputClosed()
+          # The reply is already waiting when the query reads.
+          var reply = "\x1b[3;7R"
+          discard posix.write(master, addr reply[0], reply.len.cint)
+          answer = queryCursorPosition(1000)
+        finally:
+          discard dup2(savedIn, STDIN_FILENO)
+          discard dup2(savedOut, STDOUT_FILENO)
+          discard close(savedIn)
+          discard close(savedOut)
+          queuedInput = ""
+          clearInputClosed()
+        discard fcntl(master, F_SETFL, fcntl(master, F_GETFL) or O_NONBLOCK)
+        var buf = newString(64)
+        let n = posix.read(master, addr buf[0], buf.len)
+        if n > 0:
+          sent = buf[0 ..< n]
+        discard close(slave)
+        discard close(master)
+        check answer == some(pos(6, 2))
+        check sent == "\x1b[6n"

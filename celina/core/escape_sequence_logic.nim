@@ -15,6 +15,11 @@ type
     isValid*: bool
     keyEvent*: KeyEvent
 
+  CursorReply* = object ## A cursor position report taken out of input bytes
+    found*: bool
+    row*, col*: int ## 0-based
+    typeahead*: string ## the other bytes, in order
+
   PasteEndState* = enum
     ## State machine for detecting paste end sequence ESC[201~
     PesNone ## Not in sequence
@@ -255,3 +260,41 @@ proc stepPasteEnd*(
       pending = ""
       state = PesNone
   return false
+
+# Cursor position report (I/O independent)
+
+const MaxCursorReplyDigits = 5
+
+proc readReplyNumber(bytes: string, i: var int, value: var int): bool =
+  ## Read 1 to `MaxCursorReplyDigits` digits at `i` into `value`.
+  let start = i
+  value = 0
+  while i < bytes.len and bytes[i] in {'0' .. '9'}:
+    if i - start == MaxCursorReplyDigits:
+      return false
+    value = value * 10 + (ord(bytes[i]) - ord('0'))
+    inc i
+  i > start
+
+proc extractCursorReply*(bytes: string): CursorReply =
+  ## Take the first cursor position report (`ESC [ row ; col R`, 1-based) out
+  ## of `bytes`. A report cut off at the end stays in `typeahead`.
+  ##
+  ## Shared by the sync and async cursor position queries.
+  for start in 0 ..< bytes.len:
+    if bytes[start] != '\x1b' or start + 1 >= bytes.len or bytes[start + 1] != '[':
+      continue
+    var i = start + 2
+    var row, col: int
+    if not readReplyNumber(bytes, i, row) or i >= bytes.len or bytes[i] != ';':
+      continue
+    inc i
+    if not readReplyNumber(bytes, i, col) or i >= bytes.len or bytes[i] != 'R':
+      continue
+    return CursorReply(
+      found: true,
+      row: max(row - 1, 0),
+      col: max(col - 1, 0),
+      typeahead: bytes[0 ..< start] & bytes[i + 1 .. ^1],
+    )
+  CursorReply(typeahead: bytes)

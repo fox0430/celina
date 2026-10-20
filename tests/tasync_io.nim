@@ -1,10 +1,11 @@
 # Test suite for async_io module
 #
-import std/[unittest, posix, deques, importutils]
+import std/[unittest, posix, deques, importutils, options, termios]
+from std/times import epochTime
 
 import ../celina/async/async_backend
 import ../celina/async/async_io {.all.}
-import ../celina/core/[colors, terminal_common, output_stream]
+import ../celina/core/[colors, terminal_common, output_stream, geometry]
 import ./stdout_capture
 
 when hasChronos:
@@ -575,3 +576,133 @@ suite "AsyncInputReader end of input":
         reader.closeAsyncInputReader()
 
     withEndedStdin("ab", readLoop)
+
+suite "Cursor position query":
+  test "the reply is taken out and the typeahead goes after older input":
+    privateAccess(AsyncInputReader)
+    proc query() =
+      let reader = newAsyncInputReader()
+      try:
+        reader.buffer = "old"
+        let started = epochTime()
+        check (waitFor reader.readCursorReplyAsync(1000)) == some(pos(2, 1))
+        check epochTime() - started < 0.5
+        check reader.buffer == "oldnewtail"
+      finally:
+        reader.closeAsyncInputReader()
+
+    withStdinInput("new\x1b[2;3Rtail", query)
+
+  test "the deadline gives none and keeps the bytes":
+    privateAccess(AsyncInputReader)
+    proc query() =
+      let reader = newAsyncInputReader()
+      try:
+        let started = epochTime()
+        check (waitFor reader.readCursorReplyAsync(50)).isNone
+        check epochTime() - started >= 0.04
+        check reader.buffer == "xy"
+      finally:
+        reader.closeAsyncInputReader()
+
+    withStdinInput("xy", query)
+
+  test "a huge timeout does not overflow":
+    proc query() =
+      let reader = newAsyncInputReader()
+      try:
+        check (waitFor reader.readCursorReplyAsync(int.high)) == some(pos(0, 0))
+      finally:
+        reader.closeAsyncInputReader()
+
+    withStdinInput("\x1b[1;1R", query)
+
+  test "queryCursorPositionAsync gives none at once off a terminal":
+    proc query() =
+      let reader = newAsyncInputReader()
+      try:
+        let started = epochTime()
+        check (waitFor reader.queryCursorPositionAsync(2000)).isNone
+        check epochTime() - started < 0.5
+        check reader.readCharNonBlocking() == 'k'
+      finally:
+        reader.closeAsyncInputReader()
+
+    withStdinInput("k", query)
+
+  test "queryCursorPositionAsync asks a raw terminal and reads its reply":
+    let (master, slave) = openPtyPair()
+    if master != -1:
+      var t: Termios
+      discard tcgetattr(slave, addr t)
+      applyTerminalConfig(t, getRawModeConfig())
+      discard tcsetattr(slave, TCSANOW, addr t)
+      stdout.flushFile()
+      let savedIn = dup(STDIN_FILENO)
+      let savedOut = dup(STDOUT_FILENO)
+      var answer: Option[Position]
+      var sent = ""
+      try:
+        discard dup2(slave, STDIN_FILENO)
+        discard dup2(slave, STDOUT_FILENO)
+        var reply = "\x1b[3;7Rk"
+        discard posix.write(master, addr reply[0], reply.len.cint)
+        let reader = newAsyncInputReader()
+        try:
+          answer = waitFor reader.queryCursorPositionAsync(1000)
+          if reader.readCharNonBlocking() != 'k':
+            answer = none(Position)
+        finally:
+          reader.closeAsyncInputReader()
+      finally:
+        discard dup2(savedIn, STDIN_FILENO)
+        discard dup2(savedOut, STDOUT_FILENO)
+        discard close(savedIn)
+        discard close(savedOut)
+      discard fcntl(master, F_SETFL, fcntl(master, F_GETFL) or O_NONBLOCK)
+      var buf = newString(64)
+      let n = posix.read(master, addr buf[0], buf.len)
+      if n > 0:
+        sent = buf[0 ..< n]
+      discard close(slave)
+      discard close(master)
+      check answer == some(pos(6, 2))
+      check sent == "\x1b[6n"
+
+  test "queryCursorPositionAsync sends a pending reset before stdio text":
+    let (master, slave) = openPtyPair()
+    if master != -1:
+      var t: Termios
+      discard tcgetattr(slave, addr t)
+      applyTerminalConfig(t, getRawModeConfig())
+      discard tcsetattr(slave, TCSANOW, addr t)
+      stdout.flushFile()
+      let savedIn = dup(STDIN_FILENO)
+      let savedOut = dup(STDOUT_FILENO)
+      var sent = ""
+      try:
+        discard dup2(slave, STDIN_FILENO)
+        discard dup2(slave, STDOUT_FILENO)
+        var reply = "\x1b[3;7R"
+        discard posix.write(master, addr reply[0], reply.len.cint)
+        setPendingReset({srAbort})
+        stdout.write("Name: ")
+        let reader = newAsyncInputReader()
+        try:
+          discard waitFor reader.queryCursorPositionAsync(1000)
+        finally:
+          reader.closeAsyncInputReader()
+      finally:
+        clearPendingReset()
+        discard dup2(savedIn, STDIN_FILENO)
+        discard dup2(savedOut, STDOUT_FILENO)
+        discard close(savedIn)
+        discard close(savedOut)
+      discard fcntl(master, F_SETFL, fcntl(master, F_GETFL) or O_NONBLOCK)
+      var buf = newString(64)
+      let n = posix.read(master, addr buf[0], buf.len)
+      if n > 0:
+        sent = buf[0 ..< n]
+      discard close(slave)
+      discard close(master)
+      check sent == AbortPartialSeq & "Name: \x1b[6n"

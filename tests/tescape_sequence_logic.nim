@@ -424,3 +424,43 @@ suite "Escape Sequence Logic Tests":
           break
       check output == "ab"
       check consumed == "ab\x1b[201~".len
+
+  suite "Cursor Position Report":
+    test "a lone reply gives the 0-based position":
+      let r = extractCursorReply("\x1b[24;80R")
+      check r.found
+      check r.row == 23
+      check r.col == 79
+      check r.typeahead == ""
+
+    test "bytes around the reply stay in order":
+      let r = extractCursorReply("ab\x1b[5;10Rcd")
+      check r.found
+      check (r.row, r.col) == (4, 9)
+      check r.typeahead == "abcd"
+
+    test "a cut-off reply stays in the typeahead":
+      let r = extractCursorReply("x\x1b[24;8")
+      check not r.found
+      check r.typeahead == "x\x1b[24;8"
+
+    test "key sequences and a lone ESC before the reply are kept":
+      let r = extractCursorReply("\x1b\x1b[1;5A\x1b[2;3R")
+      check r.found
+      check (r.row, r.col) == (1, 2)
+      check r.typeahead == "\x1b\x1b[1;5A"
+
+    test "only the first reply is taken":
+      let r = extractCursorReply("\x1b[1;1R\x1b[2;2R")
+      check (r.row, r.col) == (0, 0)
+      check r.typeahead == "\x1b[2;2R"
+
+    test "an overlong number is not a reply":
+      let r = extractCursorReply("\x1b[123456;1R")
+      check not r.found
+      check r.typeahead == "\x1b[123456;1R"
+
+    test "no bytes, no reply":
+      let r = extractCursorReply("")
+      check not r.found
+      check r.typeahead == ""
