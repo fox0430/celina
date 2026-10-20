@@ -124,6 +124,8 @@ suite "Celina Main Module Tests":
 
     test "terminal_common internals are not re-exported":
       check not compiles(appendCursorCommands)
+      check not compiles(showsCursor)
+      check not compiles(makeResetAndClearBelowSeq)
       check not compiles(needsFullRender)
       check not compiles(AbortPartialSeq)
       check not compiles(ResetAndClearScreenSeq)

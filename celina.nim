@@ -80,8 +80,9 @@ export
 # Exported only for screen_state, output_stream, async_terminal and the input
 # readers (events, async_io).
 export terminal_common except
-  appendCursorCommands, needsFullRender, AbortPartialSeq, ResetAndClearScreenSeq,
-  EmergencyAltScreenTail, ReadOutcome, classifyReadResult, canQueryCursor
+  appendCursorCommands, showsCursor, needsFullRender, AbortPartialSeq,
+  ResetAndClearScreenSeq, makeResetAndClearBelowSeq, EmergencyAltScreenTail,
+  ReadOutcome, classifyReadResult, canQueryCursor
 
 export async_backend, hasAsyncSupport, hasChronos, hasAsyncDispatch
 

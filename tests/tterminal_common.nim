@@ -104,6 +104,11 @@ suite "Terminal Common Module Tests":
       check ShowCursorSeq in output
       check "\e[3;4H" in output # Cursor at (3,2) - 1-based indexing
 
+    test "appendCursorCommands offsets the cursor row by the origin":
+      var output = ""
+      discard appendCursorCommands(output, 3, 2, true, Default, Default, originRow = 10)
+      check output == ShowCursorSeq & makeCursorPositionSeq(3, 12)
+
     test "buildOutputWithCursor with hidden cursor":
       var oldBuffer = newBuffer(rect(0, 0, 10, 5))
       var newBuffer = newBuffer(rect(0, 0, 10, 5))
@@ -451,6 +456,20 @@ suite "Terminal Common Module Tests":
       # Only the lead emits a reset; the shadow contributes nothing.
       check output.count("[0m") == 1
 
+    test "buildDifferentialOutput offsets rows by the origin":
+      var buffer1 = newBuffer(5, 3)
+      var buffer2 = newBuffer(5, 3)
+      buffer2[2, 1] = cell("X", defaultStyle())
+
+      check buildDifferentialOutput(buffer1, buffer2, originRow = 4) ==
+        makeCursorPositionSeq(2, 5) & "X"
+
+      # The size-change branch offsets the same way.
+      var wider = newBuffer(2, 1)
+      wider[1, 0] = cell("X", defaultStyle())
+      check buildDifferentialOutput(newBuffer(1, 1), wider, originRow = 4) ==
+        makeCursorPositionSeq(0, 4) & " " & makeCursorPositionSeq(1, 4) & "X"
+
   suite "Full Render Output":
     test "buildFullRenderOutput resets style and clears screen first":
       # The reset must precede the clear so a stale background SGR is not
@@ -535,6 +554,24 @@ suite "Terminal Common Module Tests":
       check underlined.toAnsiSequence() & " " in output
       check makeCursorPositionSeq(4, 0) & makeHyperlinkStartSeq("https://example.com") in
         output
+
+    test "buildFullRenderOutput offsets rows by the origin":
+      var buffer = newBuffer(4, 2)
+      buffer[1, 1] = cell("A", defaultStyle())
+
+      let output = buildFullRenderOutput(buffer, originRow = 5)
+      check output == ResetAndClearScreenSeq & makeCursorPositionSeq(1, 6) & "A"
+
+    test "buildFullRenderOutput inline clears from the origin down":
+      var buffer = newBuffer(4, 2)
+      buffer[0, 0] = cell("A", defaultStyle())
+
+      # Also at origin 0: ED 2 can push the screen into the scrollback.
+      for origin in [0, 5]:
+        let output = buildFullRenderOutput(buffer, origin, inline = true)
+        check output ==
+          resetSequence() & makeCursorPositionSeq(0, origin) & ClearToEndOfScreenSeq &
+          makeCursorPositionSeq(0, origin) & "A"
 
   suite "Utility Functions":
     test "isTerminalInteractive detection":

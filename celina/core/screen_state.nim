@@ -24,6 +24,10 @@
 ## output and names the partial-write reset. `stage`/`finishAdopt` keep
 ## `lastBuffer` to frames actually shown. Writes live in output_stream.nim.
 ##
+## An inline viewport (`setViewport`) puts the buffer's row 0 at `originRow`
+## and clears from there down. Its frames leave the cursor at the app cursor
+## or at the origin, and `cursorRow` records which row, for re-anchoring.
+##
 ## Pure: no I/O, shared by both backends and driven directly by tests.
 
 import buffer, geometry, terminal_common, output_stream
@@ -33,6 +37,9 @@ type
     lastBuffer: Buffer ## the frame the screen showed, while `known`
     known: bool
     epoch: int ## bumped by every change to unknown
+    inline: bool
+    originRow: int ## screen row of the buffer's row 0; 0 unless inline
+    cursorRow: int ## inline: the cursor's row in the viewport
 
   CursorRequest* = object
     enabled*: bool ## false for the paths that leave the cursor alone
@@ -57,6 +64,7 @@ type
     newStyle, lastStyle: CursorStyle
     clearedSize: Size ## pkClear: the size of the blank `lastBuffer`
     staging: Staging ## pkFrame: how `stage` adopted the frame before the write
+    cursorRow: int ## inline: the cursor's row after the write; -1 = not tracked
 
   Presented* = object ## What a present path reports back
     outcome*: StreamWrite ## how much of the frame went out
@@ -64,7 +72,8 @@ type
 
 const noCursor* = CursorRequest()
   ## The request of a path that leaves the cursor alone (`draw`, the low-level
-  ## `render`): no cursor commands, and the tracked style does not change.
+  ## `render`): no cursor commands, and the tracked style does not change. In
+  ## an inline viewport a frame still ends with the cursor at the origin.
 
 proc lastBuffer*(s: var ScreenState): var Buffer {.inline.} =
   ## The frame the terminal shows while the screen is known. Writable, as in
@@ -87,6 +96,33 @@ proc invalidate*(s: var ScreenState) =
   s.known = false
   inc s.epoch
 
+proc isInline*(s: ScreenState): bool {.inline.} =
+  ## Whether the viewport is inline.
+  s.inline
+
+proc originRow*(s: ScreenState): int {.inline.} =
+  ## The screen row of the buffer's row 0; 0 unless inline.
+  s.originRow
+
+proc cursorRow*(s: ScreenState): int {.inline.} =
+  ## Inline: the cursor's row in the viewport after the last frame or clear
+  ## that sent anything. A cut write records 0 (best effort).
+  s.cursorRow
+
+proc setViewport*(s: var ScreenState, inline: bool, originRow: int = 0) =
+  ## Set the viewport: fullscreen, or inline with the buffer's row 0 at
+  ## `originRow` (clamped at 0; ignored unless inline). A change marks the
+  ## screen unknown: `needsFullRender` only compares areas.
+  let row =
+    if inline:
+      max(originRow, 0)
+    else:
+      0
+  if inline != s.inline or row != s.originRow:
+    s.inline = inline
+    s.originRow = row
+    s.invalidate()
+
 proc planFrame*(
     s: ScreenState, buffer: Buffer, cursor: CursorRequest, wrap: bool
 ): FramePlan {.raises: [].} =
@@ -95,16 +131,29 @@ proc planFrame*(
   ## false when unwrapped or app-managed. Cursor commands go inside the wrap.
   result.epoch = s.epoch
   result.lastStyle = cursor.lastStyle
+  result.cursorRow = -1
   if not s.known or needsFullRender(s.lastBuffer, buffer, false):
-    result.bytes = buildFullRenderOutput(buffer)
+    result.bytes = buildFullRenderOutput(buffer, s.originRow, s.inline)
   else:
-    result.bytes = buildDifferentialOutput(s.lastBuffer, buffer)
+    result.bytes = buildDifferentialOutput(s.lastBuffer, buffer, s.originRow)
+  # Inline, a cursor below the viewport would land on the lines under it.
+  let shown =
+    cursor.enabled and showsCursor(cursor.x, cursor.y, cursor.visible) and
+    (not s.inline or cursor.y < buffer.area.height)
   if cursor.enabled:
     result.newStyle = appendCursorCommands(
-      result.bytes, cursor.x, cursor.y, cursor.visible, cursor.style, cursor.lastStyle
+      result.bytes, cursor.x, cursor.y, shown, cursor.style, cursor.lastStyle,
+      s.originRow,
     )
   else:
     result.newStyle = cursor.lastStyle
+  if s.inline and result.bytes.len > 0:
+    if shown:
+      result.cursorRow = cursor.y
+    else:
+      # Park at the origin, so re-anchoring knows the cursor's row.
+      result.bytes.add(makeCursorPositionSeq(0, s.originRow))
+      result.cursorRow = 0
   if wrap and result.bytes.len > 0:
     result.bytes = wrapWithSyncOutput(result.bytes)
     result.onPartial = {srOsc8, srSgr, srSyncEnd}
@@ -114,13 +163,19 @@ proc planFrame*(
 proc planClear*(s: ScreenState, size: Size): FramePlan =
   ## Plan a full-screen clear of a `size`-sized screen, recorded as blank at
   ## that size once it goes out. Not wrapped, and a partial write of it leaves
-  ## nothing open that the next write has to undo.
+  ## nothing open that the next write has to undo. Inline, it clears from the
+  ## origin down instead and leaves the cursor there.
   ## A clear plan names no cursor style: `ResetAndClearScreenSeq` resets SGR but
   ## not DECSCUSR, so `newStyle` stays `CursorStyle.Default`.
   result.kind = pkClear
-  result.bytes = ResetAndClearScreenSeq
   result.epoch = s.epoch
   result.clearedSize = size
+  if s.inline:
+    result.bytes = makeResetAndClearBelowSeq(s.originRow)
+    result.cursorRow = 0
+  else:
+    result.bytes = ResetAndClearScreenSeq
+    result.cursorRow = -1
 
 proc stage*(s: var ScreenState, plan: var FramePlan, buffer: var Buffer) =
   ## Adopt `buffer` before the write, so a task that mutates it while the write
@@ -136,7 +191,10 @@ proc stage*(s: var ScreenState, plan: var FramePlan, buffer: var Buffer) =
     s.lastBuffer.clearDirty()
 
 proc applyOutcome(s: var ScreenState, plan: FramePlan, outcome: StreamWrite) =
-  ## The `known` and `epoch` half of `finish`, shared by every variant.
+  ## The `known`, `epoch` and cursor row half of `finish`, shared by every
+  ## variant.
+  if plan.cursorRow >= 0 and outcome != swNone:
+    s.cursorRow = if outcome == swAll: plan.cursorRow else: 0
   if outcome == swPartial:
     # Some bytes went out: the screen shows a mix of two frames.
     s.known = false
