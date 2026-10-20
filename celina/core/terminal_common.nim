@@ -95,6 +95,7 @@ const
     ## may have left one set; after the reset, the screen shows default blanks.
     ## Used by full renders and the terminal `clearScreen` methods, whose result
     ## later draws rely on.
+  ClearToEndOfScreenSeq* = "\e[0J"
   ClearLineSeq* = "\e[2K"
   ClearToEndOfLineSeq* = "\e[0K"
   ClearToStartOfLineSeq* = "\e[1K"
@@ -267,6 +268,12 @@ proc makeCursorPositionSeq*(x, y: int): string {.inline.} =
 proc makeCursorPositionSeq*(pos: Position): string {.inline.} =
   ## Generate ANSI sequence for cursor positioning
   makeCursorPositionSeq(pos.x, pos.y)
+
+proc makeResetAndClearBelowSeq*(row: int): string {.inline.} =
+  ## `ResetAndClearScreenSeq` for an inline viewport: resets SGR, moves to
+  ## column 0 of `row` and erases from there down, so the lines above stay.
+  ## Leaves the cursor at that position.
+  "\e[0m" & makeCursorPositionSeq(0, row) & ClearToEndOfScreenSeq
 
 proc makeCursorMoveSeq*(direction: string, steps: int): string {.inline.} =
   ## Generate ANSI sequence for cursor movement with steps.
@@ -487,11 +494,14 @@ proc calculateSimpleDiff*(
         if oldCell != newCell:
           result.add((pos: pos(x, y), cell: newCell))
 
-proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
+proc buildDifferentialOutput*(
+    oldBuffer, newBuffer: Buffer, originRow: int = 0
+): string =
   ## Build output string using simple cell-by-cell differential rendering
   ## Supports OSC 8 hyperlinks - hyperlink state is tracked per cell
   ## Symbols and hyperlinks are re-sanitized as defense in depth; every
   ## `Buffer` write path already sanitizes.
+  ## `originRow` is the screen row of the buffer's row 0.
 
   if oldBuffer.area != newBuffer.area:
     # Different sizes, use simple approach
@@ -504,7 +514,7 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
       if change.cell.isShadow:
         continue
 
-      result.add(makeCursorPositionSeq(change.pos.x, change.pos.y))
+      result.add(makeCursorPositionSeq(change.pos.x, originRow + change.pos.y))
 
       # Handle sanitized hyperlink change.
       let safeLink = sanitizeHyperlink(change.cell.hyperlink)
@@ -553,7 +563,7 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
 
         # Only move cursor if we're not at the right position
         if lastCursorPos != (x, y):
-          result.add(makeCursorPositionSeq(x, y))
+          result.add(makeCursorPositionSeq(x, originRow + y))
           lastCursorPos = (x, y)
 
         # Handle sanitized hyperlink change.
@@ -587,14 +597,22 @@ proc buildDifferentialOutput*(oldBuffer, newBuffer: Buffer): string =
   if currentStyle != defaultStyle():
     result.add(resetSequence())
 
-proc buildFullRenderOutput*(buffer: Buffer): string =
+proc buildFullRenderOutput*(
+    buffer: Buffer, originRow: int = 0, inline: bool = false
+): string =
   ## Build output string for full buffer render
   ## Supports OSC 8 hyperlinks
   ## Re-sanitizes as defense in depth, as in `buildDifferentialOutput`.
+  ## `originRow` is the screen row of the buffer's row 0. `inline` clears from
+  ## that row down instead of the whole screen, also at row 0: ED 2 can push
+  ## the screen into the scrollback.
   result = newStringOfCap(buffer.area.width * buffer.area.height * 10)
 
   # The loop below relies on the SGR reset: it starts from the default style.
-  result.add(ResetAndClearScreenSeq)
+  if inline:
+    result.add(makeResetAndClearBelowSeq(originRow))
+  else:
+    result.add(ResetAndClearScreenSeq)
 
   var lastStyle = defaultStyle()
   var lastHyperlink = ""
@@ -620,7 +638,9 @@ proc buildFullRenderOutput*(buffer: Buffer): string =
         continue
 
       if cursorX != x:
-        result.add(makeCursorPositionSeq(buffer.area.x + x, buffer.area.y + y))
+        result.add(
+          makeCursorPositionSeq(buffer.area.x + x, originRow + buffer.area.y + y)
+        )
 
       # Update sanitized hyperlink if changed. Skipped cells are never
       # written, so a carried link/style does not reach them.
@@ -899,29 +919,35 @@ proc canQueryCursor*(): bool =
 
 # Cursor-aware rendering functions
 
+proc showsCursor*(cursorX, cursorY: int, cursorVisible: bool): bool {.inline.} =
+  ## Whether `appendCursorCommands` shows the cursor rather than hiding it.
+  cursorVisible and cursorX >= 0 and cursorY >= 0
+
 proc appendCursorCommands*(
     output: var string,
     cursorX, cursorY: int,
     cursorVisible: bool,
     cursorStyle: CursorStyle,
     lastCursorStyle: CursorStyle,
+    originRow: int = 0,
 ): CursorStyle =
   ## Append the cursor commands to `output` and return the cursor style the
   ## terminal now shows: `lastCursorStyle`, unless a new DECSCUSR went out (so
   ## it is sent again after a frame that did not go out in full).
+  ## `cursorY` is a buffer row; `originRow` is the screen row of row 0.
   ##
   ## Shared by `buildOutputWithCursor` and the screen state's `planFrame`, so
   ## the cursor bytes are built in one place. Call this before the caller wraps
   ## `output`: appending after the wrap leaves the cursor bytes outside the
   ## synchronized output block. `planFrame` is the reference order.
   result = lastCursorStyle
-  if cursorVisible and cursorX >= 0 and cursorY >= 0:
+  if showsCursor(cursorX, cursorY, cursorVisible):
     # Only apply cursor style if it has changed to avoid interrupting blinking
     if cursorStyle != lastCursorStyle:
       output.add(getCursorStyleSeq(cursorStyle))
       result = cursorStyle
     output.add(ShowCursorSeq)
-    output.add(makeCursorPositionSeq(cursorX, cursorY))
+    output.add(makeCursorPositionSeq(cursorX, originRow + cursorY))
   else:
     output.add(HideCursorSeq)
 

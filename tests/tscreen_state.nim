@@ -14,6 +14,15 @@ proc knownScreen(width, height: int): ScreenState =
   let blank = newBuffer(width, height)
   result.finish(result.planFrame(blank, noCursor, false), blank, swAll)
 
+proc inlineScreen(width, height, origin: int): ScreenState =
+  ## A known inline screen: a blank frame at `origin` went out in full.
+  result.setViewport(true, origin)
+  let blank = newBuffer(width, height)
+  result.finish(result.planFrame(blank, noCursor, false), blank, swAll)
+
+proc cursorAt(x, y: int, visible = true): CursorRequest =
+  CursorRequest(enabled: true, x: x, y: y, visible: visible, lastStyle: Default)
+
 suite "Screen state: planning":
   test "a known screen of the same size plans a diff":
     var state = knownScreen(4, 2)
@@ -466,3 +475,115 @@ suite "Screen state: cursor style":
     check plan.appliedStyle(swAll) == CursorStyle.Default
     check ShowCursorSeq notin plan.bytes
     check HideCursorSeq notin plan.bytes
+
+suite "Screen state: inline viewport":
+  test "a viewport change marks the screen unknown":
+    var state = knownScreen(4, 2)
+    state.setViewport(false)
+    check state.known
+
+    state.setViewport(true, 3)
+    check not state.known
+    check state.isInline
+    check state.originRow == 3
+
+    state = inlineScreen(4, 2, 3)
+    state.setViewport(true, 3)
+    check state.known
+    state.setViewport(true, 5)
+    check not state.known
+
+    state.setViewport(true, -2)
+    check state.originRow == 0
+    state.setViewport(false, 7)
+    check not state.isInline
+    check state.originRow == 0
+
+  test "a full render clears from the origin and parks the cursor there":
+    var frame = newBuffer(4, 2)
+    frame[1, 1] = cell("x")
+    for origin in [0, 3]:
+      var state: ScreenState
+      state.setViewport(true, origin)
+      check state.planFrame(frame, noCursor, false).bytes ==
+        buildFullRenderOutput(frame, origin, true) & makeCursorPositionSeq(0, origin)
+
+  test "a diff is offset by the origin and parks the cursor":
+    var state = inlineScreen(4, 2, 3)
+    var frame = newBuffer(4, 2)
+    frame[1, 1] = cell("x")
+
+    let plan = state.planFrame(frame, noCursor, true)
+    check plan.bytes ==
+      wrapWithSyncOutput(
+        buildDifferentialOutput(newBuffer(4, 2), frame, 3) & makeCursorPositionSeq(0, 3)
+      )
+
+  test "an empty frame without cursor commands plans no bytes":
+    var state = inlineScreen(4, 2, 3)
+    check state.planFrame(newBuffer(4, 2), noCursor, true).bytes == ""
+
+  test "the app cursor is offset by the origin; a hidden one parks":
+    var state = inlineScreen(4, 2, 3)
+    check state.planFrame(newBuffer(4, 2), cursorAt(2, 1), false).bytes.endsWith(
+      ShowCursorSeq & makeCursorPositionSeq(2, 4)
+    )
+    check state.planFrame(newBuffer(4, 2), cursorAt(2, 1, false), false).bytes.endsWith(
+      HideCursorSeq & makeCursorPositionSeq(0, 3)
+    )
+
+  test "a cursor below the viewport is hidden and parked":
+    var state = inlineScreen(4, 2, 3)
+    let blank = newBuffer(4, 2)
+    let plan = state.planFrame(blank, cursorAt(1, 2), false)
+    check plan.bytes.endsWith(HideCursorSeq & makeCursorPositionSeq(0, 3))
+    state.finish(plan, blank, swAll)
+    check state.cursorRow == 0
+
+    # Fullscreen still sends it; the terminal clamps the row.
+    var full = knownScreen(4, 2)
+    check full.planFrame(blank, cursorAt(1, 2), false).bytes.endsWith(
+      ShowCursorSeq & makeCursorPositionSeq(1, 2)
+    )
+
+  test "the cursor row follows the frames that went out":
+    var state = inlineScreen(4, 2, 3)
+    let blank = newBuffer(4, 2)
+    state.finish(state.planFrame(blank, cursorAt(2, 1), false), blank, swAll)
+    check state.cursorRow == 1
+
+    # Nothing went out, so the cursor did not move.
+    state.finish(state.planFrame(blank, cursorAt(0, 0, false), false), blank, swNone)
+    check state.cursorRow == 1
+    state.finish(state.planFrame(blank, noCursor, false), blank, swAll)
+    check state.cursorRow == 1
+
+    state.finish(state.planFrame(blank, cursorAt(0, 0, false), false), blank, swAll)
+    check state.cursorRow == 0
+
+    # A cut frame records 0, best effort.
+    state.finish(state.planFrame(blank, cursorAt(2, 1), false), blank, swAll)
+    state.finish(state.planFrame(blank, cursorAt(2, 1), false), blank, swPartial)
+    check state.cursorRow == 0
+
+  test "a clear erases from the origin down and records row 0":
+    var state = inlineScreen(4, 2, 3)
+    let blank = newBuffer(4, 2)
+    state.finish(state.planFrame(blank, cursorAt(2, 1), false), blank, swAll)
+
+    let plan = state.planClear(size(4, 2))
+    check plan.bytes ==
+      resetSequence() & makeCursorPositionSeq(0, 3) & ClearToEndOfScreenSeq
+    check plan.onPartial == {}
+    state.finishClear(plan, swAll)
+    check state.known
+    check state.cursorRow == 0
+
+  test "back to fullscreen, frames and clears are the fullscreen ones":
+    var state = inlineScreen(4, 2, 3)
+    state.setViewport(false)
+    var frame = newBuffer(4, 2)
+    frame[1, 1] = cell("x")
+
+    check state.planFrame(frame, noCursor, false).bytes == buildFullRenderOutput(frame)
+    check state.planClear(size(4, 2)).bytes == ResetAndClearScreenSeq
