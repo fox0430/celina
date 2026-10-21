@@ -47,9 +47,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.nimble
-          key: ${{ runner.os }}-nimble-v2-${{ hashFiles('*.nimble') }}
+          key: ${{ runner.os }}-nimble-v2-${{ matrix.nim-version }}-${{ hashFiles('*.nimble') }}
           restore-keys: |
-            ${{ runner.os }}-nimble-v2-
+            ${{ runner.os }}-nimble-v2-${{ matrix.nim-version }}-
 
       - name: Setup Nim (stable/release)
         uses: jiro4989/setup-nim-action@v2
