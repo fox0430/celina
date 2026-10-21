@@ -15,13 +15,14 @@
 ##   # await showCursorAsync()   # Wrong - bypasses renderer
 ## ```
 
-import std/[termios, posix]
+import std/[termios, posix, options, strutils]
 
 import async_backend, async_buffer
 import ../core/[geometry, colors, buffer, terminal_common, errors, screen_state]
 from async_io import
   AsyncInputReader, clearPendingByteAsync, tryWriteAsync, writeOrRaiseAsync,
-  writeStdoutAsync, tryWriteBlocking, writeOrRaiseBlocking, withStdoutLock
+  writeStdoutAsync, tryWriteBlocking, writeOrRaiseBlocking, withStdoutLock,
+  queryCursorPositionAsync
 from ../core/output_stream import
   swAll, swPartial, srAbort, srOsc8, srSgr, srSyncEnd, outcomeOf, setPendingReset,
   writeStreamLocked
@@ -36,6 +37,8 @@ type
     focusEventsEnabled*: bool
     syncOutputEnabled*: bool
     screen: ScreenState ## what the screen shows; see screen_state.nim
+    inlineHeight: int ## inline: the height asked for; the viewport may be shorter
+    cursorReplies: bool ## inline: the last cursor position query was answered
     stdinFd*: AsyncFD
     stdoutFd*: AsyncFD
     rawModeEnabled: bool # Track raw mode state internally
@@ -69,6 +72,11 @@ proc getTerminalSizeAsync*(): Size {.inline.} =
 proc updateSize*(terminal: AsyncTerminal) {.inline.} =
   ## Update terminal size from current terminal
   terminal.size = getTerminalSizeAsync()
+
+proc viewportSize*(terminal: AsyncTerminal): Size =
+  ## The size frames are drawn at: the terminal size, or its width by the
+  ## inline viewport's height.
+  terminal.screen.viewportSize(terminal.size)
 
 proc newAsyncTerminal*(): AsyncTerminal =
   ## Create a new AsyncTerminal instance
@@ -417,13 +425,15 @@ proc clearScreenAsync*(terminal: AsyncTerminal) {.async.} =
   ## Clear the entire screen asynchronously and record it as blank, so the
   ## next draw writes only the cells that are not blank. Resets SGR first, and
   ## the output stream sends the reset of a cut write first. Does not move the
-  ## cursor (matches the synchronous `Terminal.clearScreen`).
+  ## cursor (matches the synchronous `Terminal.clearScreen`). An inline
+  ## viewport is cleared from its first row down instead, and the cursor is
+  ## left there.
   ##
   ## Raises IOError if the clear cannot be written in full. A clear that sent
   ## nothing keeps the screen known; a partial one leaves it unknown, so the
   ## next draw is a full render. A cancel propagates and has the same effect.
   withStdoutLock:
-    var plan = terminal.screen.planClear(terminal.size)
+    var plan = terminal.screen.planClear(terminal.viewportSize)
     var outcome = swPartial # a cancel mid-write counts as partial
     try:
       let written = await writeStreamLocked(plan.bytes, plan.onPartial)
@@ -581,6 +591,35 @@ proc renderFullAsync*(terminal: AsyncTerminal, buffer: Buffer) {.async.} =
 # Terminal setup and cleanup
 proc cleanupAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.async.}
 
+proc placeInlineAsync(terminal: AsyncTerminal, anchor: InlineAnchor) {.async.} =
+  if anchor.lines > 0:
+    await writeOrRaiseAsync("\n".repeat(anchor.lines))
+  terminal.screen.enterInline(anchor)
+
+proc anchorInlineAsync*(
+    terminal: AsyncTerminal, reader: AsyncInputReader, height: int
+) {.async.} =
+  ## Async `Terminal.anchorInline`, reading the reply through `reader`.
+  terminal.inlineHeight = height
+  let reply = await reader.queryCursorPositionAsync(InlineQueryTimeoutMs)
+  terminal.cursorReplies = reply.isSome
+  await terminal.placeInlineAsync(planStart(reply, terminal.size.height, height))
+
+proc reanchorInlineAsync*(terminal: AsyncTerminal, reader: AsyncInputReader) {.async.} =
+  ## Async `Terminal.reanchorInline`, reading the reply through `reader`.
+  let termHeight = terminal.size.height
+  if terminal.cursorReplies:
+    let reply = await reader.queryCursorPositionAsync(InlineQueryTimeoutMs)
+    terminal.cursorReplies = reply.isSome
+    if reply.isSome:
+      await terminal.placeInlineAsync(
+        planInline(reply, terminal.screen.cursorRow, termHeight, terminal.inlineHeight)
+      )
+      return
+  await terminal.placeInlineAsync(
+    planBottom(terminal.screen.cursorRow, termHeight, terminal.inlineHeight)
+  )
+
 proc setupAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.async.} =
   ## Setup terminal for CLI mode asynchronously.
   ##
@@ -669,6 +708,7 @@ proc cleanup*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) =
   ##
   ## A signal handler must use `emergencyRestore` instead: it writes straight to
   ## the fd, which a signal handler needs. See `Terminal.emergencyRestore`.
+  tryWriteBlocking(terminal.screen.takeExitMove())
   tryWriteBlocking(ShowCursorSeq)
   runDisableSequence(terminal, reader)
 
@@ -738,6 +778,8 @@ proc cleanupStepsAsync(terminal: AsyncTerminal, reader: AsyncInputReader) {.asyn
       discard
 
   step:
+    await tryWriteAsync(terminal.screen.takeExitMove())
+  step:
     await showCursorAsync()
   step:
     await terminal.disableSyncOutputAsync()
@@ -761,6 +803,7 @@ proc cleanupAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.as
   ## `terminal.cleanup()` policy — app-level wrappers should delegate here.
   ## A mode added here belongs in `EmergencyResetSeq` too. The first write
   ## sends the reset a cut frame needs, so nothing has to be prepended here.
+  ## After an inline viewport, the cursor first goes below it, once.
   ##
   ## Raises only on cancellation. A chronos cancel replaces the remaining
   ## steps with the emergency reset, then re-raises. A second cancel during

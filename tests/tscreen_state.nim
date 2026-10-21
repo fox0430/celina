@@ -1,6 +1,6 @@
 # Test suite for the screen_state module
 
-import std/[unittest, strutils]
+import std/[unittest, strutils, options]
 
 import
   ../celina/core/
@@ -587,3 +587,71 @@ suite "Screen state: inline viewport":
 
     check state.planFrame(frame, noCursor, false).bytes == buildFullRenderOutput(frame)
     check state.planClear(size(4, 2)).bytes == ResetAndClearScreenSeq
+
+suite "Screen state: inline anchoring":
+  proc anchor(origin, height, lines, cursorRow: int): InlineAnchor =
+    InlineAnchor(origin: origin, height: height, lines: lines, cursorRow: cursorRow)
+
+  test "the viewport starts at the cursor row when the rows below are free":
+    check planInline(some(pos(0, 3)), 0, 24, 5) == anchor(3, 5, 4, 4)
+
+  test "the origin moves up by the rows that scrolled":
+    check planInline(some(pos(0, 22)), 0, 24, 5) == anchor(19, 5, 4, 4)
+    check planInline(some(pos(0, 23)), 0, 24, 24) == anchor(0, 24, 23, 23)
+
+  test "at start, a cursor past column 0 starts the viewport on the next row":
+    check planStart(some(pos(6, 3)), 24, 5) == anchor(4, 5, 5, 4)
+    check planStart(some(pos(6, 23)), 24, 5) == anchor(19, 5, 5, 4)
+    check planStart(some(pos(0, 3)), 24, 5) == anchor(3, 5, 4, 4)
+    check planStart(none(Position), 24, 5) == anchor(19, 5, 5, 4)
+
+  test "with no reply, the line feeds free the bottom rows":
+    check planInline(none(Position), 0, 24, 5) == anchor(19, 5, 5, 4)
+    check planInline(none(Position), -1, 24, 24) == anchor(0, 24, 24, 23)
+
+  test "on resize, the cursor keeps its viewport row":
+    # A visible cursor on row 2 of 5: rows 3 and 4 still have to fit below.
+    check planInline(some(pos(0, 10)), 2, 24, 5) == anchor(8, 5, 2, 4)
+    check planInline(some(pos(0, 23)), 2, 24, 5) == anchor(19, 5, 2, 4)
+
+  test "a recorded row below a shrunk viewport clamps at 0":
+    check planInline(some(pos(0, 5)), 8, 8, 8) == anchor(0, 8, 0, 5)
+
+  test "a viewport taller than the terminal gets the terminal's rows":
+    check planInline(some(pos(0, 3)), 0, 6, 8) == anchor(0, 6, 5, 5)
+    check planInline(none(Position), 0, 6, 8) == anchor(0, 6, 6, 5)
+
+  test "a resize without asking moves to the bottom rows without line feeds":
+    check planBottom(2, 24, 5) == anchor(19, 5, 0, 2)
+    check planBottom(2, 4, 5) == anchor(0, 4, 0, 2)
+
+  test "a reply past the last row keeps the viewport on screen":
+    check planInline(some(pos(0, 30)), 0, 24, 5) == anchor(19, 5, 4, 4)
+
+  test "entering records the viewport and arms the exit move once":
+    var state = knownScreen(10, 24)
+    state.enterInline(anchor(19, 5, 4, 4))
+    check state.isInline
+    check state.originRow == 19
+    check state.cursorRow == 4
+    check not state.known
+    check state.viewportSize(size(10, 24)) == size(10, 5)
+    check state.planClear(state.viewportSize(size(10, 24))).bytes ==
+      makeResetAndClearBelowSeq(19)
+
+    check state.takeExitMove() == makeCursorPositionSeq(0, 23) & "\r\n"
+    check state.takeExitMove() == ""
+    state.enterInline(anchor(10, 5, 4, 0))
+    check state.takeExitMove() == makeCursorPositionSeq(0, 14) & "\r\n"
+
+  test "entering at the same origin still marks the screen unknown":
+    # The line feeds before it may have scrolled the screen.
+    var state = inlineScreen(10, 5, 19)
+    check state.known
+    state.enterInline(anchor(19, 5, 4, 4))
+    check not state.known
+
+  test "fullscreen has no exit move and draws at the terminal size":
+    var state = knownScreen(10, 24)
+    check state.viewportSize(size(10, 24)) == size(10, 24)
+    check state.takeExitMove() == ""

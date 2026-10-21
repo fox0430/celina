@@ -2,7 +2,8 @@
 
 import std/[os, posix, tempfiles, termios, atomics]
 
-from ../celina/core/events import clearInputClosed
+from ../celina/core/events import clearInputClosed, clearPendingByte
+from ../celina/core/terminal_common import applyTerminalConfig, getRawModeConfig
 
 proc captureStdout*(body: proc()): string =
   ## Run `body` with stdout redirected to a pipe and return what it wrote.
@@ -162,6 +163,16 @@ proc openPtyPair*(): tuple[master, slave: cint] =
   discard close(master)
   (cint(-1), cint(-1))
 
+proc drainPty(master: cint, output: var string) =
+  ## Append what the slave side wrote and the master has not read yet.
+  discard fcntl(master, F_SETFL, fcntl(master, F_GETFL) or O_NONBLOCK)
+  var buf = newString(4096)
+  while true:
+    let n = posix.read(master, addr buf[0], buf.len)
+    if n <= 0:
+      break
+    output.add buf[0 ..< n]
+
 proc withPtyStdout*(cols, rows: int, output: var string, body: proc()): bool =
   ## Run `body` with stdout on a pty of the given size and append what it
   ## wrote to `output`. Returns false without running `body` if the pty cannot
@@ -191,13 +202,7 @@ proc withPtyStdout*(cols, rows: int, output: var string, body: proc()): bool =
     stdout.flushFile()
     discard dup2(saved, STDOUT_FILENO)
     discard close(saved)
-    discard fcntl(master, F_SETFL, fcntl(master, F_GETFL) or O_NONBLOCK)
-    var buf = newString(4096)
-    while true:
-      let n = posix.read(master, addr buf[0], buf.len)
-      if n <= 0:
-        break
-      output.add buf[0 ..< n]
+    drainPty(master, output)
     # Closed only after the drain: the last slave close may drop unread output
     # on some systems.
     discard close(slave)
@@ -207,6 +212,76 @@ proc withPtyStdout*(cols, rows: int, body: proc()): bool =
   ## `withPtyStdout` that discards the output.
   var output: string
   withPtyStdout(cols, rows, output, body)
+
+proc withRawPty*(cols, rows: int, output: var string, body: proc(master: cint)): bool =
+  ## Run `body` with stdin and stdout on a raw pty of the given size, and
+  ## append what it wrote to `output`. `body` gets the master, to type into
+  ## (`typeInto`) or resize. Returns false without running `body` if the pty
+  ## cannot be set up. Output is drained only afterwards, so keep it within the
+  ## pty buffer.
+  stdout.flushFile()
+  let (master, slave) = openPtyPair()
+  if master == -1:
+    return false
+  defer:
+    discard close(master)
+  var ws = IOctl_WinSize(ws_row: rows.cushort, ws_col: cols.cushort)
+  var t: Termios
+  if ioctl(slave, TIOCSWINSZ, addr ws) != 0 or tcgetattr(slave, addr t) != 0:
+    discard close(slave)
+    return false
+  applyTerminalConfig(t, getRawModeConfig())
+  discard tcsetattr(slave, TCSANOW, addr t)
+  let savedIn = dup(STDIN_FILENO)
+  let savedOut = dup(STDOUT_FILENO)
+  if savedIn == -1 or savedOut == -1 or dup2(slave, STDIN_FILENO) == -1 or
+      dup2(slave, STDOUT_FILENO) == -1:
+    # Only stdin can have been replaced: stdout is the last step.
+    if savedIn != -1:
+      discard dup2(savedIn, STDIN_FILENO)
+      discard close(savedIn)
+    if savedOut != -1:
+      discard close(savedOut)
+    discard close(slave)
+    return false
+  clearPendingByte()
+  clearInputClosed()
+  try:
+    body(master)
+  finally:
+    stdout.flushFile()
+    discard dup2(savedIn, STDIN_FILENO)
+    discard dup2(savedOut, STDOUT_FILENO)
+    discard close(savedIn)
+    discard close(savedOut)
+    clearPendingByte()
+    clearInputClosed()
+    drainPty(master, output)
+    discard close(slave)
+  true
+
+proc typeInto*(master: cint, typed: string) =
+  ## Send `typed` to the pty's stdin side, as if typed or sent by the terminal.
+  if typed.len > 0:
+    doAssert posix.write(master, unsafeAddr typed[0], typed.len) == typed.len
+
+proc resizePty*(master: cint, cols, rows: int) =
+  var ws = IOctl_WinSize(ws_row: rows.cushort, ws_col: cols.cushort)
+  doAssert ioctl(master, TIOCSWINSZ, addr ws) == 0
+
+proc withRawPty*(
+    cols, rows: int, typed: string, output: var string, body: proc()
+): bool =
+  ## `withRawPty` with `typed` already waiting on stdin, such as a cursor
+  ## position reply.
+  withRawPty(
+    cols,
+    rows,
+    output,
+    proc(master: cint) =
+      typeInto(master, typed)
+      body(),
+  )
 
 var watchdogArmed: Atomic[bool]
 var watchdog: Thread[tuple[name: string, ms: int]]

@@ -27,8 +27,12 @@
 ## An inline viewport (`setViewport`) puts the buffer's row 0 at `originRow`
 ## and clears from there down. Its frames leave the cursor at the app cursor
 ## or at the origin, and `cursorRow` records which row, for re-anchoring.
+## `planStart`, `planInline` and `planBottom` place the viewport, `enterInline`
+## records it.
 ##
 ## Pure: no I/O, shared by both backends and driven directly by tests.
+
+import std/options
 
 import buffer, geometry, terminal_common, output_stream
 
@@ -40,6 +44,8 @@ type
     inline: bool
     originRow: int ## screen row of the buffer's row 0; 0 unless inline
     cursorRow: int ## inline: the cursor's row in the viewport
+    height: int ## inline: the viewport's height
+    exitArmed: bool ## inline: `takeExitMove` still has to move below the viewport
 
   CursorRequest* = object
     enabled*: bool ## false for the paths that leave the cursor alone
@@ -69,6 +75,15 @@ type
   Presented* = object ## What a present path reports back
     outcome*: StreamWrite ## how much of the frame went out
     style*: CursorStyle ## the cursor style the terminal now shows
+
+  InlineAnchor* = object ## Where a `plan` proc puts an inline viewport
+    origin*: int ## the viewport's first screen row
+    height*: int ## the viewport's rows: the height asked for, at most the terminal's
+    lines*: int ## line feeds to write first, from the cursor
+    cursorRow*: int ## the cursor's row in the viewport after them
+
+const InlineQueryTimeoutMs* = 2000
+  ## How long anchoring waits for the cursor position, as crossterm does.
 
 const noCursor* = CursorRequest()
   ## The request of a path that leaves the cursor alone (`draw`, the low-level
@@ -122,6 +137,72 @@ proc setViewport*(s: var ScreenState, inline: bool, originRow: int = 0) =
     s.inline = inline
     s.originRow = row
     s.invalidate()
+
+proc viewportRows(termHeight, height: int): int =
+  max(min(height, termHeight), 1)
+
+proc planInline*(
+    reply: Option[Position], cursorRow, termHeight, height: int
+): InlineAnchor =
+  ## Place an inline viewport of `height` rows (at most `termHeight`) as
+  ## Ratatui does: the cursor is on the row of `reply` and should end up on
+  ## viewport row `cursorRow` (-1: the row above the viewport). Append the
+  ## rows the viewport needs below the cursor, and move the origin up by the
+  ## rows that scrolled the screen. With no reply, line feeds free the bottom
+  ## rows wherever the cursor is, and the last row stands in for the cursor's
+  ## unknown row: nothing asks again.
+  result.height = viewportRows(termHeight, height)
+  if reply.isNone:
+    result.origin = max(termHeight - result.height, 0)
+    result.lines = result.height
+    result.cursorRow = result.height - 1
+    return
+  let row = reply.get.y
+  result.lines = max(result.height - cursorRow - 1, 0)
+  let missing = max(result.lines - max(termHeight - row - 1, 0), 0)
+  result.origin =
+    clamp(row - missing - cursorRow, 0, max(termHeight - result.height, 0))
+  result.cursorRow = max(min(row + result.lines, termHeight - 1) - result.origin, 0)
+
+proc planStart*(reply: Option[Position], termHeight, height: int): InlineAnchor =
+  ## `planInline` at start: from the cursor row, or the next row when the
+  ## cursor is not in column 0, so a prompt such as `Name: ` stays.
+  let cursorRow = if reply.isSome and reply.get.x != 0: -1 else: 0
+  planInline(reply, cursorRow, termHeight, height)
+
+proc planBottom*(cursorRow, termHeight, height: int): InlineAnchor =
+  ## The bottom rows, for a resize the terminal is not asked about. No line
+  ## feeds: they would scroll the viewport into the scrollback each time. The
+  ## cursor's row is kept as it was.
+  result.height = viewportRows(termHeight, height)
+  result.origin = max(termHeight - result.height, 0)
+  result.cursorRow = cursorRow
+
+proc enterInline*(s: var ScreenState, anchor: InlineAnchor) =
+  ## Record the inline viewport `anchor` places, once its line feeds went out,
+  ## and arm `takeExitMove`. The screen becomes unknown even at the same
+  ## origin: the line feeds may have scrolled it.
+  s.setViewport(true, anchor.origin)
+  s.invalidate()
+  s.height = anchor.height
+  s.cursorRow = anchor.cursorRow
+  s.exitArmed = true
+
+proc viewportSize*(s: ScreenState, termSize: Size): Size =
+  ## The size frames are drawn at: `termSize`, or its width by the inline
+  ## viewport's height.
+  if s.inline:
+    size(termSize.width, s.height)
+  else:
+    termSize
+
+proc takeExitMove*(s: var ScreenState): string =
+  ## Inline, once per `enterInline`: the bytes that put the cursor at the start
+  ## of the row below the viewport, so the shell continues under the last
+  ## frame. CR LF, because raw mode turns off the LF to CR LF mapping.
+  if s.inline and s.exitArmed:
+    s.exitArmed = false
+    result = makeCursorPositionSeq(0, s.originRow + s.height - 1) & "\r\n"
 
 proc planFrame*(
     s: ScreenState, buffer: Buffer, cursor: CursorRequest, wrap: bool

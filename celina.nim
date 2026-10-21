@@ -74,8 +74,11 @@ import celina/async/async_backend
 export unicode
 
 export
-  geometry, colors, buffer, events, layout, terminal, errors, app, app_delegation,
-  app_handlers, renderer, cursor, fps, windows, borders
+  geometry, colors, buffer, events, layout, errors, app, app_delegation, app_handlers,
+  renderer, cursor, fps, windows, borders
+
+# The inline viewport is set up through `AppConfig.viewport`.
+export terminal except anchorInline, reanchorInline, viewportSize
 
 # Exported only for screen_state, output_stream, async_terminal and the input
 # readers (events, async_io).
@@ -89,4 +92,5 @@ export async_backend, hasAsyncSupport, hasChronos, hasAsyncDispatch
 when hasAsyncSupport:
   import celina/async/[async_app, async_terminal, async_buffer, async_events]
 
-  export async_app, async_terminal, async_buffer, async_events
+  export async_app, async_buffer, async_events
+  export async_terminal except anchorInlineAsync, reanchorInlineAsync, viewportSize

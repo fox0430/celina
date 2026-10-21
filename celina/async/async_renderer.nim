@@ -49,8 +49,8 @@ proc resize*(renderer: AsyncRenderer, width, height: int) =
     buffer.resize(newArea)
 
 proc resize*(renderer: AsyncRenderer) =
-  ## Resize based on current terminal size
-  let size = renderer.terminal.getSize()
+  ## Resize based on current terminal size, or the inline viewport's
+  let size = renderer.terminal.viewportSize()
   renderer.resize(size.width, size.height)
 
 proc clear*(renderer: AsyncRenderer) {.inline.} =

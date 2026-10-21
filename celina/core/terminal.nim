@@ -15,13 +15,14 @@
 ##   # showCursor()              # Wrong - bypasses renderer
 ## ```
 
-import std/[termios, posix]
+import std/[termios, posix, options, strutils]
 
 import geometry, colors, buffer, errors, terminal_common, screen_state
 from output_stream import
   StreamReset, swAll, swPartial, srAbort, srOsc8, srSgr, srSyncEnd, outcomeOf,
   flushStdio, writeStream, setPendingReset
-from events import clearPendingByte, clearInputClosed, setStdinNonBlockingPinned
+from events import
+  clearPendingByte, clearInputClosed, setStdinNonBlockingPinned, queryCursorPosition
 
 export errors.TerminalError
 
@@ -34,6 +35,8 @@ type Terminal* = ref object ## Terminal interface for screen management
   focusEventsEnabled*: bool
   syncOutputEnabled*: bool
   screen: ScreenState ## what the screen shows; see screen_state.nim
+  inlineHeight: int ## inline: the height asked for; the viewport may be shorter
+  cursorReplies: bool ## inline: the last cursor position query was answered
   rawModeEnabled: bool # Track raw mode state internally
   originalTermios: Termios # Store original terminal settings per instance
   originalStdinFlags: cint # Saved stdin descriptor flags (for O_NONBLOCK restore)
@@ -82,6 +85,11 @@ proc updateSize*(terminal: Terminal) =
 proc getSize*(terminal: Terminal): Size =
   ## Get current terminal size
   terminal.size
+
+proc viewportSize*(terminal: Terminal): Size =
+  ## The size frames are drawn at: the terminal size, or its width by the
+  ## inline viewport's height.
+  terminal.screen.viewportSize(terminal.size)
 
 # Terminal creation and cleanup
 proc newTerminal*(): Terminal =
@@ -386,12 +394,14 @@ proc clearScreen*() =
 proc clearScreen*(terminal: Terminal) =
   ## Clear the entire screen and record it as blank, so the next `draw` writes
   ## only the cells that are not blank. Resets SGR first, and the output stream
-  ## sends the reset of a cut write first. Does not move the cursor.
+  ## sends the reset of a cut write first. Does not move the cursor. An inline
+  ## viewport is cleared from its first row down instead, and the cursor is
+  ## left there.
   ##
   ## Raises IOError if the clear cannot be written in full. A clear that sent
   ## nothing keeps the screen known; a partial one leaves it unknown, so the
   ## next `draw` is a full render.
-  var plan = terminal.screen.planClear(terminal.size)
+  var plan = terminal.screen.planClear(terminal.viewportSize)
   let outcome = outcomeOf(writeWithRetry(plan.bytes, plan.onPartial), plan.bytes.len)
   terminal.screen.finishClear(plan, outcome)
   if outcome != swAll:
@@ -479,6 +489,38 @@ proc renderFull*(terminal: Terminal, buffer: Buffer) =
 
 # Terminal setup and cleanup
 
+proc placeInline(terminal: Terminal, anchor: InlineAnchor) =
+  if anchor.lines > 0:
+    writeOrRaise("\n".repeat(anchor.lines))
+  terminal.screen.enterInline(anchor)
+
+proc anchorInline*(terminal: Terminal, height: int) =
+  ## Start an inline viewport of `height` rows at the cursor row, or the next
+  ## row when the cursor is not in column 0; at the bottom rows when the
+  ## terminal does not tell where the cursor is. Call it with raw mode on and
+  ## the size updated, then `clearScreen`. `cleanup` moves the cursor below it.
+  terminal.inlineHeight = height
+  let reply = queryCursorPosition(InlineQueryTimeoutMs)
+  terminal.cursorReplies = reply.isSome
+  terminal.placeInline(planStart(reply, terminal.size.height, height))
+
+proc reanchorInline*(terminal: Terminal) =
+  ## Move the inline viewport after a resize (call `updateSize` first, then
+  ## `clearScreen`), keeping the cursor on the viewport row it was on. Without
+  ## a reply, to the bottom rows, and the terminal is not asked again.
+  let termHeight = terminal.size.height
+  if terminal.cursorReplies:
+    let reply = queryCursorPosition(InlineQueryTimeoutMs)
+    terminal.cursorReplies = reply.isSome
+    if reply.isSome:
+      terminal.placeInline(
+        planInline(reply, terminal.screen.cursorRow, termHeight, terminal.inlineHeight)
+      )
+      return
+  terminal.placeInline(
+    planBottom(terminal.screen.cursorRow, termHeight, terminal.inlineHeight)
+  )
+
 proc cleanup*(terminal: Terminal) =
   ## Cleanup terminal, restoring original settings.
   ## Best effort - each step is guarded individually so a single failure
@@ -492,13 +534,16 @@ proc cleanup*(terminal: Terminal) =
   ## belongs in `EmergencyResetSeq` too.
   ##
   ## The first write sends the reset a cut frame needs (OSC 8, SGR, the
-  ## synchronized output block), so nothing has to be prepended here.
+  ## synchronized output block), so nothing has to be prepended here. After an
+  ## inline viewport, the cursor first goes below it, once.
   template guard(body: untyped) =
     try:
       body
     except CatchableError:
       discard
 
+  guard:
+    tryWrite(terminal.screen.takeExitMove())
   guard:
     showCursor()
   guard:

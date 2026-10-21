@@ -5,9 +5,21 @@
 
 import std/strutils
 
+type
+  ViewportKind* = enum
+    vkFullscreen ## The whole screen (default)
+    vkInline ## `height` rows from the cursor row, left in the scrollback on exit
+
+  Viewport* = object ## Where the app draws
+    case kind*: ViewportKind
+    of vkFullscreen:
+      discard
+    of vkInline:
+      height*: int ## Rows, at least 1; capped at the terminal height
+
 type AppConfig* = object ## Application configuration options
   title*: string ## Application title (for window managers)
-  alternateScreen*: bool ## Use alternate screen buffer
+  alternateScreen*: bool ## Use alternate screen buffer; inline viewports ignore it
   mouseCapture*: bool ## Enable mouse event capture
   bracketedPaste*: bool ## Enable bracketed paste mode for paste detection
   focusEvents*: bool ## Enable focus event reporting (FocusIn/FocusOut)
@@ -25,6 +37,32 @@ type AppConfig* = object ## Application configuration options
     ## code is not compiled because chronos signal APIs are unavailable.
     ## The sync `App` uses `installDefaultCrashGuard` (an explicit function
     ## call) instead of a config flag for Ctrl-C handling.
+  viewport*: Viewport
+    ## Fullscreen (default), or inline: `height` rows from the cursor row (the
+    ## next row if the cursor is not in column 0), left in the scrollback on
+    ## exit with the cursor below them. After a quit, inline runs the render
+    ## handler once more unless the last tick drew, so that frame shows the
+    ## last events. Inline asks the terminal for the cursor position at start
+    ## and on resize (in `rawMode` only), waiting up to 2 s; without an answer
+    ## it uses the bottom rows and stops asking. Resizes are best effort: lines
+    ## the terminal reflows can stay behind, and without an answer a resize can
+    ## leave the old rows or erase the lines just above the viewport. Lay out
+    ## by `buffer.area`, not `getTerminalSize`. Not supported inline yet:
+    ## `mouseCapture`, `windowMode` and `suspend`; `emergencyRestore` may leave
+    ## the cursor in the viewport.
+
+proc `==`*(a, b: Viewport): bool =
+  ## Needed because `Viewport` is a case object: the generic `==` for objects
+  ## does not compile for one, nor for an `AppConfig` that holds it.
+  a.kind == b.kind and (a.kind == vkFullscreen or a.height == b.height)
+
+proc `$`*(viewport: Viewport): string =
+  ## String representation of Viewport for debugging
+  case viewport.kind
+  of vkFullscreen:
+    "fullscreen"
+  of vkInline:
+    "inline(" & $viewport.height & ")"
 
 proc `$`*(config: AppConfig): string =
   ## String representation of AppConfig for debugging
@@ -45,6 +83,8 @@ proc `$`*(config: AppConfig): string =
   if config.installSignalHandler:
     parts.add("installSignalHandler")
   parts.add("targetFps: " & $config.targetFps)
+  if config.viewport.kind != vkFullscreen:
+    parts.add("viewport: " & $config.viewport)
   "AppConfig(" & parts.join(", ") & ")"
 
 const DefaultAppConfig* = AppConfig(
@@ -57,6 +97,7 @@ const DefaultAppConfig* = AppConfig(
   windowMode: false,
   targetFps: 60,
   installSignalHandler: false,
+  viewport: Viewport(kind: vkFullscreen),
 )
 
 proc defaultAppConfig*(): AppConfig {.inline.} =
@@ -107,6 +148,11 @@ proc withInstallSignalHandler*(config: AppConfig, enabled: bool): AppConfig {.in
   ## Return a new config with install-signal-handler setting (chronos only)
   result = config
   result.installSignalHandler = enabled
+
+proc withViewport*(config: AppConfig, viewport: Viewport): AppConfig {.inline.} =
+  ## Return a new config with the viewport setting
+  result = config
+  result.viewport = viewport
 
 # Version Information
 

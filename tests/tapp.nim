@@ -6,6 +6,8 @@ import ../celina
 import ../celina/core/app {.all.}
 import ../celina/core/terminal {.all.}
 import ../celina/core/tick_common
+from ../celina/core/screen_state import originRow
+from ../celina/core/terminal_common import makeResetAndClearBelowSeq
 
 when defined(posix):
   import std/posix
@@ -1266,5 +1268,332 @@ suite "App run lifecycle":
       finally:
         app.restoreTerminal()
       check getMonoTime() - app.timings.lastEventTime < initDuration(seconds = 1)
+
+suite "App inline viewport":
+  privateAccess(App)
+  privateAccess(Terminal)
+
+  test "newApp rejects an inline viewport shorter than 1 row":
+    expect ValueError:
+      discard newApp(DefaultAppConfig.withViewport(Viewport(kind: vkInline, height: 0)))
+    check newApp(DefaultAppConfig.withViewport(Viewport(kind: vkInline, height: 1))) !=
+      nil
+
+  when defined(posix):
+    proc inlineApp(height: int): App =
+      # `alternateScreen` stays on: inline must ignore it. Raw mode is off
+      # because the pty already is raw: entering it would flush the typed reply.
+      result = newApp(
+        DefaultAppConfig.withRawMode(false).withViewport(
+          Viewport(kind: vkInline, height: height)
+        )
+      )
+
+    test "a run starts at the cursor row and leaves the cursor below the frame":
+      var output: string
+      # The cursor is on row 2, past column 0, so the viewport starts on row 3.
+      let ran = withRawPty(
+        20,
+        10,
+        "\e[3;5R",
+        output,
+        proc() =
+          let app = inlineApp(3)
+          app.onRender proc(buffer: var Buffer, app: App) =
+            check buffer.area == rect(0, 0, 20, 3)
+            buffer.setString(0, 0, "hello")
+            app.quit()
+          app.run(),
+      )
+      if not ran:
+        skip()
+      else:
+        check AlternateScreenEnter notin output
+        check ClearScreenSeq notin output
+        check CursorPositionQuerySeq & "\n\n\n" & makeResetAndClearBelowSeq(3) in output
+        # The clear records the viewport, so the first frame is a diff.
+        check output.count(makeResetAndClearBelowSeq(3)) == 1
+        check makeCursorPositionSeq(0, 3) & "hello" in output
+        check output.endsWith(makeCursorPositionSeq(0, 5) & "\r\n" & ShowCursorSeq)
+
+    test "without a reply, a run uses the bottom rows":
+      var output: string
+      let ran = withRawPty(
+        20,
+        10,
+        "",
+        output,
+        proc() =
+          # A pipe on stdin gets no reply, and is not asked.
+          withStdinInput(
+            "",
+            proc() =
+              let app = inlineApp(3)
+              app.onRender proc(buffer: var Buffer, app: App) =
+                buffer.setString(0, 0, "hello")
+                app.quit()
+              app.run(),
+          ),
+      )
+      if not ran:
+        skip()
+      else:
+        check CursorPositionQuerySeq notin output
+        check "\n\n\n" & makeResetAndClearBelowSeq(7) in output
+        check output.endsWith(makeCursorPositionSeq(0, 9) & "\r\n" & ShowCursorSeq)
+
+    test "the frame after a quit shows the last event":
+      var output: string
+      let ran = withRawPty(
+        20,
+        10,
+        "\e[1;1Rx",
+        output,
+        proc() =
+          let app = inlineApp(2)
+          var text = "waiting"
+          app.onEvent proc(event: Event): EventResult =
+            if event.kind == EventKind.Key and event.key.char == "x":
+              text = "pressed"
+              return erQuit
+            erContinue
+          app.onRender proc(buffer: var Buffer) =
+            buffer.setString(0, 0, text)
+          app.run(),
+      )
+      if not ran:
+        skip()
+      else:
+        check "pressed" in output
+
+    test "a tick that drew before quitting is not drawn again":
+      var renders = 0
+      var output: string
+      let ran = withRawPty(
+        20,
+        10,
+        "\e[1;1R",
+        output,
+        proc() =
+          let app = inlineApp(2)
+          app.onRender proc(buffer: var Buffer, app: App) =
+            inc renders
+            app.quit()
+          app.run(),
+      )
+      if not ran:
+        skip()
+      else:
+        check renders == 1
+
+    test "a resize in the tick that quit is applied before the last frame":
+      var output: string
+      let ran = withRawPty(
+        20,
+        10,
+        output,
+        proc(master: cint) =
+          typeInto(master, "\e[3;1Rx")
+          let app = inlineApp(3)
+          app.onEvent proc(event: Event): EventResult =
+            if event.kind == EventKind.Key and event.key.char == "x":
+              # The terminal shrinks and drops the rows above the viewport.
+              resizePty(master, 20, 6)
+              typeInto(master, "\e[1;1R")
+              return erQuit
+            erContinue
+          app.run(),
+      )
+      if not ran:
+        skip()
+      else:
+        check output.count(CursorPositionQuerySeq) == 2
+        check makeResetAndClearBelowSeq(0) in output
+        check output.endsWith(makeCursorPositionSeq(0, 2) & "\r\n" & ShowCursorSeq)
+
+    test "after a resize at quit, a tick that drew is drawn again":
+      var output: string
+      let ran = withRawPty(
+        20,
+        10,
+        output,
+        proc(master: cint) =
+          typeInto(master, "\e[3;1Rx")
+          let app = inlineApp(3)
+          var resized = false
+          app.onEvent proc(event: Event, app: App): EventResult =
+            if event.kind == EventKind.Key and event.key.char == "x":
+              resizePty(master, 20, 6)
+              resized = true
+              # The tick goes on to draw, at the old origin.
+              app.quit()
+            erContinue
+          app.onTick proc(app: App): TickResult =
+            # After the tick has read its input, so the reply is left for the
+            # query.
+            if resized:
+              typeInto(master, "\e[1;1R")
+              resized = false
+            trContinue
+          app.onRender proc(buffer: var Buffer) =
+            buffer.setString(0, 0, "hello")
+          app.run(),
+      )
+      if not ran:
+        skip()
+      else:
+        # The resize clears the viewport, so the frame must follow that clear.
+        let clear = output.rfind(makeResetAndClearBelowSeq(0))
+        check clear >= 0
+        check "hello" in output[max(clear, 0) .. ^1]
+
+    test "a quit when the size cannot be read is not taken for a resize":
+      var output: string
+      var raised = false
+      var app: App
+      let ran = withRawPty(
+        20,
+        10,
+        "\e[3;1Rx",
+        output,
+        proc() =
+          app = inlineApp(3)
+          var fds: array[2, cint]
+          doAssert pipe(fds) == 0
+          app.onEvent proc(event: Event): EventResult =
+            if event.kind == EventKind.Key and event.key.char == "x":
+              # As on a hung-up terminal, the size cannot be read any more.
+              discard dup2(fds[1], STDOUT_FILENO)
+              return erQuit
+            erContinue
+          try:
+            app.run()
+          except CatchableError:
+            raised = true
+          finally:
+            discard close(fds[0])
+            discard close(fds[1]),
+      )
+      if not ran:
+        skip()
+      else:
+        check not raised
+        check app.getBuffer().area == rect(0, 0, 20, 3)
+
+    test "a second run draws its own last frame":
+      var output: string
+      var renders = 0
+      let ran = withRawPty(
+        20,
+        10,
+        output,
+        proc(master: cint) =
+          let app = inlineApp(2)
+          var quitInRender = true
+          app.onRender proc(buffer: var Buffer, app: App) =
+            inc renders
+            if quitInRender:
+              app.quit()
+          app.onEvent proc(event: Event): EventResult =
+            if event.kind == EventKind.Key and event.key.char == "x":
+              return erQuit
+            erContinue
+          typeInto(master, "\e[1;1R")
+          app.run()
+          check renders == 1
+
+          # Quits before it draws, so only the last frame shows the run.
+          quitInRender = false
+          typeInto(master, "\e[1;1Rx")
+          app.run()
+          check(renders == 2),
+      )
+      if not ran:
+        skip()
+
+    test "a resize asks again and caps the height at the terminal's":
+      var output: string
+      let ran = withRawPty(
+        20,
+        10,
+        output,
+        proc(master: cint) =
+          typeInto(master, "\e[3;1R")
+          let app = inlineApp(8)
+          app.setup()
+          try:
+            check app.terminal.screen.originRow == 2
+            app.render()
+
+            # Shrunk below the height asked for, with the cursor on the last row.
+            resizePty(master, 20, 5)
+            typeInto(master, "\e[5;1R")
+            app.handleResize()
+            check app.terminal.screen.originRow == 0
+            check app.getBuffer().area == rect(0, 0, 20, 5)
+            app.render()
+
+            # Grown back, the viewport takes the height asked for again.
+            resizePty(master, 20, 10)
+            typeInto(master, "\e[1;1R")
+            app.handleResize()
+            check app.terminal.screen.originRow == 0
+            check app.getBuffer().area == rect(0, 0, 20, 8)
+          finally:
+            app.restoreTerminal(),
+      )
+      if not ran:
+        skip()
+      else:
+        check output.count(CursorPositionQuerySeq) == 3
+        check makeResetAndClearBelowSeq(0) in output
+        check output.endsWith(makeCursorPositionSeq(0, 7) & "\r\n" & ShowCursorSeq)
+
+    test "after a timeout, a resize moves to the bottom rows without asking":
+      var output: string
+      let ran = withRawPty(
+        20,
+        10,
+        output,
+        proc(master: cint) =
+          typeInto(master, "\e[3;1R")
+          let app = inlineApp(3)
+          app.setup()
+          try:
+            app.terminal.cursorReplies = false
+            resizePty(master, 20, 6)
+            app.handleResize()
+            check app.terminal.screen.originRow == 3
+          finally:
+            app.restoreTerminal(),
+      )
+      if not ran:
+        skip()
+      else:
+        check output.count(CursorPositionQuerySeq) == 1
+        # Only setup's 2 and the exit move's: line feeds here would scroll the
+        # viewport into the scrollback.
+        check output.count('\n') == 3
+        check makeResetAndClearBelowSeq(3) in output
+
+    test "a second restore after the run does not move the cursor again":
+      var output: string
+      let ran = withRawPty(
+        20,
+        10,
+        "\e[3;1R",
+        output,
+        proc() =
+          let app = inlineApp(3)
+          app.onRender proc(buffer: var Buffer, app: App) =
+            app.quit()
+          app.run()
+          # As a crash guard would after `run` returned.
+          app.restoreTerminal(),
+      )
+      if not ran:
+        skip()
+      else:
+        check output.count(makeCursorPositionSeq(0, 4) & "\r\n") == 1
 
 {.pop.}

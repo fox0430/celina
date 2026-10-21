@@ -135,6 +135,13 @@ suite "Celina Main Module Tests":
       check compiles(EmergencyResetSeq)
       check compiles(EmergencyResetAltScreenSeq)
 
+    test "the inline viewport is reached through AppConfig only":
+      let terminal = newTerminal()
+      check not compiles(terminal.anchorInline(3))
+      check not compiles(terminal.reanchorInline())
+      check not compiles(terminal.viewportSize())
+      check compiles(DefaultAppConfig.withViewport(Viewport(kind: vkInline, height: 3)))
+
   suite "Window Management API":
     test "app without window mode handles gracefully":
       let app = newApp()
@@ -204,6 +211,12 @@ when hasAsyncSupport:
       check declared(newAsyncBuffer)
       check declared(AsyncTerminal)
       check declared(newAsyncTerminal)
+
+    test "the async inline viewport procs are not re-exported":
+      let terminal = newAsyncTerminal()
+      check not compiles(terminal.anchorInlineAsync(nil, 3))
+      check not compiles(terminal.reanchorInlineAsync(nil))
+      check not compiles(terminal.viewportSize())
 
   suite "Backend Configuration":
     test "async backend detection":
