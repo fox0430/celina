@@ -57,6 +57,7 @@ proc fullInput(): Input =
   result.cursorStyle = style(Yellow)
   result.selectionStyle = style(Magenta)
   result.borderStyle = bkDouble
+  result.borders = {bsTop, bsLeft}
   result.borderNormalStyle = style(Cyan)
   result.borderFocusedStyle = style(White)
   result.onTextChanged = proc(text: string) =
@@ -200,6 +201,14 @@ suite "Builder field preservation (structural)":
     test "withMaxLength changes only maxLength":
       let src = fullInput()
       check droppedFields(src, src.withMaxLength(9), ["maxLength"]) == noDrop
+
+    test "withBorders changes only borders":
+      let src = fullInput()
+      check droppedFields(src, src.withBorders({bsBottom}), ["borders"]) == noDrop
+
+    test "withBorderKind changes only borderStyle":
+      let src = fullInput()
+      check droppedFields(src, src.withBorderKind(bkRounded), ["borderStyle"]) == noDrop
 
     test "withStyles (all overridden) changes only the style fields":
       let src = fullInput()

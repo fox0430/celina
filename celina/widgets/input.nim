@@ -10,7 +10,7 @@ import ../core/[geometry, buffer, colors, events, borders]
 
 export
   borders.BorderKind, borders.BorderChars, borders.getBorderChars,
-  borders.defaultBorderChars
+  borders.defaultBorderChars, borders.BorderSide, borders.allBorders
 
 {.push warning[Deprecated]: off.}
 export
@@ -63,6 +63,10 @@ type
     cursorStyle*: Style
     selectionStyle*: Style
     borderStyle*: BorderKind
+    borders*: set[BorderSide] = allBorders
+      ## Which edges draw a border line. Ignored while `borderStyle` is `bkNone`.
+      # A field default rather than only a constructor default, so an `Input`
+      # built directly (or a subclass) keeps all four edges instead of `{}`.
     borderNormalStyle*: Style
     borderFocusedStyle*: Style
     maxLength*: int # Maximum input length (0 = unlimited)
@@ -101,6 +105,7 @@ proc newInput*(
     readOnly: bool = false,
     password: bool = false,
     callbacks: InputCallbacks = InputCallbacks(),
+    borders: set[BorderSide] = allBorders,
 ): Input =
   ## Create a new Input widget using `InputStyle` and `InputCallbacks` aggregates.
   Input(
@@ -113,6 +118,7 @@ proc newInput*(
     cursorStyle: style.cursor,
     selectionStyle: style.selection,
     borderStyle: border,
+    borders: borders,
     borderNormalStyle: style.borderNormal,
     borderFocusedStyle: style.borderFocused,
     maxLength: maxLength,
@@ -180,9 +186,12 @@ proc input*(
     readOnly: bool = false,
     password: bool = false,
     callbacks: InputCallbacks = InputCallbacks(),
+    borders: set[BorderSide] = allBorders,
 ): Input =
   ## Convenience constructor for Input widget (aggregate form).
-  newInput(placeholder, style, border, maxLength, readOnly, password, callbacks)
+  newInput(
+    placeholder, style, border, maxLength, readOnly, password, callbacks, borders
+  )
 
 proc input*(
     placeholder: string,
@@ -664,54 +673,57 @@ proc passwordMask(clusterWidth: int): string {.inline.} =
   else:
     "*" # narrow asterisk (1 col)
 
+# Border layout
+proc hasBorder(widget: Input, side: BorderSide): bool {.inline.} =
+  ## True when an edge is actually drawn on `side`: selected in `borders`
+  ## and the glyph set is not `bkNone`.
+  side in widget.borders and widget.borderStyle != bkNone
+
+proc insets(widget: Input): tuple[top, right, bottom, left: int] =
+  ## Per-side space the drawn border edges reserve (0 or 1). Shared by
+  ## `contentArea`, `getMinSize` and `getPreferredSize`.
+  (
+    top: (if widget.hasBorder(bsTop): 1 else: 0),
+    right: (if widget.hasBorder(bsRight): 1 else: 0),
+    bottom: (if widget.hasBorder(bsBottom): 1 else: 0),
+    left: (if widget.hasBorder(bsLeft): 1 else: 0),
+  )
+
+proc contentArea(widget: Input, area: Rect): Rect =
+  ## The area inside the drawn border edges; the text is drawn on its first
+  ## row (`y`).
+  let ins = widget.insets()
+  rect(
+    area.x + ins.left,
+    area.y + ins.top,
+    max(0, area.width - ins.left - ins.right),
+    max(0, area.height - ins.top - ins.bottom),
+  )
+
 # Input widget methods
 method render*(widget: Input, area: Rect, buf: var Buffer) =
   ## Render the input widget
-  if area.isEmpty:
-    return
+  let content = widget.contentArea(area)
+  if content.isEmpty:
+    return # Also covers an area too small for its border
 
-  # Determine content area (inside border if any)
-  var contentArea = area
-  if widget.borderStyle != bkNone:
-    # Adjust content area for border
-    if area.width <= 2 or area.height <= 2:
-      return # Too small for border
-    contentArea = rect(area.x + 1, area.y + 1, area.width - 2, area.height - 2)
-
-    # Draw border
-    let borderStyle =
-      if widget.keyboardFocused: widget.borderFocusedStyle else: widget.borderNormalStyle
-    let bc = getBorderChars(widget.borderStyle)
-
-    # Draw corners
-    if bc.topLeft.len > 0:
-      buf.setString(area.x, area.y, bc.topLeft, borderStyle)
-    if bc.topRight.len > 0:
-      buf.setString(area.x + area.width - 1, area.y, bc.topRight, borderStyle)
-    if bc.bottomLeft.len > 0:
-      buf.setString(area.x, area.y + area.height - 1, bc.bottomLeft, borderStyle)
-    if bc.bottomRight.len > 0:
-      buf.setString(
-        area.x + area.width - 1, area.y + area.height - 1, bc.bottomRight, borderStyle
-      )
-
-    # Draw horizontal lines
-    for x in 1 ..< (area.width - 1):
-      if bc.horizontal.len > 0:
-        buf.setString(area.x + x, area.y, bc.horizontal, borderStyle)
-        buf.setString(area.x + x, area.y + area.height - 1, bc.horizontal, borderStyle)
-
-    # Draw vertical lines
-    for y in 1 ..< (area.height - 1):
-      if bc.vertical.len > 0:
-        buf.setString(area.x, area.y + y, bc.vertical, borderStyle)
-        buf.setString(area.x + area.width - 1, area.y + y, bc.vertical, borderStyle)
+  let borderStyle =
+    if widget.keyboardFocused: widget.borderFocusedStyle else: widget.borderNormalStyle
+  buf.drawBox(
+    area,
+    getBorderChars(widget.borderStyle),
+    top = widget.hasBorder(bsTop),
+    right = widget.hasBorder(bsRight),
+    bottom = widget.hasBorder(bsBottom),
+    left = widget.hasBorder(bsLeft),
+    style = borderStyle,
+  )
 
   let currentStyle =
     if widget.keyboardFocused: widget.focusedStyle else: widget.normalStyle
 
   # Calculate visible text range using content area
-  let (_, visStart, visEnd, _) = widget.calculateVisibleRange(contentArea.width)
+  let (_, visStart, visEnd, _) = widget.calculateVisibleRange(content.width)
 
   if widget.state.text.len == 0:
     # Show placeholder text - clear with placeholder style background
@@ -720,18 +732,16 @@ method render*(widget: Input, area: Rect, buf: var Buffer) =
     )
 
     # Clear the content area with placeholder background
-    for x in 0 ..< contentArea.width:
-      buf.setString(contentArea.x + x, contentArea.y, " ", backgroundStyle)
+    for x in 0 ..< content.width:
+      buf.setString(content.x + x, content.y, " ", backgroundStyle)
 
     if widget.placeholder.len > 0:
-      let placeholderText = widget.placeholder.truncateToWidth(contentArea.width)
-      buf.setString(
-        contentArea.x, contentArea.y, placeholderText, widget.placeholderStyle
-      )
+      let placeholderText = widget.placeholder.truncateToWidth(content.width)
+      buf.setString(content.x, content.y, placeholderText, widget.placeholderStyle)
   else:
     # Clear the content area with input background for text display
-    for x in 0 ..< contentArea.width:
-      buf.setString(contentArea.x + x, contentArea.y, " ", currentStyle)
+    for x in 0 ..< content.width:
+      buf.setString(content.x + x, content.y, " ", currentStyle)
 
     # Render visible text grapheme cluster by grapheme cluster so combining
     # marks / VS16 / ZWJ sequences stay folded into one (possibly wide) cell —
@@ -752,7 +762,7 @@ method render*(widget: Input, area: Rect, buf: var Buffer) =
       if leadIdx >= visEnd:
         break
       # Stop if the cluster would overflow the content area.
-      if x + clusterWidth > contentArea.width:
+      if x + clusterWidth > content.width:
         break
 
       let charStyle =
@@ -770,7 +780,7 @@ method render*(widget: Input, area: Rect, buf: var Buffer) =
           passwordMask(clusterWidth)
         else:
           clusterText
-      buf.setString(contentArea.x + x, contentArea.y, drawText, charStyle)
+      buf.setString(content.x + x, content.y, drawText, charStyle)
       x += clusterWidth
 
   # Note: Cursor rendering is handled by the application level
@@ -782,33 +792,26 @@ proc getCursorPosition*(widget: Input, area: Rect): tuple[x, y: int, visible: bo
   if not widget.keyboardFocused:
     return (-1, -1, false)
 
-  # Determine content area (inside border if any)
-  var contentArea = area
-  if widget.borderStyle != bkNone:
-    if area.width <= 2 or area.height <= 2:
-      return (-1, -1, false) # Too small for border
-    contentArea = rect(area.x + 1, area.y + 1, area.width - 2, area.height - 2)
+  let content = widget.contentArea(area)
+  if content.isEmpty:
+    return (-1, -1, false)
 
-  let (_, _, _, cursorX) = widget.calculateVisibleRange(contentArea.width)
+  let (_, _, _, cursorX) = widget.calculateVisibleRange(content.width)
 
-  if cursorX >= 0 and cursorX < contentArea.width:
-    return (contentArea.x + cursorX, contentArea.y, true)
+  if cursorX >= 0 and cursorX < content.width:
+    return (content.x + cursorX, content.y, true)
   else:
     return (-1, -1, false)
 
 method getMinSize*(widget: Input): Size =
   ## Get minimum size for input widget
-  if widget.borderStyle != bkNone:
-    size(3, 3) # Border needs at least 3x3
-  else:
-    size(1, 1)
+  let ins = widget.insets()
+  size(1 + ins.left + ins.right, 1 + ins.top + ins.bottom)
 
 method getPreferredSize*(widget: Input, available: Size): Size =
   ## Get preferred size for input widget
-  if widget.borderStyle != bkNone:
-    size(available.width, 3) # Border needs height of 3
-  else:
-    size(available.width, 1)
+  let ins = widget.insets()
+  size(available.width, 1 + ins.top + ins.bottom)
 
 method canFocus*(widget: Input): bool =
   ## Input widgets can receive focus
@@ -829,6 +832,17 @@ proc withMaxLength*(widget: Input, maxLength: int): Input =
   ## Create a copy with different max length
   result = copyWidget(widget)
   result.maxLength = maxLength
+
+proc withBorders*(widget: Input, borders: set[BorderSide]): Input =
+  ## Create a copy with a different set of drawn edges. Has no visible effect
+  ## while `borderStyle` is `bkNone`; pick a glyph set with `withBorderKind`.
+  result = copyWidget(widget)
+  result.borders = borders
+
+proc withBorderKind*(widget: Input, kind: BorderKind): Input =
+  ## Create a copy with a different border glyph set (`borderStyle`).
+  result = copyWidget(widget)
+  result.borderStyle = kind
 
 proc withStyles*(
     widget: Input,
