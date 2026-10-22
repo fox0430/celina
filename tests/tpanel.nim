@@ -2,7 +2,7 @@
 
 import std/unittest
 
-import ../celina/widgets/[panel, text, base]
+import ../celina/widgets/[panel, text, base, input]
 import ../celina/core/[buffer, geometry, colors, borders, events]
 
 type StubChild = ref object of Widget
@@ -303,3 +303,24 @@ suite "Panel Widget Tests":
         rect(0, 0, 10, 6),
       )
       check r == erContinue
+
+  suite "Wrapping an Input":
+    test "Panel and Input share the border symbols":
+      let p = newPanel(
+        borders = {bsTop, bsBottom},
+        borderKind = bkRounded,
+        child = newInput(placeholder = "name"),
+      )
+      var buf = newBuffer(12, 3)
+      p.render(rect(0, 0, 12, 3), buf)
+      for x in 0 ..< 12:
+        check buf[x, 0].symbol == "─"
+        check buf[x, 2].symbol == "─"
+      check buf[0, 1].symbol == "n"
+      check buf[3, 1].symbol == "e"
+
+      check p.withBorders(allBorders).borders == allBorders
+      check p.withBorderKind(bkSingle).borderKind == bkSingle
+      let i = newInput()
+      check i.withBorders(allBorders).borders == allBorders
+      check i.withBorderKind(bkSingle).borderStyle == bkSingle

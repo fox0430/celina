@@ -9,9 +9,10 @@
 ## simple borders (windows, input) and grid borders (table) via the extra
 ## intersection glyph fields.
 ##
-## It also provides `drawBox`, the single edge/corner painter shared by
-## `core/windows` and `widgets/panel` so the two framing primitives can never
-## disagree on how a box is drawn.
+## It also provides `BorderSide`, the per-edge selector shared by widgets
+## that draw a subset of their edges, and `drawBox`, the single edge/corner
+## painter shared by `core/windows`, `widgets/panel` and `widgets/input` so
+## the framing primitives can never disagree on how a box is drawn.
 
 import buffer, geometry, colors
 
@@ -28,6 +29,14 @@ type
     bkDouble ## Double-line box: ╔═╗ ║ ╚═╝
     bkRounded ## Rounded corners: ╭─╮ │ ╰─╯
     bkSimple ## ASCII fallback: +-+ | +-+
+
+  BorderSide* = enum
+    ## A single edge of a frame. Combine sides in a `set[BorderSide]` to
+    ## select which edges are drawn (e.g. `{bsTop, bsLeft}`).
+    bsTop
+    bsRight
+    bsBottom
+    bsLeft
 
   BorderChars* = object ## Characters used for drawing borders
     horizontal*: string
@@ -48,6 +57,9 @@ type
     ## their unprefixed values. Centralized here so that importing both
     ## `widgets/input` and `widgets/table` does not produce ambiguous-identifier
     ## errors for symbols that previously lived in each widget module.
+
+const allBorders* = {bsTop, bsRight, bsBottom, bsLeft}
+  ## Convenience set selecting every edge.
 
 proc getBorderChars*(kind: BorderKind): BorderChars =
   ## Get border characters for the specified border kind.

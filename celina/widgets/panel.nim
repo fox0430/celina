@@ -29,17 +29,11 @@ import base
 
 import ../core/[geometry, buffer, colors, borders]
 
-export borders.BorderKind, borders.BorderChars, borders.getBorderChars
+export
+  borders.BorderKind, borders.BorderChars, borders.getBorderChars, borders.BorderSide,
+  borders.allBorders
 
 type
-  BorderSide* = enum
-    ## A single edge of a `Panel`. Combine sides in a `set[BorderSide]` to
-    ## select which edges are drawn (e.g. `{bsTop, bsLeft}`).
-    bsTop
-    bsRight
-    bsBottom
-    bsLeft
-
   TitleAlignment* = enum
     ## Horizontal placement of the title along the top edge.
     taLeft
@@ -74,9 +68,6 @@ proc padding*(horizontal, vertical: int): Padding {.inline.} =
 proc padding*(top, right, bottom, left: int): Padding {.inline.} =
   ## Per-side padding.
   Padding(top: top, right: right, bottom: bottom, left: left)
-
-const allBorders* = {bsTop, bsRight, bsBottom, bsLeft}
-  ## Convenience set selecting every edge.
 
 proc newPanel*(
     borders: set[BorderSide] = allBorders,

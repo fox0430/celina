@@ -5,6 +5,8 @@ import std/[unittest, unicode]
 import ../celina/core/[geometry, colors, buffer, events]
 import ../celina/widgets/input {.all.}
 
+type SubInput = ref object of Input
+
 suite "Input Widget Tests":
   suite "Input Creation Tests":
     test "Basic input creation":
@@ -864,3 +866,128 @@ suite "Input Widget Tests":
       check none.topLeft == ""
       check none.horizontal == ""
       check none.vertical == ""
+
+  suite "Selective Border Tests":
+    test "Default borders":
+      check newInput().borders == allBorders
+      check input().borders == allBorders
+
+    test "Direct construction keeps all borders":
+      let direct = Input(borderStyle: bkSingle)
+      check direct.borders == allBorders
+      check direct.getMinSize() == size(3, 3)
+      check SubInput(borderStyle: bkSingle).borders == allBorders
+
+    test "input forwards borders":
+      check input(border = bkSingle, borders = {bsTop}).borders == {bsTop}
+
+    test "Top and bottom only":
+      let input = newInput(border = bkRounded, borders = {bsTop, bsBottom})
+      input.setText("Hi")
+      var buf = newBuffer(10, 3)
+      input.render(rect(0, 0, 10, 3), buf)
+      for x in 0 ..< 10:
+        check buf[x, 0].symbol == "─"
+        check buf[x, 2].symbol == "─"
+      check buf[0, 1].symbol == "H"
+      check buf[1, 1].symbol == "i"
+
+    test "Left and right only":
+      let input = newInput(border = bkSingle, borders = {bsLeft, bsRight})
+      input.setText("Hi")
+      var buf = newBuffer(10, 1)
+      input.render(rect(0, 0, 10, 1), buf)
+      check buf[0, 0].symbol == "│"
+      check buf[9, 0].symbol == "│"
+      check buf[1, 0].symbol == "H"
+      check buf[2, 0].symbol == "i"
+
+    test "Top and left":
+      let input = newInput(border = bkSingle, borders = {bsTop, bsLeft})
+      input.setText("Hi")
+      var buf = newBuffer(10, 2)
+      input.render(rect(0, 0, 10, 2), buf)
+      check buf[0, 0].symbol == "┌"
+      check buf[9, 0].symbol == "─"
+      check buf[0, 1].symbol == "│"
+      check buf[1, 1].symbol == "H"
+
+    test "bkNone ignores borders":
+      let input = newInput(border = bkNone, borders = allBorders)
+      input.setText("Hi")
+      var buf = newBuffer(10, 3)
+      buf.fill(rect(0, 0, 10, 3), cell("x"))
+      let before = buf
+      input.render(rect(0, 0, 10, 3), buf)
+      check buf[0, 0].symbol == "H"
+      check buf[1, 0].symbol == "i"
+      for y in 1 .. 2:
+        for x in 0 ..< 10:
+          check buf[x, y] == before[x, y]
+
+    test "Empty set draws like no border":
+      let
+        empty = newInput(border = bkSingle, borders = {})
+        plain = newInput()
+      empty.setText("Hi")
+      plain.setText("Hi")
+      var a = newBuffer(10, 3)
+      var b = newBuffer(10, 3)
+      empty.render(rect(0, 0, 10, 3), a)
+      plain.render(rect(0, 0, 10, 3), b)
+      check a == b
+      check empty.getMinSize() == size(1, 1)
+
+    test "Cursor position with top border only":
+      let input = newInput(border = bkSingle, borders = {bsTop})
+      input.setFocus(true)
+      input.setText("Hello")
+      input.setCursor(2)
+      check input.getCursorPosition(rect(5, 2, 10, 2)) == (7, 3, true)
+
+    test "Cursor hidden in a zero-height area":
+      let input = newInput()
+      input.setFocus(true)
+      input.setText("Hello")
+      input.setCursor(2)
+      check input.getCursorPosition(rect(5, 2, 10, 0)) == (-1, -1, false)
+
+    test "Minimum size per side":
+      check newInput(border = bkSingle, borders = {bsTop, bsBottom}).getMinSize() ==
+        size(1, 3)
+      check newInput(border = bkSingle, borders = {bsLeft}).getMinSize() == size(2, 1)
+      check newInput(border = bkNone, borders = allBorders).getMinSize() == size(1, 1)
+
+    test "Preferred size per side":
+      let input = newInput(border = bkSingle, borders = {bsTop})
+      check input.getPreferredSize(size(20, 10)) == size(20, 2)
+
+    test "Area too small for its border":
+      let input = newInput(border = bkSingle, borders = {bsTop, bsBottom})
+      input.setText("Hi")
+      input.setFocus(true)
+      var buf = newBuffer(10, 2)
+      buf.fill(rect(0, 0, 10, 2), cell("x"))
+      let before = buf
+      input.render(rect(0, 0, 10, 2), buf)
+      check buf == before
+      check not input.getCursorPosition(rect(0, 0, 10, 2)).visible
+
+    test "Focused border style":
+      let input = newInput(border = bkSingle, borders = {bsTop})
+      input.setFocus(true)
+      var buf = newBuffer(10, 2)
+      input.render(rect(0, 0, 10, 2), buf)
+      check buf[0, 0].style == input.borderFocusedStyle
+      check buf[9, 0].style == input.borderFocusedStyle
+
+    test "Border builders return copies":
+      let base = newInput(border = bkSingle)
+      let sides = base.withBorders({bsTop})
+      let kind = base.withBorderKind(bkDouble)
+      check sides.borders == {bsTop}
+      check kind.borderStyle == bkDouble
+      check base.borders == allBorders
+      check base.borderStyle == bkSingle
+      check sides != base
+      check kind != base
