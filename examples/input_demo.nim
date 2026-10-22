@@ -1,6 +1,6 @@
 ## Input Widget Demo
 ##
-## Different input types including password fields
+## Different input types including password fields and per-side borders
 
 import pkg/celina
 import pkg/celina/widgets/input
@@ -39,6 +39,10 @@ proc main() =
       placeholder = style(BrightBlack, Reset),
     ),
     searchInput(placeholder = "Search..."),
+    # Only the top and bottom edges
+    newInput(
+      placeholder = "Add a note", border = bkRounded, borders = {bsTop, bsBottom}
+    ),
   ]
 
   # Add some demo values
@@ -76,9 +80,9 @@ proc main() =
     buffer.clear()
     let area = buffer.area
 
-    if area.height < 25 or area.width < 60:
+    if area.height < 38 or area.width < 66:
       buffer.setString(
-        1, 1, "Terminal too small! Need at least 60x25", style(Red, Reset)
+        1, 1, "Terminal too small! Need at least 66x38", style(Red, Reset)
       )
       return
 
@@ -89,21 +93,23 @@ proc main() =
       style(Yellow, Reset, {StyleModifier.Bold}),
     )
 
-    let labels = ["Username:", "Email:", "Password:", "Search:"]
+    let labels = ["Username:", "Email:", "Password:", "Search:", "Note:"]
     var y = 4
 
     for i, input in inputs:
       buffer.setString(2, y, labels[i], style(White, Reset, {StyleModifier.Bold}))
 
-      # Calculate rect based on border style
-      let inputHeight = if input.borderStyle != bkNone: 3 else: 1
+      # Put the text row on the label row; a top edge goes one row above
       let inputX = 14
+      let inputWidth = min(area.width - 16, 40)
+      let inputHeight = input.getPreferredSize(size(inputWidth, area.height)).height
+      let hasTop = input.borderStyle != bkNone and bsTop in input.borders
       let inputY =
-        if input.borderStyle != bkNone:
+        if hasTop:
           y - 1
         else:
           y
-      let inputRect = rect(inputX, inputY, min(area.width - 16, 40), inputHeight)
+      let inputRect = rect(inputX, inputY, inputWidth, inputHeight)
 
       input.render(inputRect, buffer)
 

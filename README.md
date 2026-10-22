@@ -9,6 +9,7 @@ A CLI library in Nim, inspired by Ratatui.
 - Full Unicode support with proper display width handling
 - Event-driven architecture for keyboard and mouse input
 - Widget system for building interactive components
+- Inline viewport for prompt-style UIs that stay in the scrollback
 - Async programming support with [asyncdispatch](https://nim-lang.org/docs/asyncdispatch.html) or [Chronos](https://github.com/status-im/nim-chronos) (4.0 or later)
 
 ## Platform Support
@@ -30,7 +31,8 @@ Check out the [`examples/`](examples/) directory for sample applications demonst
 - **[`button_demo.nim`](examples/button_demo.nim)**: Interactive button widget, various styles, and click handling
 - **[`color_demo.nim`](examples/color_demo.nim)**: 24-bit RGB color support demonstration with gradients, palettes, and animations
 - **[`cursor_demo.nim`](examples/cursor_demo.nim)**: Terminal cursor control including position, visibility, and style management
-- **[`input_demo.nim`](examples/input_demo.nim)**: Text input widgets including password fields, borders, search, and real-time value display
+- **[`inline_demo.nim`](examples/inline_demo.nim)**: Inline viewport drawing a progress bar in a few rows at the cursor, with the last frame left in the scrollback on exit
+- **[`input_demo.nim`](examples/input_demo.nim)**: Text input widgets including password fields, borders (also top/bottom only), search, and real-time value display
 - **[`list_demo.nim`](examples/list_demo.nim)**: List widget with single/multiple selection modes, keyboard/mouse navigation, scrolling, and custom styling
 - **[`mouse_demo.nim`](examples/mouse_demo.nim)**: Mouse event handling including clicks, drag, wheel scroll, and movement detection
 - **[`progress_demo.nim`](examples/progress_demo.nim)**: Progress bar widgets with various styles, customizable colors, bracket display options, and animated demonstrations
