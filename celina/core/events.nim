@@ -171,6 +171,10 @@ proc clearPendingByte*() =
   pendingByte = none(byte)
   queuedInput = ""
 
+proc unreadInput(bytes: string) =
+  ## Put bytes read ahead within an event back in front of the queue.
+  queuedInput = bytes & queuedInput
+
 # Tracks whether Terminal.enableRawMode has pinned stdin to O_NONBLOCK for the
 # lifetime of the current raw-mode session. When true, pollKey/readKeyInput
 # skip the per-tick fcntl(F_GETFL)+F_SETFL dance entirely — without this flag
@@ -337,7 +341,7 @@ proc readPasteContentBlocking(): string =
 # it constructs `Event` values, and `Event` is defined in this module. Async
 # callers reach it through `import ../core/events`.
 #
-# Each of the four parameters is an *expression* re-evaluated at every textual
+# Each parameter but `unread` is an *expression* re-evaluated at every textual
 # occurrence in the template body. Synchronous callers pass direct proc calls
 # (`readByteBlocking()`); async callers pass `await ...` expressions. Because
 # the template body itself contains no `await`, it is type-checked under the
@@ -349,21 +353,46 @@ proc readPasteContentBlocking(): string =
 #   readPaste     -> string                          (paste content w/o terminator)
 #   parseMouseX10 -> Event
 #   parseMouseSGR -> Event
+#   unread        -> a sync proc taking a string, passed without arguments; puts
+#                    those bytes back in front of the input, so `readByte`
+#                    returns them next
 
 template parseEscapeSequenceUnified*(
-    readByte, readPaste, parseMouseX10, parseMouseSGR: untyped
+    readByte, readPaste, parseMouseX10, parseMouseSGR, unread: untyped
 ): Event =
   ## Parse an ESC sequence (ESC has already been consumed by the caller).
   ## For non-blocking callers, the post-ESC timeout check (standalone ESC vs
   ## start of a sequence) must be performed by the caller before invocation.
+  ##
+  ## A cursor position report (`CSI row ; col R`) gives `Unknown`, so a reply
+  ## that came after `queryCursorPosition` stopped waiting does not turn into
+  ## keys. The modified F3 keys of the same shape (`CSI 1;n R`) go with it.
   block:
     let first = readByte
+    var bracket = (success: false, ch: '\0')
+    var reply = crmNone
+    if first.success and first.ch == '[':
+      let b = readByte
+      bracket = (success: b.success, ch: b.ch)
+      # Read ahead to tell a cursor position report; other bytes go back.
+      if b.success and b.ch in {'0' .. '9'}:
+        var ahead = $b.ch
+        reply = matchCursorReply(ahead)
+        while reply == crmPartial:
+          let next = readByte
+          if not next.success:
+            break
+          ahead.add(next.ch)
+          reply = matchCursorReply(ahead)
+        if reply != crmComplete:
+          unread(ahead[1 .. ^1])
     if not first.success:
       Event(kind: Key, key: KeyEvent(code: KeyCode.Escape, char: "\x1b"))
+    elif reply == crmComplete:
+      Event(kind: Unknown)
     else:
       case first.ch
       of '[':
-        let bracket = readByte
         case classifyBracketSequence(bracket.ch)
         of BskArrowKey, BskNavigationKey:
           let p = processSimpleBracketSequence(bracket.ch, bracket.success)
@@ -434,9 +463,8 @@ template parseEscapeSequenceUnified*(
               contBytes.add(cont.ch.byte)
             else:
               # Truncated or ill-formed sequence. Unlike the plain-key UTF-8
-              # path there is no pushback channel shared by sync and async
-              # callers, so an invalid continuation byte is dropped rather
-              # than re-injected as the next event's first byte.
+              # path, an invalid continuation byte is dropped rather than
+              # re-injected as the next event's first byte.
               wellFormed = false
           let text =
             if wellFormed:
@@ -522,6 +550,7 @@ proc readKey*(): Event =
       readPasteContentBlocking(),
       parseMouseEventX10(),
       parseMouseEventSGR(),
+      unreadInput,
     )
 
   # Handle regular UTF-8 characters
@@ -759,6 +788,7 @@ proc readKeyInput*(): Option[Event] =
         readPasteContentNonBlocking(),
         parseMouseEventX10NonBlocking(),
         parseMouseEventSGRNonBlocking(),
+        unreadInput,
       )
     )
 
@@ -919,9 +949,10 @@ proc queryCursorPosition*(timeoutMs: int): Option[Position] =
   ## stdin is in raw mode: otherwise the reply is echoed or held until Enter.
   ##
   ## Keys typed while waiting stay queued for the event readers. A reply that
-  ## comes after the deadline is read as keys, or taken by the next query if
-  ## that comes first. Reads stdin, so nothing else may read it meanwhile; `App`
-  ## reads input only inside its tick.
+  ## comes after the deadline is taken by the next query if that comes first;
+  ## otherwise the event readers turn it into one `Unknown` event, as they do
+  ## the modified F3 keys of the same shape (`CSI 1;n R`). Reads stdin, so
+  ## nothing else may read it meanwhile; `App` reads input only inside its tick.
   if inputClosed.load or not canQueryCursor():
     return none(Position)
   if not flushStdio():

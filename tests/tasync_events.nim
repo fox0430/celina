@@ -81,6 +81,22 @@ suite "Async Key Reading":
         reader.closeAsyncInputReader()
         restoreStdin(p)
 
+  test "readKeyAsync drops a late cursor position reply":
+    let p = redirectStdinFromPipe()
+    if p.saved != -1:
+      let reader = newAsyncInputReader()
+      try:
+        feedPipe(p, "\x1b[12;40Rx\x1b[1;5Ab")
+        check (waitFor reader.readKeyAsync()).kind == EventKind.Unknown
+        check (waitFor reader.readKeyAsync()).key.char == "x"
+        let ev = waitFor reader.readKeyAsync()
+        check ev.key.code == ArrowUp
+        check ev.key.modifiers == {Ctrl}
+        check (waitFor reader.readKeyAsync()).key.char == "b"
+      finally:
+        reader.closeAsyncInputReader()
+        restoreStdin(p)
+
   test "AsyncEventError type is properly defined":
     let error = newException(AsyncEventError, "Test error")
     check error.msg == "Test error"
