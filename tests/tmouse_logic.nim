@@ -8,7 +8,7 @@ import ../celina/core/[mouse_logic, events]
 
 suite "Mouse Logic - X10 Format Parsing":
   test "Left button click at position (7, 17)":
-    let data: array[3, char] = [char(0x00), char(40), char(50)]
+    let data: array[3, char] = [char(0x20), char(40), char(50)]
     let result = parseMouseDataX10(data)
 
     check result.button == Left
@@ -18,7 +18,7 @@ suite "Mouse Logic - X10 Format Parsing":
     check result.modifiers == {}
 
   test "Middle button click":
-    let data: array[3, char] = [char(0x01), char(35), char(45)]
+    let data: array[3, char] = [char(0x21), char(35), char(45)]
     let result = parseMouseDataX10(data)
 
     check result.button == Middle
@@ -27,7 +27,7 @@ suite "Mouse Logic - X10 Format Parsing":
     check result.y == 12 # 45 - 33
 
   test "Right button click":
-    let data: array[3, char] = [char(0x02), char(50), char(60)]
+    let data: array[3, char] = [char(0x22), char(50), char(60)]
     let result = parseMouseDataX10(data)
 
     check result.button == Right
@@ -36,7 +36,7 @@ suite "Mouse Logic - X10 Format Parsing":
     check result.y == 27 # 60 - 33
 
   test "Wheel up event":
-    let data: array[3, char] = [char(0x40), char(45), char(55)]
+    let data: array[3, char] = [char(0x60), char(45), char(55)]
     let result = parseMouseDataX10(data)
 
     check result.button == WheelUp
@@ -45,7 +45,7 @@ suite "Mouse Logic - X10 Format Parsing":
     check result.y == 22 # 55 - 33
 
   test "Wheel down event":
-    let data: array[3, char] = [char(0x41), char(50), char(60)]
+    let data: array[3, char] = [char(0x61), char(50), char(60)]
     let result = parseMouseDataX10(data)
 
     check result.button == WheelDown
@@ -54,13 +54,14 @@ suite "Mouse Logic - X10 Format Parsing":
     check result.y == 27
 
   test "Drag event":
-    let data: array[3, char] = [char(0x20), char(40), char(50)]
+    let data: array[3, char] = [char(0x40), char(40), char(50)]
     let result = parseMouseDataX10(data)
 
     check result.kind == Drag
+    check result.button == Left
 
   test "Release event":
-    let data: array[3, char] = [char(0x03), char(40), char(50)]
+    let data: array[3, char] = [char(0x23), char(40), char(50)]
     let result = parseMouseDataX10(data)
 
     check result.kind == Release
@@ -68,8 +69,8 @@ suite "Mouse Logic - X10 Format Parsing":
     check result.button == NoButton
 
   test "Move event (no button held, all-motion reporting)":
-    # 0x23 = motion bit | no button: a hover/move, not a drag.
-    let data: array[3, char] = [char(0x23), char(40), char(50)]
+    # 0x43 = offset | motion bit | no button: a hover/move, not a drag.
+    let data: array[3, char] = [char(0x43), char(40), char(50)]
     let result = parseMouseDataX10(data)
 
     check result.kind == Move
@@ -77,42 +78,42 @@ suite "Mouse Logic - X10 Format Parsing":
 
 suite "Mouse Logic - Modifiers":
   test "Left click with Shift":
-    let data: array[3, char] = [char(0x04), char(40), char(50)]
+    let data: array[3, char] = [char(0x24), char(40), char(50)]
     let result = parseMouseDataX10(data)
 
     check result.button == Left
     check result.modifiers == {Shift}
 
   test "Left click with Alt":
-    let data: array[3, char] = [char(0x08), char(40), char(50)]
+    let data: array[3, char] = [char(0x28), char(40), char(50)]
     let result = parseMouseDataX10(data)
 
     check result.button == Left
     check result.modifiers == {Alt}
 
   test "Left click with Ctrl":
-    let data: array[3, char] = [char(0x10), char(40), char(50)]
+    let data: array[3, char] = [char(0x30), char(40), char(50)]
     let result = parseMouseDataX10(data)
 
     check result.button == Left
     check result.modifiers == {Ctrl}
 
   test "Left click with Ctrl+Shift":
-    let data: array[3, char] = [char(0x14), char(40), char(50)]
+    let data: array[3, char] = [char(0x34), char(40), char(50)]
     let result = parseMouseDataX10(data)
 
     check result.button == Left
     check result.modifiers == {Ctrl, Shift}
 
   test "Left click with Ctrl+Alt":
-    let data: array[3, char] = [char(0x18), char(40), char(50)]
+    let data: array[3, char] = [char(0x38), char(40), char(50)]
     let result = parseMouseDataX10(data)
 
     check result.button == Left
     check result.modifiers == {Ctrl, Alt}
 
   test "Left click with all modifiers":
-    let data: array[3, char] = [char(0x1C), char(40), char(50)]
+    let data: array[3, char] = [char(0x3C), char(40), char(50)]
     let result = parseMouseDataX10(data)
 
     check result.button == Left

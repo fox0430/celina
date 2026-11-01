@@ -1857,6 +1857,25 @@ suite "Events Module Tests":
           setStdinNonBlockingPinned(originalPin)
           restoreStdin(p)
 
+    test "readKeyInput assembles an X10 mouse press from stdin":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b[M +&")
+          let ev = readKeyInput()
+          check ev.isSome
+          check ev.get.kind == Mouse
+          check ev.get.mouse.kind == Press
+          check ev.get.mouse.button == Left
+          check ev.get.mouse.x == 10
+          check ev.get.mouse.y == 5
+        finally:
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
     test "readKey accepts SGR mouse with terminator at byte limit (blocking parser)":
       # Blocking parser regression: terminator M on the MaxSGRMouseReadBytes-th
       # byte after ESC[< must still be accepted.
