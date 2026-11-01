@@ -2477,6 +2477,56 @@ suite "Events Module Tests":
           queuedInput = ""
           restoreStdin(p)
 
+    test "readKeyInput drops a late reply":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b[12;40Rx\x1b[80;120R\x1b[1;5A")
+          check readKeyInput().get.kind == EventKind.Unknown
+          check nextChar() == "x"
+          check readKeyInput().get.kind == EventKind.Unknown
+          let ev = readKeyInput()
+          check ev.get.key.code == ArrowUp
+          check ev.get.key.modifiers == {Ctrl}
+          check readKeyInput().isNone
+        finally:
+          queuedInput = ""
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "readKey drops a late reply":
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          feedPipe(p, "\x1b[5;1R\x1b[200~hi\x1b[201~")
+          check readKey().kind == EventKind.Unknown
+          let ev = readKey()
+          check ev.kind == Paste
+          check ev.pastedText == "hi"
+        finally:
+          queuedInput = ""
+          restoreStdin(p)
+
+    test "bytes read ahead go back before the queued typeahead":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b[1;5Ab\x1b[1;1R")
+          check readCursorReply(1000).isSome
+          check readKeyInput().get.key.code == ArrowUp
+          check nextChar() == "b"
+        finally:
+          queuedInput = ""
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
     test "queryCursorPosition gives none at once off a terminal":
       let originalPin = isStdinNonBlockingPinned()
       let p = redirectStdinFromPipe()

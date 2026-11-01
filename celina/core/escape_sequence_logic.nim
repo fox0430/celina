@@ -20,6 +20,12 @@ type
     row*, col*: int ## 0-based
     typeahead*: string ## the other bytes, in order
 
+  CursorReplyMatch* = enum
+    ## How the bytes after `ESC [` compare with a cursor position report
+    crmPartial ## a prefix of `row ; col R`
+    crmComplete
+    crmNone
+
   PasteEndState* = enum
     ## State machine for detecting paste end sequence ESC[201~
     PesNone ## Not in sequence
@@ -276,6 +282,20 @@ proc readReplyNumber(bytes: string, i: var int, value: var int): bool =
     inc i
   i > start
 
+proc scanCursorReply(bytes: string, i: var int, row, col: var int): CursorReplyMatch =
+  ## Read the `row ; col R` of a cursor position report at `i`, leaving `i`
+  ## after it.
+  template expect(value: var int, final: char) =
+    if not readReplyNumber(bytes, i, value) or i == bytes.len:
+      return (if i == bytes.len: crmPartial else: crmNone)
+    if bytes[i] != final:
+      return crmNone
+    inc i
+
+  expect(row, ';')
+  expect(col, 'R')
+  crmComplete
+
 proc extractCursorReply*(bytes: string): CursorReply =
   ## Take the first cursor position report (`ESC [ row ; col R`, 1-based) out
   ## of `bytes`. A report cut off at the end stays in `typeahead`.
@@ -286,15 +306,21 @@ proc extractCursorReply*(bytes: string): CursorReply =
       continue
     var i = start + 2
     var row, col: int
-    if not readReplyNumber(bytes, i, row) or i >= bytes.len or bytes[i] != ';':
-      continue
-    inc i
-    if not readReplyNumber(bytes, i, col) or i >= bytes.len or bytes[i] != 'R':
+    if scanCursorReply(bytes, i, row, col) != crmComplete:
       continue
     return CursorReply(
       found: true,
       row: max(row - 1, 0),
       col: max(col - 1, 0),
-      typeahead: bytes[0 ..< start] & bytes[i + 1 .. ^1],
+      typeahead: bytes[0 ..< start] & bytes[i .. ^1],
     )
   CursorReply(typeahead: bytes)
+
+proc matchCursorReply*(bytes: string): CursorReplyMatch =
+  ## Match the bytes after `ESC [` against the rest of a cursor position report.
+  ## The event readers use it to drop a reply that came after its query.
+  var i = 0
+  var row, col: int
+  result = scanCursorReply(bytes, i, row, col)
+  if result == crmComplete and i < bytes.len:
+    result = crmNone

@@ -451,6 +451,11 @@ proc setPendingByteAsync*(reader: AsyncInputReader, b: byte) =
   if not reader.isNil:
     reader.pendingByte = some(b)
 
+proc unreadInput*(reader: AsyncInputReader, bytes: string) =
+  ## Put bytes read ahead within an event back in front of the buffer.
+  if not reader.isNil:
+    reader.buffer = bytes & reader.buffer
+
 proc clearPendingByteAsync*(reader: AsyncInputReader) =
   ## Drop any byte waiting to be re-injected. Call from raw-mode toggles
   ## to prevent stale bytes from leaking across mode transitions.

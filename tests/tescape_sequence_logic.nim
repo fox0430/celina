@@ -464,3 +464,23 @@ suite "Escape Sequence Logic Tests":
       let r = extractCursorReply("")
       check not r.found
       check r.typeahead == ""
+
+    test "matchCursorReply follows the bytes after ESC [":
+      check matchCursorReply("") == crmPartial
+      check matchCursorReply("12") == crmPartial
+      check matchCursorReply("12;") == crmPartial
+      check matchCursorReply("12;40") == crmPartial
+      check matchCursorReply("12;40R") == crmComplete
+      check matchCursorReply("12345;12345R") == crmComplete
+      check matchCursorReply("1;2R") == crmComplete
+
+    test "matchCursorReply rejects other sequences at the first byte off":
+      check matchCursorReply("A") == crmNone
+      check matchCursorReply("<") == crmNone
+      check matchCursorReply("3~") == crmNone
+      check matchCursorReply("1;5A") == crmNone
+      check matchCursorReply(";1R") == crmNone
+      check matchCursorReply("1;R") == crmNone
+      check matchCursorReply("123456") == crmNone
+      check matchCursorReply("1;123456") == crmNone
+      check matchCursorReply("1;1Rx") == crmNone
