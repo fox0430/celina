@@ -265,6 +265,35 @@ suite "Input Widget Tests":
       check input.getText() == "XWorld"
       check input.state.cursor == 1
 
+    test "Space input":
+      var input = newInput()
+      input.setFocus(true)
+      for event in [
+        KeyEvent(code: Char, char: "a", modifiers: {}),
+        KeyEvent(code: Space, char: " ", modifiers: {}),
+        KeyEvent(code: Char, char: "b", modifiers: {}),
+      ]:
+        check input.handleKeyEvent(event) == erConsume
+      check input.getText() == "a b"
+      check input.state.cursor == 3
+
+    test "Space input with selection":
+      var input = newInput()
+      input.setFocus(true)
+      input.setText("Hello World")
+      input.state.selection = (0, 6)
+      let event = KeyEvent(code: Space, char: " ", modifiers: {})
+      check input.handleKeyEvent(event) == erConsume
+      check input.getText() == " World"
+      check input.state.cursor == 1
+
+    test "Ctrl+Space is left to the app":
+      var input = newInput()
+      input.setFocus(true)
+      let event = KeyEvent(code: Space, char: " ", modifiers: {Ctrl})
+      check input.handleKeyEvent(event) == erContinue
+      check input.getText() == ""
+
     test "Backspace key":
       var input = newInput()
       input.setFocus(true)
@@ -398,6 +427,10 @@ suite "Input Widget Tests":
 
       let charEvent = KeyEvent(code: Char, char: "A", modifiers: {})
       check input.handleKeyEvent(charEvent) == erContinue
+      check input.getText() == "Hello"
+
+      let spaceEvent = KeyEvent(code: Space, char: " ", modifiers: {})
+      check input.handleKeyEvent(spaceEvent) == erContinue
       check input.getText() == "Hello"
 
       let backspaceEvent = KeyEvent(code: Backspace, modifiers: {})

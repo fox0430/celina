@@ -486,7 +486,7 @@ proc handleKeyEvent*(widget: Input, event: KeyEvent): EventResult =
 
   # Handle regular key events
   case event.code
-  of Char:
+  of Char, Space:
     if not widget.readOnly and event.char.len > 0 and event.char[0].ord >= 32:
       # Printable characters
       if widget.hasSelection():
