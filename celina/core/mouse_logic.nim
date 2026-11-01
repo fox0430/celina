@@ -59,25 +59,25 @@ proc parseMouseDataX10*(data: array[3, char]): MouseEventData =
   ##
   ## Example:
   ## ```nim
-  ## let data: array[3, char] = [char(0x00), char(40), char(50)]
+  ## let data: array[3, char] = [char(0x20), char(40), char(50)]
   ## let parsed = parseMouseDataX10(data)
   ## assert parsed.button == Left
   ## assert parsed.x == 7  # 40 - 33
   ## ```
-  let buttonByte = data[0].ord
+  let buttonCode = data[0].ord - 32 # X10 uses offset 32
   let x = data[1].ord - 33 # X10 uses offset 33
   let y = data[2].ord - 33 # X10 uses offset 33
 
-  let buttonInfo = buttonByte and 0x03
-  let isDrag = (buttonByte and 0x20) != 0
-  let isWheel = (buttonByte and 0x40) != 0
+  let buttonInfo = buttonCode and 0x03
+  let isDrag = (buttonCode and 0x20) != 0
+  let isWheel = (buttonCode and 0x40) != 0
 
   var button: MouseButton
   var kind: MouseEventKind
 
   if isWheel:
     # X10 wheel events: bit 0 indicates direction
-    if (buttonByte and 0x01) != 0:
+    if (buttonCode and 0x01) != 0:
       button = WheelDown
     else:
       button = WheelUp
@@ -106,7 +106,7 @@ proc parseMouseDataX10*(data: array[3, char]): MouseEventData =
     else:
       kind = Press
 
-  let modifiers = parseMouseModifiers(buttonByte)
+  let modifiers = parseMouseModifiers(buttonCode)
 
   MouseEventData(button: button, kind: kind, x: x, y: y, modifiers: modifiers)
 

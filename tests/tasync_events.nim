@@ -204,6 +204,23 @@ suite "Mouse Event Parsing (Async)":
       finally:
         restoreStdin(p)
 
+  test "readKeyAsync assembles an X10 mouse press from stdin":
+    let p = redirectStdinFromPipe()
+    if p.saved != -1:
+      try:
+        feedPipe(p, "\x1b[M +&")
+        let reader = newAsyncInputReader()
+        defer:
+          reader.closeAsyncInputReader()
+        let ev = waitFor reader.readKeyAsync()
+        check ev.kind == Mouse
+        check ev.mouse.kind == Press
+        check ev.mouse.button == Left
+        check ev.mouse.x == 10
+        check ev.mouse.y == 5
+      finally:
+        restoreStdin(p)
+
   test "readKeyAsync accepts SGR mouse with terminator at byte limit":
     # Async parser regression: terminator M on the MaxSGRMouseReadBytes-th byte
     # after ESC[< must still be accepted.
