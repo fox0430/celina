@@ -71,7 +71,7 @@ type
     borderFocusedStyle*: Style
     maxLength*: int # Maximum input length (0 = unlimited)
     readOnly*: bool # Read-only mode
-    password*: bool # Password mode (show asterisks)
+    password*: bool ## Mask the display only; state.text and callbacks stay plaintext
     # Event handlers
     onTextChanged*: proc(text: string) # Called when text changes
     onEnter*: proc(text: string) # Called on Enter key
@@ -895,7 +895,8 @@ proc passwordInput*(
     onBlur: proc() = nil,
     onTextChanged: proc(text: string) = nil,
 ): Input =
-  ## Create a password input widget
+  ## Create a password input widget. Only the display is masked: `getText`,
+  ## `state.text` and the callbacks receive the plaintext.
   newInput(
     placeholder = placeholder,
     maxLength = maxLength,
