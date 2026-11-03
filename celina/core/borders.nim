@@ -137,14 +137,13 @@ proc drawBox*(
   ## Paint a box frame into `area`: the requested edges plus the corner glyphs
   ## where two adjacent requested edges meet.
   ##
-  ## Edges are drawn with `fill` (one pre-built cell per position, avoiding the
-  ## per-cell UTF-8 re-parse a `setString` loop incurs) and the four corners
-  ## are written last, so a corner glyph always wins its cell — no per-corner
-  ## size guards are needed. Degenerate areas collapse predictably: in a
-  ## one-row area the top edge wins over the bottom, and in a one-column area
-  ## the left wins over the right, so a parallel edge is never silently
-  ## overwritten by its twin. The caller is responsible for not invoking this
-  ## with a `bkNone`/empty-edge frame (it would simply draw nothing).
+  ## Edges are drawn with `fill` and the four corners are written last, so a
+  ## corner glyph always wins its cell — no per-corner size guards are needed.
+  ## Degenerate areas collapse predictably: in a one-row area the top edge wins
+  ## over the bottom, and in a one-column area the left wins over the right, so
+  ## a parallel edge is never silently overwritten by its twin. The caller is
+  ## responsible for not invoking this with a `bkNone`/empty-edge frame (it
+  ## would only blank the requested edges).
   if area.isEmpty:
     return
 

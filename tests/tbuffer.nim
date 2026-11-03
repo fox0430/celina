@@ -6,6 +6,22 @@ import ../celina/core/buffer
 import ../celina/core/geometry
 import ../celina/core/colors
 
+proc widePairsConsistent(buffer: Buffer): bool =
+  ## True when every width-2 lead has its shadow and no shadow is orphaned.
+  for y in 0 ..< buffer.area.height:
+    for x in 0 ..< buffer.area.width:
+      let c = buffer[x, y]
+      if c.isShadow:
+        if x == 0:
+          return false
+        let left = buffer[x - 1, y]
+        if left.isShadow or left.width != 2:
+          return false
+      elif c.width == 2:
+        if x + 1 >= buffer.area.width or not buffer[x + 1, y].isShadow:
+          return false
+  true
+
 suite "Buffer Module Tests":
   suite "Cell Operations":
     test "Cell creations":
@@ -484,6 +500,24 @@ suite "Buffer Module Tests":
       # No room for shadow cell, character not written at all
       check buffer[4, 0].symbol == " "
 
+    test "setCell width=2 reserves a blank for a one-column symbol":
+      var buffer = newBuffer(5, 1)
+      buffer.setString(0, 0, "ABCDE")
+      buffer.setCell(1, 0, "Y", 2) # over-declared width
+      check buffer[1, 0].symbol == "Y"
+      check buffer[2, 0].symbol == " " # reserved column, not the old "C"
+      check buffer[3, 0].symbol == "D"
+      check widePairsConsistent(buffer)
+
+    test "setCell width=2 blanks both columns of a sanitized symbol":
+      var buffer = newBuffer(5, 1)
+      buffer.setString(0, 0, "ABCDE")
+      buffer.setCell(1, 0, "日\x00", 2) # sanitizes to one space
+      check buffer[1, 0].symbol == " "
+      check buffer[2, 0].symbol == " "
+      check buffer[3, 0].symbol == "D"
+      check widePairsConsistent(buffer)
+
     test "setCell with Rune":
       var buffer = newBuffer(10, 5)
       let r = "語".runeAt(0)
@@ -672,6 +706,232 @@ suite "Buffer Module Tests":
       check buffer.dirty.isDirty
       check buffer.dirty.minX == 2
       check buffer.dirty.maxX == 3
+
+  suite "Wide-pair invariant":
+    test "[]= places the shadow of a wide lead":
+      var buffer = newBuffer(4, 1)
+      buffer[1, 0] = cell("日")
+      check buffer[1, 0].symbol == "日"
+      check buffer[2, 0].isShadow
+      check widePairsConsistent(buffer)
+
+    test "[]= normalizes a standalone empty cell to a blank":
+      var buffer = newBuffer(3, 1)
+      buffer[0, 0] = cell("")
+      check buffer[0, 0].symbol == " "
+      buffer[2, 0] = cell("")
+      check buffer[2, 0].symbol == " "
+      check widePairsConsistent(buffer)
+
+    test "[]= keeps a shadow next to its wide lead":
+      var buffer = newBuffer(3, 1)
+      buffer[0, 0] = cell("日")
+      buffer[1, 0] = cell("")
+      check buffer[1, 0].isShadow
+      check widePairsConsistent(buffer)
+
+    test "[]= shadow inherits the lead's style and hyperlink":
+      let style = Style(
+        fg: ColorValue(kind: Indexed, indexed: Color.Green),
+        modifiers: {StyleModifier.Underline},
+      )
+      var buffer = newBuffer(3, 1)
+      buffer[0, 0] = cell("日", style, "https://example.com")
+      check buffer[1, 0].isShadow
+      check buffer[1, 0].style == style
+      check buffer[1, 0].hyperlink == "https://example.com"
+
+    test "[]= blanks a wide lead in the last column":
+      let style = Style(
+        fg: ColorValue(kind: Indexed, indexed: Color.Red),
+        modifiers: {StyleModifier.Bold},
+      )
+      var buffer = newBuffer(3, 1)
+      buffer[2, 0] = cell("X")
+      buffer[2, 0] = cell("日", style)
+      check buffer[2, 0].symbol == " "
+      check buffer[2, 0].style == style
+      check widePairsConsistent(buffer)
+
+    test "[]= wide lead over a wide pair clears the far shadow":
+      var buffer = newBuffer(6, 1)
+      buffer.setString(0, 0, "日本")
+      buffer[1, 0] = cell("英")
+      check buffer[0, 0].symbol == " "
+      check buffer[1, 0].symbol == "英"
+      check buffer[2, 0].isShadow
+      check buffer[3, 0].symbol == " "
+      check widePairsConsistent(buffer)
+
+    test "[]= wide lead marks the shadow dirty":
+      privateAccess(Buffer)
+      var buffer = newBuffer(10, 1)
+      buffer.clearDirty()
+      buffer[2, 0] = cell("日")
+      check buffer.dirty.minX == 2
+      check buffer.dirty.maxX == 3
+
+    test "clear with a wide cell tiles pairs and blanks the odd column":
+      var buffer = newBuffer(5, 1)
+      buffer.clear(cell("あ"))
+      check buffer[0, 0].symbol == "あ"
+      check buffer[1, 0].isShadow
+      check buffer[2, 0].symbol == "あ"
+      check buffer[3, 0].isShadow
+      check buffer[4, 0].symbol == " "
+      check widePairsConsistent(buffer)
+
+    test "fill with a wide cell stays inside the area":
+      var buffer = newBuffer(6, 1)
+      buffer.setString(0, 0, "ABCDEF")
+      buffer.fill(rect(0, 0, 3, 1), cell("あ"))
+      check buffer[0, 0].symbol == "あ"
+      check buffer[1, 0].isShadow
+      check buffer[2, 0].symbol == " " # odd column in a 3-wide area
+      check buffer[3, 0].symbol == "D"
+      check widePairsConsistent(buffer)
+
+    test "fill with a wide cell in a one-column area writes a blank":
+      var buffer = newBuffer(3, 1)
+      buffer.fill(rect(1, 0, 1, 1), cell("あ"))
+      check buffer[1, 0].symbol == " "
+      check buffer[2, 0].symbol == " " # not overwritten
+      check widePairsConsistent(buffer)
+
+    test "fill with a wide cell anchors pairs at the area origin":
+      var buffer = newBuffer(8, 1)
+      buffer.fill(rect(1, 0, 4, 1), cell("あ"))
+      check buffer[0, 0].symbol == " "
+      check buffer[1, 0].symbol == "あ"
+      check buffer[2, 0].isShadow
+      check buffer[3, 0].symbol == "あ"
+      check buffer[4, 0].isShadow
+      check buffer[5, 0].symbol == " "
+      check widePairsConsistent(buffer)
+
+    test "clear and fill with an empty cell write blanks":
+      var buffer = newBuffer(3, 1)
+      buffer[0, 0] = cell("日")
+      buffer.clear(cell(""))
+      check buffer[0, 0].symbol == " "
+      check widePairsConsistent(buffer)
+      buffer.fill(rect(1, 0, 2, 1), cell(""))
+      check buffer[1, 0].symbol == " "
+      check buffer[2, 0].symbol == " "
+      check widePairsConsistent(buffer)
+
+    test "resize truncating the right edge blanks a cut lead":
+      var buffer = newBuffer(4, 1)
+      buffer.setString(0, 0, "日本")
+      buffer.resize(rect(0, 0, 3, 1))
+      check buffer[0, 0].symbol == "日"
+      check buffer[1, 0].isShadow
+      check buffer[2, 0].symbol == " "
+      check widePairsConsistent(buffer)
+
+    test "resize cropping the left edge blanks a cut shadow":
+      var buffer = newBuffer(4, 1)
+      buffer.setString(0, 0, "日本")
+      buffer.resize(rect(1, 0, 3, 1))
+      check buffer[0, 0].symbol == " "
+      check buffer[1, 0].symbol == "本"
+      check buffer[2, 0].isShadow
+      check widePairsConsistent(buffer)
+
+    test "resize preserving wide pairs keeps them whole":
+      var buffer = newBuffer(4, 1)
+      buffer.setString(0, 0, "日本")
+      buffer.resize(rect(0, 0, 6, 1))
+      check buffer[0, 0].symbol == "日"
+      check buffer[1, 0].isShadow
+      check buffer[2, 0].symbol == "本"
+      check buffer[3, 0].isShadow
+      check widePairsConsistent(buffer)
+
+    test "merge keeps a lead whose shadow is outside srcArea":
+      var dst = newBuffer(5, 1)
+      var src = newBuffer(2, 1)
+      src.setString(0, 0, "日")
+      dst.merge(src, rect(0, 0, 1, 1), pos(1, 0))
+      check dst[1, 0].symbol == "日"
+      check dst[2, 0].isShadow
+      check widePairsConsistent(dst)
+
+    test "merge blanks a shadow whose lead is outside srcArea":
+      var dst = newBuffer(5, 1)
+      var src = newBuffer(2, 1)
+      src.setString(0, 0, "日")
+      dst.merge(src, rect(1, 0, 1, 1), pos(1, 0))
+      check dst[1, 0].symbol == " "
+      check widePairsConsistent(dst)
+
+    test "merge wide at the destination right edge writes a blank":
+      var dst = newBuffer(3, 1)
+      var src = newBuffer(2, 1)
+      src.setString(0, 0, "日")
+      dst.merge(src, pos(2, 0))
+      check dst[2, 0].symbol == " "
+      check widePairsConsistent(dst)
+
+    test "merge over a destination shadow crushes the lead":
+      var dst = newBuffer(4, 1)
+      dst.setString(0, 0, "日本")
+      var src = newBuffer(1, 1)
+      src[0, 0] = cell("X")
+      dst.merge(src, pos(1, 0))
+      check dst[0, 0].symbol == " "
+      check dst[1, 0].symbol == "X"
+      check widePairsConsistent(dst)
+
+    test "setString area wider than the buffer blanks a cut lead":
+      var buffer = newBuffer(3, 1)
+      buffer.setString(rect(0, 0, 5, 1), "ああ")
+      check buffer[0, 0].symbol == "あ"
+      check buffer[1, 0].isShadow
+      check buffer[2, 0].symbol == " "
+      check widePairsConsistent(buffer)
+
+    test "fill starting on a shadow blanks the lead outside the area":
+      var buffer = newBuffer(6, 1)
+      buffer.setString(0, 0, "日AB")
+      buffer.fill(rect(1, 0, 2, 1), cell("X"))
+      check buffer[0, 0].symbol == " "
+      check buffer[1, 0].symbol == "X"
+      check buffer[2, 0].symbol == "X"
+      check buffer[3, 0].symbol == "B"
+      check widePairsConsistent(buffer)
+
+    test "foldZeroWidthRune promoting a base adds the shadow":
+      var buffer = newBuffer(6, 1)
+      buffer.setCell(0, 0, "⚠", 1)
+      buffer.foldZeroWidthRune(1, 0, Rune(0xFE0F))
+      check buffer[0, 0].width == 2
+      check buffer[1, 0].isShadow
+      check widePairsConsistent(buffer)
+
+    test "foldZeroWidthRune promotion at the right edge writes a blank":
+      var buffer = newBuffer(3, 1)
+      buffer.setCell(2, 0, "⚠", 1)
+      buffer.foldZeroWidthRune(3, 0, Rune(0xFE0F))
+      check buffer[2, 0].symbol == " "
+      check widePairsConsistent(buffer)
+
+    test "foldZeroWidthRune demoting a base clears the shadow":
+      var buffer = newBuffer(6, 1)
+      buffer.setCell(0, 0, "⚠" & $Rune(0xFE0F), 2)
+      check buffer[1, 0].isShadow
+      buffer.foldZeroWidthRune(2, 0, Rune(0xFE0E))
+      check buffer[0, 0].width == 1
+      check buffer[1, 0].symbol == " "
+      check widePairsConsistent(buffer)
+
+    test "foldClusterInto folds into the lead when given a shadow":
+      var buffer = newBuffer(4, 1)
+      buffer[0, 0] = cell("日")
+      buffer.foldClusterInto(1, 0, "\u0301") # the shadow column
+      check buffer[0, 0].symbol == "日\u0301"
+      check buffer[1, 0].isShadow
+      check widePairsConsistent(buffer)
 
   suite "Buffer Resizing":
     test "Resize to larger buffer":
@@ -894,14 +1154,15 @@ suite "Buffer Module Tests":
     test "Empty and whitespace content":
       var buffer = newBuffer(5, 2)
 
-      # Various empty/whitespace cells
+      # A standalone empty cell is normalized to a blank; shadows only exist
+      # to the right of a wide lead.
       buffer[0, 0] = cell("")
       buffer[1, 0] = cell(" ")
       buffer[2, 0] = cell("\t")
       buffer[3, 0] = cell("   ")
       buffer[4, 0] = cell("X")
 
-      check buffer[0, 0].isEmpty()
+      check buffer[0, 0].symbol == " "
       check not buffer[1, 0].isEmpty() # Space is content
       # A control in a symbol collapses to one space.
       check buffer[2, 0].symbol == " "
@@ -1548,10 +1809,11 @@ suite "Ill-formed UTF-8 Safety":
       check text.truncateToWidth(100).displayWidth == measured
 
       var buf = newBuffer(8, 1)
-      buf.clear(cell(""))
       buf.setString(0, 0, text)
       var drawn = 0
       for x in 0 ..< 8:
-        if not buf[x, 0].isShadow:
-          drawn += buf[x, 0].width
+        let c = buf[x, 0]
+        # Untouched cells are blanks; the inputs contain no spaces.
+        if not c.isShadow and c.symbol != " ":
+          drawn += c.width
       check drawn == measured
