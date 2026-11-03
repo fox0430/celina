@@ -32,6 +32,7 @@ type
     cursor*: int # Cursor position (in runes)
     selection*: tuple[start, stop: int] # Selection range (in runes)
     offset*: int # Horizontal scroll offset for long text (in runes)
+    offsetDirty: bool # Set by text edits; the next layout re-fits `offset`
 
   InputStyle* = object ## Style aggregate for input widget colors
     normal*: Style ## Content style when not focused
@@ -284,6 +285,7 @@ proc setText*(widget: Input, text: string) =
   widget.state.text = newText
   widget.state.cursor = snapToClusterBoundary(newText, widget.state.cursor)
   widget.state.selection = (0, 0) # Clear selection
+  widget.state.offsetDirty = true
 
   if widget.onTextChanged != nil:
     widget.onTextChanged(widget.state.text)
@@ -406,6 +408,7 @@ proc deleteText*(widget: Input, start: int, length: int) =
   widget.state.cursor =
     snapToClusterBoundary(widget.state.text, min(widget.state.cursor, actualStart))
   widget.state.selection = (0, 0)
+  widget.state.offsetDirty = true
 
   if widget.onTextChanged != nil:
     widget.onTextChanged(widget.state.text)
@@ -585,7 +588,11 @@ proc calculateVisibleRange(
   let textLen = runes.len
   let cursor = max(0, min(widget.state.cursor, textLen))
 
-  if textLen == 0 or width <= 0:
+  if textLen == 0:
+    widget.state.offset = 0
+    widget.state.offsetDirty = false
+    return (0, 0, 0, 0)
+  if width <= 0:
     return (0, 0, 0, 0)
 
   # Cluster lead rune indices and their column widths, in document order.
@@ -630,13 +637,37 @@ proc calculateVisibleRange(
         if k + 1 < nClusters:
           leads[k + 1]
         else:
-          textLen
+          # Never advance past the last cluster: that would leave the viewport
+          # empty when the cursor cannot fit (a wide cluster at a narrow width).
+          leads[k]
 
   # If the cursor is before the left edge, scroll left to its cluster.
   if cursor < offset:
     offset = snapToCluster(cursor)
 
   offset = max(0, min(offset, textLen))
+
+  # A text edit (`setText` / `deleteText`) can leave the stored offset with a
+  # tail narrower than the viewport. Refit it only on the first layout after an
+  # edit -- moving the cursor must not scroll -- sliding back to the leftmost
+  # window whose tail still fits while the cursor column stays within `width - 1`
+  # (a cursor at the end needs its own cell).
+  let refitOffset = widget.state.offsetDirty
+  widget.state.offsetDirty = false
+  if refitOffset and offset > 0:
+    var tailWidth = colBetween(offset, textLen)
+    var cursorOffset = colBetween(offset, cursor)
+    if tailWidth < width:
+      var k = nClusters - 1
+      while k >= 0 and leads[k] >= offset:
+        dec k
+      while k >= 0:
+        if tailWidth + widths[k] > width or cursorOffset + widths[k] > width - 1:
+          break
+        tailWidth += widths[k]
+        cursorOffset += widths[k]
+        offset = leads[k]
+        dec k
 
   # Visible range: include whole clusters that fit within `width` from offset.
   let visibleStart = offset

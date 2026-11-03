@@ -499,6 +499,128 @@ suite "Input Widget Tests":
       check cursorX >= 0
       check cursorX < 10
 
+    test "Offset returns to the head after setText shortens the text":
+      var input = newInput()
+      input.setText("abcdefghijklmnopqrst")
+      input.setCursor(20)
+      discard input.calculateVisibleRange(10) # Scroll to the end first
+      input.setText("hello")
+
+      let (offset, _, _, cursorX) = input.calculateVisibleRange(10)
+      check offset == 0
+      check cursorX == 5
+
+      var buf = newBuffer(10, 1)
+      input.render(rect(0, 0, 10, 1), buf)
+      for i, c in "hello":
+        check buf[i, 0].symbol == $c
+
+    test "Offset returns to the head after deleteText shortens the text":
+      var input = newInput()
+      input.setText("abcdefghijklmnopqrst")
+      input.setCursor(20)
+      discard input.calculateVisibleRange(10)
+      input.deleteText(8, 12)
+
+      let (offset, _, visEnd, cursorX) = input.calculateVisibleRange(10)
+      check offset == 0
+      check visEnd == 8
+      check cursorX == 8
+
+      var buf = newBuffer(10, 1)
+      input.render(rect(0, 0, 10, 1), buf)
+      for i, c in "abcdefgh":
+        check buf[i, 0].symbol == $c
+
+    test "Offset normalization keeps wide clusters whole":
+      var input = newInput()
+      input.setText("あいうえおかきくけこ")
+      input.setCursor(20)
+      discard input.calculateVisibleRange(10)
+      input.setText("あいうえお")
+
+      let (offset, visStart, visEnd, cursorX) = input.calculateVisibleRange(10)
+      check offset == 1
+      check visStart == 1
+      check visEnd == 5
+      check cursorX == 8
+
+      var buf = newBuffer(10, 1)
+      input.render(rect(0, 0, 10, 1), buf)
+      check buf[0, 0].symbol == "い"
+      check buf[1, 0].symbol == "" # Shadow cell of the wide lead
+      check buf[8, 0].symbol == " "
+
+    test "Cursor at the tail keeps a wide last cluster visible at width 2":
+      var input = newInput()
+      input.setText("a😀")
+      input.setCursor(2)
+      let (offset, visStart, visEnd, cursorX) = input.calculateVisibleRange(2)
+      check offset == 1
+      check visStart == 1
+      check visEnd == 2
+      check cursorX == 1 # Clamped onto the wide cluster; no free cell is left
+
+      var buf = newBuffer(2, 1)
+      input.render(rect(0, 0, 2, 1), buf)
+      check buf[0, 0].symbol == "😀"
+      check buf[1, 0].symbol == "" # Shadow cell of the wide lead
+
+    test "Cursor at the tail keeps the last rune visible at width 1":
+      var input = newInput()
+      input.setText("abc")
+      input.setCursor(3)
+      let (offset, visStart, visEnd, cursorX) = input.calculateVisibleRange(1)
+      check offset == 2
+      check visStart == 2
+      check visEnd == 3
+      check cursorX == 0
+
+      var buf = newBuffer(1, 1)
+      input.render(rect(0, 0, 1, 1), buf)
+      check buf[0, 0].symbol == "c"
+
+    test "Scrolled offset stays put when the cursor needs the last cell":
+      var input = newInput()
+      input.setText("abcdefghijklmnopqrst")
+      input.setCursor(20)
+      let (offset, visStart, visEnd, cursorX) = input.calculateVisibleRange(10)
+      check offset == 11
+      check visStart == 11
+      check visEnd == 20
+      check cursorX == 9
+      # The normalization must not slide further once only the cursor cell is free.
+      check input.calculateVisibleRange(10).offset == offset
+
+    test "Cursor movement does not refit the offset":
+      var input = newInput()
+      input.setText("abcdefghijklmnopqrst")
+      input.setCursor(20)
+      discard input.calculateVisibleRange(10) # Scroll to the end first
+      check input.state.offset == 11
+
+      input.setCursor(19) # ArrowLeft with no text change
+      let (offset, visStart, visEnd, cursorX) = input.calculateVisibleRange(10)
+      check offset == 11
+      check visStart == 11
+      check visEnd == 20
+      check cursorX == 8
+
+      input.setCursor(20) # ArrowRight back to the end
+      let (offsetBack, _, _, cursorXBack) = input.calculateVisibleRange(10)
+      check offsetBack == 11
+      check cursorXBack == 9
+
+    test "Empty text resets the scroll offset":
+      var input = newInput()
+      input.setText("abcdefghijklmnopqrst")
+      input.setCursor(20)
+      discard input.calculateVisibleRange(10) # Scroll to the end first
+      check input.state.offset == 11
+      input.setText("")
+      discard input.calculateVisibleRange(10)
+      check input.state.offset == 0
+
     test "Empty text visible range":
       var input = newInput()
       let (offset, visStart, visEnd, cursorX) = input.calculateVisibleRange(10)
