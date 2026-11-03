@@ -254,6 +254,55 @@ suite "Mouse Event Parsing (Async)":
       finally:
         restoreStdin(p)
 
+  test "readKeyAsync rejects ill-formed Alt encodings":
+    # Shared with the sync parser, so the same second-byte check and tail
+    # drain must apply here.
+    for input in [
+      "\x1b\xE0\x80\xAF", # overlong 3-byte form
+      "\x1b\xED\xA0\x80", # surrogate
+      "\x1b\xF4\x90\x80\x80", # above U+10FFFF
+      "\x1b\xF5\x80\x80\x80", # invalid lead, out-of-range 4-byte form
+      "\x1b\xFB\xBF\xBF\xBF\xBF", # legacy 5-byte form
+    ]:
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          feedPipe(p, input)
+          let reader = newAsyncInputReader()
+          defer:
+            reader.closeAsyncInputReader()
+          let ev = waitFor reader.readKeyAsync()
+          check ev.kind == Key
+          check ev.key.char == Utf8ReplacementChar
+          check Alt in ev.key.modifiers
+          # Tail bytes must not surface as extra key events.
+          check reader.bufferStats().size == 0
+        finally:
+          restoreStdin(p)
+
+  test "readKeyAsync hands back a non-continuation byte after a rejection":
+    for (input, nextChar) in [
+      ("\x1b\xED\xA0" & "A", "A"),
+      ("\x1b\xE0" & "A", "A"),
+      ("\x1b\xF0\x9F" & "あ", "あ"),
+    ]:
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          feedPipe(p, input)
+          let reader = newAsyncInputReader()
+          defer:
+            reader.closeAsyncInputReader()
+          let ev = waitFor reader.readKeyAsync()
+          check ev.key.char == Utf8ReplacementChar
+          check Alt in ev.key.modifiers
+          let next = waitFor reader.readKeyAsync()
+          check next.kind == Key
+          check next.key.char == nextChar
+          check Alt notin next.key.modifiers
+        finally:
+          restoreStdin(p)
+
 suite "Async Event Stream":
   test "AsyncEventStream creation":
     var eventReceived = false

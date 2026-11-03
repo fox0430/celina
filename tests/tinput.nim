@@ -516,6 +516,14 @@ suite "Input Widget Tests":
       # Check that something was rendered
       check buf[0, 0] != Cell()
 
+    test "Ill-formed UTF-8 does not assert":
+      var input = newInput()
+      input.setText("\xF5\x80\x80\x80A")
+      var buf = newBuffer(10, 1)
+      input.render(rect(0, 0, 10, 1), buf)
+      check buf[0, 0].symbol == "\xEF\xBF\xBD"
+      check buf[1, 0].symbol == "A"
+
     test "Rendering with border":
       var input = newInput(border = bkSingle)
       input.setText("Hi")
