@@ -1,6 +1,6 @@
 ## Unit tests for table widget
 
-import std/[unittest, sequtils, options, strformat, unicode]
+import std/[unittest, sequtils, options, strformat, strutils, unicode]
 
 import ../celina/core/[geometry, colors, buffer, events]
 import ../celina/widgets/table {.all.}
@@ -305,6 +305,23 @@ suite "Table Widget Tests":
     check:
       prefSize.width == 100
       prefSize.height == 50
+
+  test "Minimum width fits every column, border and the scrollbar":
+    # Regression: the border term was a fixed two columns, so a layout that
+    # reserved `getMinSize().width` squeezed multi-column tables below the
+    # promised three characters per column.
+    for count in 1 .. 4:
+      let columns = (0 ..< count).mapIt(column($char(ord('A') + it)))
+      let tableWidget = newTable(
+        columns = columns,
+        rows = (0 ..< 10).mapIt(tableRow(columns.mapIt(it.title))),
+        border = bkSingle,
+        showScrollbar = true,
+      )
+      let minWidth = tableWidget.getMinSize().width
+      # The renderer takes the scrollbar column out of this width.
+      let widths = tableWidget.calculateColumnWidths(minWidth - 1)
+      check widths.allIt(it >= 3)
 
   test "Focus capability":
     # Test canFocus method
@@ -736,55 +753,147 @@ suite "Table Scrollbar Tests":
     check table.scrollOffset == 50
 
   test "Scrollbar position inside borders":
-    # Test that scrollbar is positioned correctly relative to borders
+    # The bar owns the column just inside the right border; the last content
+    # column keeps its character.
     var table = newTable(
       columns = @[column("Test", 30)],
-      rows = (0 .. 50).mapIt(tableRow(@[$it])),
+      rows = (0 .. 50).mapIt(tableRow(@[strutils.repeat("x", 30)])),
       border = bkSimple,
+      showHeader = false,
       showScrollbar = true,
     )
+    var buf = newBuffer(40, 10)
+    table.render(rect(0, 0, 40, 10), buf)
 
-    # Calculate actual table width
-    let columnWidths = table.calculateColumnWidths(80)
-    let hasBorders = table.borderStyle != bkNone
-    let actualTableWidth =
-      calculateTotalLineWidth(columnWidths, table.columnSpacing, hasBorders)
+    let barX = 31 # left border + 30 content columns
+    let rightBorderX = barX + 1
+    for i in 0 ..< table.visibleRowCount:
+      check buf[1, 1 + i].symbol == "x"
+      check buf[barX - 1, 1 + i].symbol == "x"
+      check buf[barX, 1 + i].symbol in ["█", "│"]
+      check buf[rightBorderX, 1 + i].symbol == "|"
+    check buf[barX, 0].symbol == "-"
+    check buf[rightBorderX, 0].symbol == "+"
 
-    # Scrollbar should be inside the right border
-    let scrollbarX = actualTableWidth - (if hasBorders: 2 else: 1)
-
-    check:
-      scrollbarX < actualTableWidth # Inside the table
-      scrollbarX > 0 # Valid position
-
-    # Test with no border
+    # Without borders the bar sits at the table's right edge.
     table.borderStyle = bkNone
-    let scrollbarXbkNone = actualTableWidth - 1
-    check scrollbarXbkNone == actualTableWidth - 1 # At right edge
+    buf = newBuffer(40, 10)
+    table.render(rect(0, 0, 40, 10), buf)
+    for i in 0 ..< table.visibleRowCount:
+      check buf[29, i].symbol == "x"
+      check buf[30, i].symbol in ["█", "│"]
+
+  test "Scrollbar draws on its reserved column, not over cell content":
+    # Regression: the bar was drawn on the rightmost content column after the
+    # cells, replacing the last character of every visible row.
+    let tableWidget = newTable(
+      columns = @[column("ABCDE", 5)],
+      rows = (0 ..< 10).mapIt(tableRow(@["ABCDE"])),
+      border = bkSingle,
+      showHeader = false,
+      showScrollbar = true,
+    )
+    var buf = newBuffer(8, 7)
+    tableWidget.render(rect(0, 0, 8, 7), buf)
+
+    check tableWidget.visibleRowCount == 5
+    # Top and bottom borders span the reserved bar column.
+    for x in 0 ..< 8:
+      check buf[x, 0].symbol != " "
+      check buf[x, 6].symbol != " "
+    # The cell keeps its last character; bar and right border follow it.
+    for y in 1 .. 5:
+      check buf[1, y].symbol == "A"
+      check buf[5, y].symbol == "E"
+      check buf[6, y].symbol in ["█", "│"]
+      check buf[7, y].symbol == "│"
+
+  test "Scrollbar stays inside the border when trailing columns collapse":
+    # The bar must follow the last *visible* column: a collapsed trailing
+    # column leaves no separator, so the reserved column and the right border
+    # still have to line up with calculateTotalLineWidth.
+    let columns = @[column("Wide", 12), column("B"), column("C")]
+    let rows = (0 ..< 10).mapIt(tableRow(@["wwwwwwwwwwww", "b", "c"]))
+    let tableWidget = newTable(
+      columns, rows, border = bkSingle, showHeader = false, showScrollbar = true
+    )
+    let area = rect(0, 0, 16, 7)
+    var buf = newBuffer(area.width, area.height)
+    tableWidget.render(area, buf)
+
+    # One column is reserved for the bar, so the wide fixed column scales down
+    # and both trailing columns collapse.
+    let widths = tableWidget.calculateColumnWidths(area.width - 1)
+    check (widths[1] == 0 and widths[2] == 0)
+    let lineWidth = calculateTotalLineWidth(widths, tableWidget.columnSpacing, true)
+
+    for i in 0 ..< tableWidget.visibleRowCount:
+      check buf[lineWidth - 2, 1 + i].symbol == "." # last visible cell kept
+      check buf[lineWidth - 1, 1 + i].symbol in ["█", "│"]
+      check buf[lineWidth, 1 + i].symbol == "│"
+    check buf[lineWidth - 1, 0].symbol == "─"
+    check buf[lineWidth, 0].symbol == "┐"
+
+  test "Scrollbar reserves a column without borders":
+    let tableWidget = newTable(
+      columns = @[column("ABCDE", 5)],
+      rows = (0 ..< 10).mapIt(tableRow(@["ABCDE"])),
+      border = bkNone,
+      showHeader = false,
+      showScrollbar = true,
+    )
+    var buf = newBuffer(8, 6)
+    tableWidget.render(rect(0, 0, 8, 6), buf)
+
+    for y in 0 .. 5:
+      check buf[4, y].symbol == "E"
+      check buf[5, y].symbol in ["█", "│"]
+
+  test "Scrollbar reservation applies to the header row":
+    let tableWidget = newTable(
+      columns = @[column("ABCDE", 5)],
+      rows = (0 ..< 10).mapIt(tableRow(@["ABCDE"])),
+      border = bkSingle,
+      showHeader = true,
+      showScrollbar = true,
+    )
+    var buf = newBuffer(8, 8)
+    tableWidget.render(rect(0, 0, 8, 8), buf)
+
+    # The header keeps its full title; the reserved column stays blank.
+    check buf[5, 1].symbol == "E"
+    check buf[6, 1].symbol == " "
+    check buf[7, 1].symbol == "│"
+    # Separator and bottom border also span the reserved column.
+    check buf[6, 2].symbol == "─"
+    check buf[7, 2].symbol == "┤"
+    check buf[6, 7].symbol == "─"
+    check buf[7, 7].symbol == "┘"
 
   test "Scrollbar with different border styles":
-    # Test scrollbar positioning with each border style
+    # The bar gets its own column inside the right border for every style.
     for borderKind in [bkNone, bkSingle, bkSimple, bkRounded, bkDouble]:
-      var table = newTable(
-        columns = @[column("Test", 20)],
-        rows = (0 .. 30).mapIt(tableRow(@[$it])),
+      let table = newTable(
+        columns = @[column("ABCDE", 5)],
+        rows = (0 .. 30).mapIt(tableRow(@["ABCDE"])),
         border = borderKind,
+        showHeader = false,
         showScrollbar = true,
       )
-      table.visibleRowCount = 10
+      var buf = newBuffer(12, 8)
+      table.render(rect(0, 0, 12, 8), buf)
 
-      let columnWidths = table.calculateColumnWidths(40)
       let hasBorders = borderKind != bkNone
-      let actualTableWidth =
-        calculateTotalLineWidth(columnWidths, table.columnSpacing, hasBorders)
-
-      # Scrollbar position should adjust based on border
-      let expectedX = actualTableWidth - (if hasBorders: 2 else: 1)
-
-      check:
-        expectedX > 0
-        expectedX < actualTableWidth or
-          (not hasBorders and expectedX == actualTableWidth - 1)
+      let barX = if hasBorders: 6 else: 5
+      let firstRow = if hasBorders: 1 else: 0
+      for i in 0 ..< table.visibleRowCount:
+        check buf[barX - 1, firstRow + i].symbol == "E"
+        check buf[barX, firstRow + i].symbol in ["█", "│"]
+      if hasBorders:
+        let chars = getBorderChars(borderKind)
+        check buf[barX, 0].symbol == chars.horizontal
+        check buf[barX + 1, 0].symbol == chars.topRight
+        check buf[barX + 1, firstRow + table.visibleRowCount].symbol == chars.bottomRight
 
   test "Scrollbar interaction with highlight":
     # Test that highlight and scroll work together correctly
