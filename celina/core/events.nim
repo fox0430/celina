@@ -14,7 +14,7 @@ from output_stream import flushStdio, writeStream
 # Re-export types to maintain API compatibility
 export mouse_logic.MouseButton, mouse_logic.MouseEventKind, mouse_logic.KeyModifier
 export key_logic.KeyCode, key_logic.KeyEvent
-export utf8_utils except wellFormedSeqLen
+export utf8_utils except wellFormedSeqLen, toRunesSanitized
 
 type
   EventResult* = enum
@@ -247,6 +247,18 @@ proc readNextByteBlocking(): tuple[success: bool, ch: char] =
     if not r.interrupted:
       return (r.success, r.ch)
 
+proc readDrainByteBlocking(): tuple[success: bool, ch: char] =
+  ## Read a tail byte only if one is available; an ill-formed key must not
+  ## wait for bytes that may never arrive.
+  if queuedInput.len == 0:
+    var readSet: TFdSet
+    FD_ZERO(readSet)
+    FD_SET(STDIN_FILENO, readSet)
+    var timeout = Timeval(tv_sec: Time(0), tv_usec: Suseconds(0))
+    if select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout) <= 0:
+      return (false, '\0')
+  readNextByteBlocking()
+
 proc readByteBlocking(): tuple[success: bool, ch: char] =
   ## Read the first byte of an event, taking a stashed UTF-8 resync byte before
   ## stdin. A signal ends the read with no byte, so the caller can react to it.
@@ -341,8 +353,8 @@ proc readPasteContentBlocking(): string =
 # it constructs `Event` values, and `Event` is defined in this module. Async
 # callers reach it through `import ../core/events`.
 #
-# Each parameter but `unread` is an *expression* re-evaluated at every textual
-# occurrence in the template body. Synchronous callers pass direct proc calls
+# Each parameter is an *expression* re-evaluated at every textual occurrence in
+# the template body. Synchronous callers pass direct proc calls
 # (`readByteBlocking()`); async callers pass `await ...` expressions. Because
 # the template body itself contains no `await`, it is type-checked under the
 # enclosing proc's sync/async context, so each context sees only its own form.
@@ -356,9 +368,11 @@ proc readPasteContentBlocking(): string =
 #   unread        -> a sync proc taking a string, passed without arguments; puts
 #                    those bytes back in front of the input, so `readByte`
 #                    returns them next
+#   drainByte     -> same shape as `readByte`; skips the tail of an ill-formed
+#                    character and returns `success = false` instead of waiting
 
 template parseEscapeSequenceUnified*(
-    readByte, readPaste, parseMouseX10, parseMouseSGR, unread: untyped
+    readByte, readPaste, parseMouseX10, parseMouseSGR, unread, drainByte: untyped
 ): Event =
   ## Parse an ESC sequence (ESC has already been consumed by the caller).
   ## For non-blocking callers, the post-ESC timeout check (standalone ESC vs
@@ -455,17 +469,48 @@ template parseEscapeSequenceUnified*(
           Event(kind: Key, key: mapAltKey(first.ch))
         else:
           let expectedLen = utf8ByteLength(first.ch.byte)
+          # Structural length also covers leads `utf8ByteLength` rejects but
+          # `std/unicode` still decodes; their tail must be drained too.
+          let sequenceLen =
+            if expectedLen > 0:
+              expectedLen
+            else:
+              structuralUtf8Length(first.ch.byte)
+          let (secondLo, secondHi) = utf8SecondByteRange(first.ch.byte)
           var contBytes: seq[byte] = @[]
           var wellFormed = expectedLen > 0
+          var rejected = false
+            ## A continuation byte was rejected; its tail is still in the stream.
           while wellFormed and contBytes.len < expectedLen - 1:
             let cont = readByte
-            if cont.success and isUtf8ContinuationByte(cont.ch.byte):
+            # Reject overlong, surrogate and out-of-range second bytes, as
+            # `assembleUtf8Char` does.
+            if cont.success and isUtf8ContinuationByte(cont.ch.byte) and (
+              contBytes.len > 0 or
+              (cont.ch.byte >= secondLo and cont.ch.byte <= secondHi)
+            ):
               contBytes.add(cont.ch.byte)
             else:
-              # Truncated or ill-formed sequence. Unlike the plain-key UTF-8
-              # path, an invalid continuation byte is dropped rather than
-              # re-injected as the next event's first byte.
+              # Truncated or ill-formed. Drop an out-of-range continuation
+              # byte; unread any other byte, which starts the next sequence.
               wellFormed = false
+              if cont.success:
+                if isUtf8ContinuationByte(cont.ch.byte):
+                  rejected = true
+                else:
+                  unread($cont.ch)
+          # Skip the rest of the malformed character so it stays one event;
+          # a non-continuation byte starts the next sequence.
+          let consumed = 1 + contBytes.len + (if rejected: 1 else: 0)
+          if rejected or (expectedLen == 0 and sequenceLen > 1):
+            for _ in 0 ..< sequenceLen - consumed:
+              let rest = drainByte
+              if not rest.success:
+                break
+              if isUtf8ContinuationByte(rest.ch.byte):
+                continue
+              unread($rest.ch)
+              break
           let text =
             if wellFormed:
               buildUtf8String(first.ch.byte, contBytes)
@@ -551,6 +596,7 @@ proc readKey*(): Event =
       parseMouseEventX10(),
       parseMouseEventSGR(),
       unreadInput,
+      readDrainByteBlocking(),
     )
 
   # Handle regular UTF-8 characters
@@ -789,6 +835,7 @@ proc readKeyInput*(): Option[Event] =
         parseMouseEventX10NonBlocking(),
         parseMouseEventSGRNonBlocking(),
         unreadInput,
+        readByteWithTimeoutNonBlocking(0),
       )
     )
 

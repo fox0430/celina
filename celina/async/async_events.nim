@@ -218,6 +218,7 @@ proc readKeyAsync*(reader: AsyncInputReader): Future[Event] {.async.} =
         await reader.parseMouseEventX10(),
         await reader.parseMouseEventSGR(),
         reader.unreadInput,
+        await reader.readByteTupleAsync(),
       )
 
     # Handle regular UTF-8 characters

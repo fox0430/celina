@@ -1481,3 +1481,77 @@ suite "Output Escape Sanitization (T1)":
     check cell("Hello, 世界!").symbol == "Hello, 世界!"
     check sanitizeHyperlink("https://example.com/a?b=1;c=2") ==
       "https://example.com/a?b=1;c=2"
+
+suite "Ill-formed UTF-8 Safety":
+  # `toRunes` decodes malformed bytes past U+10FFFF; unicodedb's asserts used
+  # to turn those into an AssertionDefect during measurement or drawing.
+
+  test "displayWidth does not assert on a rune beyond U+10FFFF":
+    check displayWidth("\xF5\x80\x80\x80A") == 2
+    check displayWidth("\xFB\xBF\xBF\xBF\xBFA") == 2
+
+  test "truncateToWidth repairs ill-formed input to U+FFFD":
+    let truncated = truncateToWidth("\xF5\x80\x80\x80A", 1)
+    check truncated == "\xEF\xBF\xBD"
+    check truncated.displayWidth == 1
+
+  test "setString stores U+FFFD for an out-of-range rune":
+    var buf = newBuffer(4, 1)
+    buf.setString(0, 0, "\xF5\x80\x80\x80A")
+    check buf[0, 0].symbol == "\xEF\xBF\xBD"
+    check buf[1, 0].symbol == "A"
+
+  test "setString inside an area repairs ill-formed input":
+    var buf = newBuffer(4, 1)
+    buf.setString(rect(0, 0, 4, 1), "\xF5\x80\x80\x80A")
+    check buf[0, 0].symbol == "\xEF\xBF\xBD"
+    check buf[1, 0].symbol == "A"
+
+  test "cluster measurement tolerates out-of-range runes":
+    var widths: seq[int]
+    for (_, w) in clusterMetrics(@[Rune(0x110000), Rune(ord('A'))]):
+      widths.add(w)
+    check widths == @[1, 1]
+    check clustersWidth(@[Rune(0x110000), Rune(ord('A'))]) == 2
+
+  test "width of a cell containing an out-of-range rune does not assert":
+    let c = Cell(symbol: "\xF5\x80\x80\x80A")
+    check c.width == 1
+
+  test "setRunes replaces non-scalar runes with U+FFFD":
+    # The `Rune`-based entry point must normalize like `setString`.
+    for r in [Rune(0x110000), Rune(-1), Rune(0xD800)]:
+      var buf = newBuffer(4, 1)
+      buf.setRunes(0, 0, @[r, Rune(ord('A'))])
+      check buf[0, 0].symbol == "\xEF\xBF\xBD"
+      check buf[0, 0].width == 1
+      check buf[1, 0].symbol == "A"
+
+  test "negative runes do not index the word-break table":
+    # A negative rune would index `wordBreakData` below zero in `clusterAt`.
+    var widths: seq[int]
+    for (_, w) in clusterMetrics(@[Rune(ord('A')), Rune(-1), Rune(ord('B'))]):
+      widths.add(w)
+    check widths == @[1, 1, 1]
+
+    var buf = newBuffer(4, 1)
+    buf.setRunes(0, 0, @[Rune(ord('A')), Rune(-1), Rune(ord('B'))])
+    check buf[0, 0].symbol == "A"
+    check buf[1, 0].symbol == "\xEF\xBF\xBD"
+    check buf[2, 0].symbol == "B"
+
+  test "measurement and drawing agree on ill-formed input":
+    # `displayWidth` uses `toRunes` while drawing uses `toRunesSanitized`;
+    # both must report the same column count.
+    for text in ["\xF5\x80\x80\x80A", "\xED\xA0\x80A", "\xFB\xBF\xBF\xBF\xBFA"]:
+      let measured = displayWidth(text)
+      check text.truncateToWidth(100).displayWidth == measured
+
+      var buf = newBuffer(8, 1)
+      buf.clear(cell(""))
+      buf.setString(0, 0, text)
+      var drawn = 0
+      for x in 0 ..< 8:
+        if not buf[x, 0].isShadow:
+          drawn += buf[x, 0].width
+      check drawn == measured

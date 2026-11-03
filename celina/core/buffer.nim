@@ -230,6 +230,15 @@ template isKeycapBase(r: Rune): bool =
   ## is just an ordinary (one-column) combining mark, so it must not promote.
   int(r) == 0x23 or int(r) == 0x2A or int(r) in 0x30 .. 0x39
 
+proc safeWordBreakProp(r: Rune): SgWord {.inline.} =
+  ## `wordBreakProp` that maps out-of-range runes to `sgwOther` instead of
+  ## asserting in unicodedb.
+  let n = int(r)
+  if n < 0 or n > 0x10FFFF:
+    sgwOther
+  else:
+    wordBreakProp(r)
+
 proc clusterAt(runes: openArray[Rune], start: int): tuple[next, width: int] =
   ## Segment one extended grapheme cluster starting at `start` (which must be a
   ## valid index). Return the exclusive end index and the cluster's terminal
@@ -261,12 +270,13 @@ proc clusterAt(runes: openArray[Rune], start: int): tuple[next, width: int] =
   if i >= n:
     return (i, w)
 
-  let leadProp = wordBreakProp(lead)
+  let leadProp = safeWordBreakProp(lead)
 
   # Regional-indicator pair -> a single flag glyph, two columns. `i < n` is
   # already guaranteed by the lone-rune fast path above, so `runes[i]` is in
   # range here.
-  if leadProp == sgwRegionalIndicator and wordBreakProp(runes[i]) == sgwRegionalIndicator:
+  if leadProp == sgwRegionalIndicator and
+      safeWordBreakProp(runes[i]) == sgwRegionalIndicator:
     return (i + 1, 2)
 
   let isEmoji = leadProp == sgwExtendedPictographic
@@ -316,7 +326,7 @@ proc clusterAt(runes: openArray[Rune], start: int): tuple[next, width: int] =
         keycap = true
       inc i
       continue
-    let p = wordBreakProp(r)
+    let p = safeWordBreakProp(r)
     if p == sgwZwj:
       # A ZWJ that joins another emoji collapses the whole sequence into one
       # two-column cluster; a dangling ZWJ just folds as a zero-width rune.
@@ -328,7 +338,8 @@ proc clusterAt(runes: openArray[Rune], start: int): tuple[next, width: int] =
       # cluster. Without the `isEmoji` guard the emoji would be swallowed here
       # and the cluster kept at the base's narrow width, under-counting the
       # column the terminal still draws and re-introducing the ghost-cell desync.
-      if isEmoji and i + 1 < n and wordBreakProp(runes[i + 1]) == sgwExtendedPictographic:
+      if isEmoji and i + 1 < n and
+          safeWordBreakProp(runes[i + 1]) == sgwExtendedPictographic:
         promote = true
         i += 2
         continue
@@ -408,6 +419,8 @@ proc truncateToWidth*(s: string, maxWidth: int): string =
   ## wide cluster — a CJK character, or a VS16/ZWJ emoji that renders in two
   ## columns — is dropped rather than split or under-counted when it would not
   ## fit. The result's `displayWidth` therefore never exceeds `maxWidth`.
+  ## Non-scalar code points are replaced with U+FFFD; other malformed input
+  ## keeps `std/unicode`'s lenient decode.
   if maxWidth <= 0:
     return ""
   # Fast path: a pure-ASCII string is one column per byte, so the longest fitting
@@ -421,7 +434,7 @@ proc truncateToWidth*(s: string, maxWidth: int): string =
     return s[0 ..< min(maxWidth, s.len)]
   # Measure with `clusterMetrics` (no per-cluster string build) to find the rune
   # index past the longest fitting prefix, then build the result once.
-  let runes = s.toRunes
+  let runes = s.toRunesSanitized
   var w = 0
   var endIdx = runes.len
   for (leadIdx, cw) in clusterMetrics(runes):
@@ -710,26 +723,16 @@ proc foldClusterInto*(buffer: var Buffer, baseX, y: int, text: string) {.inline.
     buffer.content[y][baseX].symbol.add(safe)
     buffer.markDirty(baseX, y)
 
-proc setRunes*(
+proc setRunesImpl(
     buffer: var Buffer,
     x, y: int,
-    runes: seq[Rune],
-    style: Style = defaultStyle(),
-    hyperlink: string = "",
-    tabWidth: int = DefaultTabWidth,
+    input: openArray[Rune],
+    style: Style,
+    hyperlink: string,
+    tabWidth: int,
 ) =
-  ## Set a sequence of runes starting at the given coordinates.
-  ## Handles Unicode characters and wide characters properly.
-  ## If hyperlink is provided, the text becomes a clickable link (OSC 8).
-  ##
-  ## `\t` expands to spaces up to the next `tabWidth` boundary measured
-  ## from the starting `x`, so consecutive tabs land on consistent stops.
-  ## When `tabWidth <= 0`, tab expansion is disabled and `\t` is replaced
-  ## with a single space. Other C0 control characters, DEL and C1 are always
-  ## replaced with a single space — leaving them in a cell symbol would
-  ## otherwise be re-emitted verbatim by the differential renderer and
-  ## shift subsequent cursor positioning on the real terminal.
-  if runes.len == 0:
+  ## `setRunes` body. `input` must already be free of non-scalar runes.
+  if input.len == 0:
     return
   if not buffer.isValidPos(x, y):
     return
@@ -746,8 +749,8 @@ proc setRunes*(
   # clusters occupy a single (possibly wide) cell whose width matches how the
   # terminal renders them. `text` carries the whole cluster; the C0/tab
   # branches key off the lead rune and ignore it.
-  for (leadIdx, text, width) in graphemeClusters(runes):
-    let n = int(runes[leadIdx])
+  for (leadIdx, text, width) in graphemeClusters(input):
+    let n = int(input[leadIdx])
     if n == 0x09 and tabWidth > 0:
       # Tab: expand to spaces up to next tab stop relative to startX.
       # Bail out early once we've hit the right edge so that a run of
@@ -799,6 +802,34 @@ proc setRunes*(
 
 proc setRunes*(
     buffer: var Buffer,
+    x, y: int,
+    runes: seq[Rune],
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
+    tabWidth: int = DefaultTabWidth,
+) =
+  ## Set a sequence of runes starting at the given coordinates.
+  ## Handles Unicode characters and wide characters properly.
+  ## If hyperlink is provided, the text becomes a clickable link (OSC 8).
+  ##
+  ## `\t` expands to spaces up to the next `tabWidth` boundary measured
+  ## from the starting `x`, so consecutive tabs land on consistent stops.
+  ## When `tabWidth <= 0`, tab expansion is disabled and `\t` is replaced
+  ## with a single space. Other C0 control characters, DEL and C1 are always
+  ## replaced with a single space — leaving them in a cell symbol would
+  ## otherwise be re-emitted verbatim by the differential renderer and
+  ## shift subsequent cursor positioning on the real terminal.
+  ## Non-scalar runes are replaced with U+FFFD, matching `setString`.
+  # One rune maps to one rune, so the layout is unchanged; copy only when a
+  # rune needs it.
+  for r in runes:
+    if sanitizeRune(r) != r:
+      buffer.setRunesImpl(x, y, sanitizeRunes(runes), style, hyperlink, tabWidth)
+      return
+  buffer.setRunesImpl(x, y, runes, style, hyperlink, tabWidth)
+
+proc setRunes*(
+    buffer: var Buffer,
     pos: Position,
     runes: seq[Rune],
     style: Style = defaultStyle(),
@@ -818,12 +849,14 @@ proc setString*(
 ) =
   ## Set a string starting at the given coordinates.
   ## See `setRunes` for tab and control character semantics.
+  ## Non-scalar code points are replaced with U+FFFD; other malformed input
+  ## keeps `std/unicode`'s lenient decode.
   if text.len == 0:
     return
   try:
-    buffer.setRunes(x, y, text.toRunes, style, hyperlink, tabWidth)
+    buffer.setRunesImpl(x, y, text.toRunesSanitized, style, hyperlink, tabWidth)
   except CatchableError:
-    # Malformed UTF-8 or other unexpected error — stop gracefully.
+    # Non-scalar code points are handled above; guard other failures.
     return
 
 proc setString*(
@@ -854,10 +887,12 @@ proc setString*(
   ## space — tab-stop expansion is intentionally skipped here because the
   ## alignment math is built around a fixed `textWidth`; the (x, y) overload
   ## of `setString` is the place to use real tab semantics.
+  ## Non-scalar code points are replaced with U+FFFD; other malformed input
+  ## keeps `std/unicode`'s lenient decode.
   if text.len == 0 or area.isEmpty:
     return
 
-  let runes = text.toRunes
+  let runes = text.toRunesSanitized
 
   # Calculate display width of text by grapheme cluster (control chars treated
   # as 1 column). `clusterMetrics` measures without building cluster strings;
