@@ -780,13 +780,28 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
   template emit(ex, ey: int, text: string, st: Style) =
     drawClipped(buf, ex, ey, area, text, st)
 
-  let columnWidths = widget.calculateColumnWidths(area.width)
+  # Reserve the scrollbar column up front so the bar never sits on top of cell
+  # content. Derive the row count from the fixed chrome (top border, header,
+  # separator, bottom border) and assign it to `visibleRowCount` so the
+  # reservation and the row loop can never disagree about how many rows fit.
+  let headerRows =
+    (if widget.borderStyle != bkNone: 1 else: 0) + (if widget.showHeader: 1 else: 0) +
+    (if widget.showHeader and widget.borderStyle != bkNone: 1 else: 0)
+  widget.visibleRowCount =
+    max(0, area.height - headerRows - (if widget.borderStyle != bkNone: 1 else: 0))
+  let needsScrollbar =
+    widget.showScrollbar and widget.visibleRowCount > 0 and
+    widget.rows.len > widget.visibleRowCount
+  let scrollbarColumns = if needsScrollbar: 1 else: 0
+
+  let columnWidths = widget.calculateColumnWidths(area.width - scrollbarColumns)
   let borderChars = getBorderChars(widget.borderStyle)
 
-  # Calculate actual table width
+  # Calculate actual table width (the reserved scrollbar column is part of it)
   let hasBorders = widget.borderStyle != bkNone
   let actualTableWidth =
-    calculateTotalLineWidth(columnWidths, widget.columnSpacing, hasBorders)
+    calculateTotalLineWidth(columnWidths, widget.columnSpacing, hasBorders) +
+    scrollbarColumns
 
   var currentY = area.y
 
@@ -799,6 +814,8 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
         if hasVisibleColumnAfter(columnWidths, i):
           borderLine.add(borderChars.horizontal.repeat(widget.columnSpacing))
           borderLine.add(borderChars.topT)
+    if scrollbarColumns > 0:
+      borderLine.add(borderChars.horizontal)
     borderLine.add(borderChars.topRight)
     emit(area.x, currentY, borderLine, widget.borderColor)
     currentY += 1
@@ -833,6 +850,10 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
             emit(currentX, currentY, borderChars.vertical, widget.borderColor)
             currentX += 1
 
+    if scrollbarColumns > 0:
+      emit(currentX, currentY, " ", widget.headerStyle)
+      currentX += 1
+
     # Render right border
     if hasBorders:
       emit(currentX, currentY, borderChars.vertical, widget.borderColor)
@@ -848,22 +869,17 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
           if hasVisibleColumnAfter(columnWidths, i):
             separatorLine.add(borderChars.horizontal.repeat(widget.columnSpacing))
             separatorLine.add(borderChars.cross)
+      if scrollbarColumns > 0:
+        separatorLine.add(borderChars.horizontal)
       separatorLine.add(borderChars.rightT)
       emit(area.x, currentY, separatorLine, widget.borderColor)
       currentY += 1
-
-  # Calculate visible row area
-  let availableRows =
-    area.y + area.height - currentY - (if widget.borderStyle != bkNone: 1 else: 0)
-  widget.visibleRowCount = max(0, availableRows)
 
   # Ensure scroll offset is valid
   let maxScroll = max(0, widget.rows.len - widget.visibleRowCount)
   widget.scrollOffset = min(widget.scrollOffset, maxScroll)
 
-  # Calculate scrollbar position if needed
-  let needsScrollbar = widget.showScrollbar and widget.rows.len > widget.visibleRowCount
-  # Position scrollbar inside the right border of the actual table
+  # Position the scrollbar on its reserved column inside the right border
   let scrollbarX =
     area.x + actualTableWidth - (if widget.borderStyle != bkNone: 2 else: 1)
   var scrollbarHeight = 0
@@ -892,7 +908,8 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
       var emptyLine = ""
       let hasBorders = widget.borderStyle != bkNone
       let expectedWidth =
-        calculateTotalLineWidth(columnWidths, widget.columnSpacing, hasBorders)
+        calculateTotalLineWidth(columnWidths, widget.columnSpacing, hasBorders) +
+        scrollbarColumns
 
       if hasBorders:
         emptyLine =
@@ -979,6 +996,8 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
 
     # Render right border
     if hasBorders:
+      if scrollbarColumns > 0:
+        currentX += 1
       emit(currentX, currentY, borderChars.vertical, widget.borderColor)
 
     currentY += 1
@@ -992,6 +1011,8 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
         if hasVisibleColumnAfter(columnWidths, i):
           borderLine.add(borderChars.horizontal.repeat(widget.columnSpacing))
           borderLine.add(borderChars.bottomT)
+    if scrollbarColumns > 0:
+      borderLine.add(borderChars.horizontal)
     borderLine.add(borderChars.bottomRight)
     emit(area.x, currentY, borderLine, widget.borderColor)
 
@@ -1003,7 +1024,8 @@ method getMinSize*(widget: Table): Size =
   # Minimum width: at least 3 characters per column plus spacing and borders
   let minWidth =
     widget.columns.len * 3 + (widget.columns.len - 1) * widget.columnSpacing +
-    (if widget.borderStyle != bkNone: 2 else: 0) + (if widget.showScrollbar: 1 else: 0)
+    (if widget.borderStyle != bkNone: widget.columns.len + 1
+    else: 0) + (if widget.showScrollbar: 1 else: 0)
 
   # Minimum height: header + at least one row + borders
   let minHeight =
