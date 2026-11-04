@@ -3,7 +3,7 @@
 ## This test suite verifies that the shared UTF-8 processing utilities
 ## work correctly for both sync and async implementations.
 
-import std/options
+import std/[options, unicode]
 import unittest
 import ../celina/core/utf8_utils
 
@@ -453,3 +453,78 @@ suite "assembleUtf8Char (U+FFFD substitution)":
     # 0xE3 expects 2 continuation bytes. The first byte (0x41) is invalid,
     # so the assembler returns immediately and must NOT read the second.
     check consumed == 1
+
+suite "structuralUtf8Length":
+  test "valid lead bytes report their sequence length":
+    check structuralUtf8Length(0x41) == 1
+    check structuralUtf8Length(0xC3) == 2
+    check structuralUtf8Length(0xE3) == 3
+    check structuralUtf8Length(0xF0) == 4
+
+  test "leads rejected by utf8ByteLength still have a structural length":
+    check structuralUtf8Length(0xC0) == 2 # always overlong
+    check structuralUtf8Length(0xF5) == 4 # above U+10FFFF
+    check structuralUtf8Length(0xF8) == 5 # legacy 5-byte form
+    check structuralUtf8Length(0xFC) == 6 # legacy 6-byte form
+
+  test "bytes that cannot lead a sequence have no length":
+    check structuralUtf8Length(0x80) == 0
+    check structuralUtf8Length(0xBF) == 0
+    check structuralUtf8Length(0xFE) == 0
+    check structuralUtf8Length(0xFF) == 0
+
+suite "sanitizeRune / sanitizeRunes":
+  test "scalar values pass through":
+    for r in [Rune(0), Rune(0x41), Rune(0xD7FF), Rune(0xE000), Rune(0x10FFFF)]:
+      check sanitizeRune(r) == r
+
+  test "non-scalar values become U+FFFD":
+    for r in [Rune(-1), Rune(0xD800), Rune(0xDFFF), Rune(0x110000)]:
+      check sanitizeRune(r) == Rune(0xFFFD)
+
+  test "sanitizeRunes keeps length and replaces only the bad entries":
+    let runes = @[Rune(ord('A')), Rune(0x110000), Rune(ord('B'))]
+    check sanitizeRunes(runes) == @[Rune(ord('A')), Rune(0xFFFD), Rune(ord('B'))]
+    check runes[1] == Rune(0x110000) # input is not modified
+
+suite "toRunesSanitized":
+  test "well-formed input decodes unchanged":
+    let s = "aé日😀"
+    check toRunesSanitized(s) == s.toRunes
+
+  test "runes above U+10FFFF become U+FFFD":
+    # `toRunes` decodes F5 as a 4-byte sequence past the valid F4 limit.
+    check "\xF5\x80\x80\x80".toRunes[0].int == 0x140000
+    let runes = toRunesSanitized("\xF5\x80\x80\x80A")
+    check runes.len == 2
+    check runes[0].int == 0xFFFD
+    check runes[1] == Rune(ord('A'))
+
+  test "legacy 5-byte sequences become U+FFFD":
+    # FB BF BF BF BF decodes to 0x03FFFFFF in std `toRunes`.
+    check "\xFB\xBF\xBF\xBF\xBF".toRunes[0].int > 0x10FFFF
+    let runes = toRunesSanitized("\xFB\xBF\xBF\xBF\xBFA")
+    check runes.len == 2
+    check runes[0].int == 0xFFFD
+    check runes[1] == Rune(ord('A'))
+
+  test "surrogates become U+FFFD":
+    check "\xED\xA0\x80".toRunes[0].int == 0xD800
+    let runes = toRunesSanitized("\xED\xA0\x80A")
+    check runes.len == 2
+    check runes[0].int == 0xFFFD
+    check runes[1] == Rune(ord('A'))
+
+  test "truncated input keeps the U+FFFD that toRunes inserts":
+    let runes = toRunesSanitized("\xE3\x81")
+    check runes.len == 2
+    check runes[0].int == 0xFFFD
+    check runes[1].int == 0x81
+
+  test "every returned rune is a Unicode scalar value":
+    for s in [
+      "\xF5\x80\x80\x80", "\xFB\xBF\xBF\xBF\xBF", "\xED\xA0\x80", "\xFF", "\xE3\x81"
+    ]:
+      for r in toRunesSanitized(s):
+        check r.int >= 0 and r.int <= 0x10FFFF
+        check not (r.int >= 0xD800 and r.int <= 0xDFFF)

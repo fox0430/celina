@@ -1946,6 +1946,130 @@ suite "Events Module Tests":
           setStdinNonBlockingPinned(originalPin)
           restoreStdin(p)
 
+  suite "Alt UTF-8 Validation":
+    ## The Alt branch assembles UTF-8 inline, so it must validate the second
+    ## byte like `assembleUtf8Char`.
+
+    test "readKeyInput decodes a valid Alt+UTF-8 character":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b\xC3\xA9") # ESC + é
+          let ev = readKeyInput()
+          check ev.isSome
+          check ev.get.kind == EventKind.Key
+          check ev.get.key.code == Char
+          check ev.get.key.char == "é"
+          check Alt in ev.get.key.modifiers
+        finally:
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "readKeyInput rejects an overlong Alt encoding":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b\xE0\x80\xAF") # overlong encoding of '/'
+          let ev = readKeyInput()
+          check ev.isSome
+          check ev.get.kind == EventKind.Key
+          check ev.get.key.char == Utf8ReplacementChar
+          check Alt in ev.get.key.modifiers
+        finally:
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "readKeyInput rejects a surrogate Alt encoding":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b\xED\xA0\x80") # UTF-16 surrogate U+D800
+          let ev = readKeyInput()
+          check ev.isSome
+          check ev.get.kind == EventKind.Key
+          check ev.get.key.char == Utf8ReplacementChar
+          check Alt in ev.get.key.modifiers
+        finally:
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "readKeyInput consumes the tail of a rejected Alt sequence":
+      # Tail continuation bytes must not become separate key events, even for
+      # leads whose `utf8ByteLength` is 0.
+      for input in [
+        "\x1b\xED\xA0\x80", # surrogate
+        "\x1b\xF4\x90\x80\x80", # above U+10FFFF
+        "\x1b\xF5\x80\x80\x80", # invalid lead, out-of-range 4-byte form
+        "\x1b\xFB\xBF\xBF\xBF\xBF", # legacy 5-byte form
+        "\x1b\xC0\x80", # always-overlong 2-byte form
+      ]:
+        let originalPin = isStdinNonBlockingPinned()
+        let p = redirectStdinFromPipe()
+        if p.saved != -1:
+          try:
+            setStdinNonBlockingPinned(false)
+            clearPendingByte()
+            feedPipe(p, input)
+            let ev = readKeyInput()
+            check ev.isSome
+            check ev.get.key.char == Utf8ReplacementChar
+            check Alt in ev.get.key.modifiers
+            check readKeyInput().isNone
+          finally:
+            setStdinNonBlockingPinned(originalPin)
+            restoreStdin(p)
+
+    test "readKey does not wait for the tail of a rejected sequence":
+      # A rejected byte already determines the event, so a blocking read must
+      # not wait for tail bytes that may never arrive.
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          feedPipe(p, "\x1b\xE0A") # ESC + 3-byte lead + non-continuation
+          let ev = readKey()
+          check ev.kind == EventKind.Key
+          check ev.key.char == Utf8ReplacementChar
+          check Alt in ev.key.modifiers
+        finally:
+          restoreStdin(p)
+
+    test "readKeyInput hands back a non-continuation byte after a rejection":
+      # A non-continuation byte starts the next key.
+      for (input, nextChar) in [
+        ("\x1b\xED\xA0" & "A", "A"), # met while draining
+        ("\x1b\xE0" & "A", "A"), # the rejected byte itself
+        ("\x1b\xF0\x9F" & "あ", "あ"), # a following multi-byte key
+      ]:
+        let originalPin = isStdinNonBlockingPinned()
+        let p = redirectStdinFromPipe()
+        if p.saved != -1:
+          try:
+            setStdinNonBlockingPinned(false)
+            clearPendingByte()
+            feedPipe(p, input)
+            let ev = readKeyInput()
+            check ev.isSome
+            check ev.get.key.char == Utf8ReplacementChar
+            let next = readKeyInput()
+            check next.isSome
+            check next.get.kind == EventKind.Key
+            check next.get.key.code == Char
+            check next.get.key.char == nextChar
+            check readKeyInput().isNone
+          finally:
+            setStdinNonBlockingPinned(originalPin)
+            restoreStdin(p)
+
   suite "Stashed pendingByte visible to pollers":
     ## Regression: a UTF-8 resync byte stashed in `pendingByte` is a real
     ## keystroke the next readKey will emit. hasInput/pollEvents only watch the

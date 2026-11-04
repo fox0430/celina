@@ -230,6 +230,15 @@ template isKeycapBase(r: Rune): bool =
   ## is just an ordinary (one-column) combining mark, so it must not promote.
   int(r) == 0x23 or int(r) == 0x2A or int(r) in 0x30 .. 0x39
 
+proc safeWordBreakProp(r: Rune): SgWord {.inline.} =
+  ## `wordBreakProp` that maps out-of-range runes to `sgwOther` instead of
+  ## asserting in unicodedb.
+  let n = int(r)
+  if n < 0 or n > 0x10FFFF:
+    sgwOther
+  else:
+    wordBreakProp(r)
+
 proc clusterAt(runes: openArray[Rune], start: int): tuple[next, width: int] =
   ## Segment one extended grapheme cluster starting at `start` (which must be a
   ## valid index). Return the exclusive end index and the cluster's terminal
@@ -261,12 +270,13 @@ proc clusterAt(runes: openArray[Rune], start: int): tuple[next, width: int] =
   if i >= n:
     return (i, w)
 
-  let leadProp = wordBreakProp(lead)
+  let leadProp = safeWordBreakProp(lead)
 
   # Regional-indicator pair -> a single flag glyph, two columns. `i < n` is
   # already guaranteed by the lone-rune fast path above, so `runes[i]` is in
   # range here.
-  if leadProp == sgwRegionalIndicator and wordBreakProp(runes[i]) == sgwRegionalIndicator:
+  if leadProp == sgwRegionalIndicator and
+      safeWordBreakProp(runes[i]) == sgwRegionalIndicator:
     return (i + 1, 2)
 
   let isEmoji = leadProp == sgwExtendedPictographic
@@ -316,7 +326,7 @@ proc clusterAt(runes: openArray[Rune], start: int): tuple[next, width: int] =
         keycap = true
       inc i
       continue
-    let p = wordBreakProp(r)
+    let p = safeWordBreakProp(r)
     if p == sgwZwj:
       # A ZWJ that joins another emoji collapses the whole sequence into one
       # two-column cluster; a dangling ZWJ just folds as a zero-width rune.
@@ -328,7 +338,8 @@ proc clusterAt(runes: openArray[Rune], start: int): tuple[next, width: int] =
       # cluster. Without the `isEmoji` guard the emoji would be swallowed here
       # and the cluster kept at the base's narrow width, under-counting the
       # column the terminal still draws and re-introducing the ghost-cell desync.
-      if isEmoji and i + 1 < n and wordBreakProp(runes[i + 1]) == sgwExtendedPictographic:
+      if isEmoji and i + 1 < n and
+          safeWordBreakProp(runes[i + 1]) == sgwExtendedPictographic:
         promote = true
         i += 2
         continue
@@ -408,6 +419,8 @@ proc truncateToWidth*(s: string, maxWidth: int): string =
   ## wide cluster — a CJK character, or a VS16/ZWJ emoji that renders in two
   ## columns — is dropped rather than split or under-counted when it would not
   ## fit. The result's `displayWidth` therefore never exceeds `maxWidth`.
+  ## Non-scalar code points are replaced with U+FFFD; other malformed input
+  ## keeps `std/unicode`'s lenient decode.
   if maxWidth <= 0:
     return ""
   # Fast path: a pure-ASCII string is one column per byte, so the longest fitting
@@ -421,7 +434,7 @@ proc truncateToWidth*(s: string, maxWidth: int): string =
     return s[0 ..< min(maxWidth, s.len)]
   # Measure with `clusterMetrics` (no per-cluster string build) to find the rune
   # index past the longest fitting prefix, then build the result once.
-  let runes = s.toRunes
+  let runes = s.toRunesSanitized
   var w = 0
   var endIdx = runes.len
   for (leadIdx, cw) in clusterMetrics(runes):
@@ -445,6 +458,16 @@ proc width*(cell: Cell): int =
   if runes.len == 0:
     return 0
   return clusterAt(runes, 0).width
+
+proc cellWidth(cell: Cell): int {.inline.} =
+  ## `width` with a fast path for empty and single-byte (ASCII) symbols.
+  ## Cells built through the public API are sanitized, so a one-byte symbol
+  ## is one column.
+  if cell.symbol.len == 0:
+    return 0
+  if cell.symbol.len == 1:
+    return 1
+  cell.width
 
 proc `==`*(a, b: Cell): bool =
   ## Compare two cells for equality
@@ -596,26 +619,51 @@ proc `[]`*(buffer: Buffer, pos: Position): Cell {.inline.} =
 
 proc storeCell(buffer: var Buffer, x, y: int, safeCell: Cell) =
   ## Body of `[]=` for an in-bounds, already sanitized cell.
-  let isShadowWrite = safeCell.isShadow
+  ##
+  ## Enforces the wide-pair invariant: a width-2 lead gets an empty shadow at
+  ## x + 1, an empty cell is kept only as the shadow of a width-2 lead at
+  ## x - 1, and a width-2 lead in the last column becomes a blank.
+  var newCell = safeCell
+
+  if newCell.isShadow:
+    let leftIsWideLead =
+      x > 0 and not buffer.content[y][x - 1].isShadow and
+      cellWidth(buffer.content[y][x - 1]) == 2
+    if not leftIsWideLead:
+      newCell = cell(" ", newCell.style)
+
+  var newWidth = cellWidth(newCell)
+  if newWidth == 2 and x + 1 >= buffer.area.width:
+    # No column for the shadow: fall back to a blank.
+    newCell = cell(" ", newCell.style)
+    newWidth = 1
+
+  let isShadowWrite = newCell.isShadow
   var minX = x
   var maxX = x
 
   if not isShadowWrite and x > 0:
     let leftCell = buffer.content[y][x - 1]
-    if not leftCell.isShadow and leftCell.width == 2:
+    if not leftCell.isShadow and cellWidth(leftCell) == 2:
       buffer.content[y][x - 1] = cell(" ", leftCell.style)
       minX = x - 1
 
   let oldCell = buffer.content[y][x]
-  if not oldCell.isShadow and oldCell.width == 2 and x + 1 < buffer.area.width:
+  if not oldCell.isShadow and cellWidth(oldCell) == 2 and x + 1 < buffer.area.width:
     buffer.content[y][x + 1] = cell(" ", oldCell.style)
     maxX = x + 1
 
-  buffer.content[y][x] = safeCell
+  buffer.content[y][x] = newCell
+
+  if newWidth == 2:
+    # The shadow goes through the same invariant, so a wide lead it
+    # overwrites also clears the shadow beyond it.
+    buffer.storeCell(x + 1, y, cell("", newCell.style, newCell.hyperlink))
 
   # markDirty(min) then markDirty(max) expands the region to cover the
   # whole [minX..maxX] range; x always sits inside so we don't mark it
-  # separately when there was a neighbour cleanup.
+  # separately when there was a neighbour cleanup. The shadow write above
+  # marks its own column.
   buffer.markDirty(minX, y)
   if maxX != minX:
     buffer.markDirty(maxX, y)
@@ -624,6 +672,10 @@ proc `[]=`*(buffer: var Buffer, x, y: int, newCell: Cell) =
   ## Set cell at coordinates.
   ##
   ## Maintains wide-character consistency:
+  ## - A width-2 lead also writes an empty shadow at (x+1). In the last
+  ##   column there is no room for the shadow, so the glyph becomes a blank.
+  ## - An empty (shadow) cell is kept only as the right half of a width-2
+  ##   lead at (x-1); a standalone empty cell becomes a blank.
   ## - If overwriting the shadow cell of a wide character at (x-1), the
   ##   orphaned lead at (x-1) is replaced with a space (preserving its
   ##   style; the hyperlink, if any, is dropped because the link anchor
@@ -631,17 +683,8 @@ proc `[]=`*(buffer: var Buffer, x, y: int, newCell: Cell) =
   ## - If the old cell at (x, y) was a wide-character lead, its shadow
   ##   at (x+1) is replaced with a space (preserving the lead's style).
   ##
-  ## Writes with an empty symbol (shadow cells) skip the left-side
-  ## cleanup so that sequential wide-character writes (lead followed by
-  ## shadow) do not erase the lead just written.
-  ##
-  ## NOTE: This is a low-level single-cell write. When `newCell` is a
-  ## wide character (width == 2) the matching shadow at (x+1) is NOT
-  ## placed automatically — callers must write the shadow themselves or
-  ## use `setCell` / `setString` which handle it. Likewise, writing a
-  ## wide character at the rightmost column leaves the buffer in an
-  ## inconsistent state (no room for a shadow); use `setCell`, which
-  ## performs the right-edge check.
+  ## An empty-symbol write keeps the wide lead at (x-1): it is that lead's
+  ## shadow, not an overwrite of it.
   ##
   ## `newCell` is sanitized. A wide symbol with a control collapses to one
   ## column, so use `setCell`, which blanks both columns.
@@ -665,28 +708,64 @@ proc isValidPos*(buffer: Buffer, pos: Position): bool {.inline.} =
 proc clear*(buffer: var Buffer, cell: Cell = cell()) =
   ## Clear the entire buffer with the given cell.
   ##
-  ## Bypasses `[]=` (and its wide-character consistency check) because
-  ## every cell is overwritten by `cell`, so there is no orphan to crush.
-  ## Sanitized once up front, as in `[]=`.
-  let safe = cell.sanitized
+  ## A width-2 cell is repeated every two columns with its shadow; the final
+  ## column becomes a blank when the width is odd. An empty (or zero-width)
+  ## cell has no glyph to repeat and becomes a blank.
+  ##
+  ## Bypasses `[]=` because every cell is overwritten, so there is no orphan
+  ## to crush; the pattern above keeps wide pairs consistent by construction.
+  var safe = cell.sanitized
+  var safeWidth = cellWidth(safe)
+  if safeWidth == 0:
+    safe = cell(" ", safe.style)
+    safeWidth = 1
+
+  let shadow = cell("", safe.style, safe.hyperlink)
+  let blank = cell(" ", safe.style)
+
   for y in 0 ..< buffer.area.height:
-    for x in 0 ..< buffer.area.width:
-      buffer.content[y][x] = safe
+    var x = 0
+    while x < buffer.area.width:
+      if safeWidth == 2 and x + 1 < buffer.area.width:
+        buffer.content[y][x] = safe
+        buffer.content[y][x + 1] = shadow
+        x += 2
+      else:
+        buffer.content[y][x] = if safeWidth == 2: blank else: safe
+        x += 1
 
   # Mark entire buffer as dirty
   buffer.markDirtyRect(buffer.area)
 
 proc fill*(buffer: var Buffer, area: Rect, fillCell: Cell) =
   ## Fill a rectangular area with the given cell, sanitized once up front.
+  ##
+  ## A width-2 cell is repeated every two columns with its shadow. A pair
+  ## that does not fit in the area (a one-column area, or an odd final
+  ## column) becomes a blank, so the fill's own glyph never spills past the
+  ## area. When the area's left edge falls on the shadow of a wide pair, the
+  ## orphaned lead just outside the area is blanked too, as everywhere else a
+  ## wide pair is cut. An empty (or zero-width) cell becomes a blank.
+  var safe = fillCell.sanitized
+  var safeWidth = cellWidth(safe)
+  if safeWidth == 0:
+    safe = cell(" ", safe.style)
+    safeWidth = 1
+
+  let blank = cell(" ", safe.style)
   let clippedArea = buffer.area.intersection(area)
-  let safe = fillCell.sanitized
 
   for y in clippedArea.y ..< clippedArea.bottom:
-    for x in clippedArea.x ..< clippedArea.right:
+    let localY = y - buffer.area.y
+    var x = clippedArea.x
+    while x < clippedArea.right:
       let localX = x - buffer.area.x
-      let localY = y - buffer.area.y
-      if buffer.isValidPos(localX, localY):
+      if safeWidth == 2 and x + 1 < clippedArea.right:
         buffer.storeCell(localX, localY, safe)
+        x += 2
+      else:
+        buffer.storeCell(localX, localY, if safeWidth == 2: blank else: safe)
+        x += 1
 
   # Mark filled area as dirty
   buffer.markDirtyRect(clippedArea)
@@ -697,39 +776,44 @@ proc sanitizeFoldedCluster(text: string): string {.inline.} =
 
 proc foldClusterInto*(buffer: var Buffer, baseX, y: int, text: string) {.inline.} =
   ## Append a zero-width cluster's text onto an existing base cell at
-  ## (baseX, y), keeping the grapheme cluster in a single cell. Direct symbol
-  ## mutation bypasses the wide-char cleanup in `[]=` so the base's shadow cell
-  ## (for a wide base) is preserved. A no-op when `baseX < 0` or out of range,
-  ## so callers can pass a "no base yet" sentinel and have the text dropped —
-  ## mirroring how a leading mark with nothing to attach to is dropped.
+  ## (baseX, y), keeping the grapheme cluster in a single cell. If `baseX` is
+  ## the shadow of a wide character, the text is folded into the lead at
+  ## `baseX - 1` instead, so the pair survives. The direct symbol mutation
+  ## bypasses the wide-char cleanup in `[]=` so the base's shadow cell (for a
+  ## wide base) is preserved. A fold that changes the cluster's width
+  ## (VS16/VS15, emoji modifier, keycap) is rewritten through `storeCell`
+  ## instead, which adds the shadow or clears the orphaned one.
+  ## A no-op when `baseX < 0` or out of range, so callers can pass a "no base
+  ## yet" sentinel and have the text dropped — mirroring how a leading mark
+  ## with nothing to attach to is dropped.
   ## `text` is stripped of controls; empty results are dropped without marking dirty.
   if baseX >= 0 and buffer.isValidPos(baseX, y):
+    var bx = baseX
+    if buffer.content[y][bx].isShadow and bx > 0:
+      dec bx
     let safe = sanitizeFoldedCluster(text)
     if safe.len == 0:
       return
-    buffer.content[y][baseX].symbol.add(safe)
-    buffer.markDirty(baseX, y)
+    let before = buffer.content[y][bx]
+    let folded = Cell(
+      symbol: before.symbol & safe, style: before.style, hyperlink: before.hyperlink
+    )
+    if cellWidth(folded) != cellWidth(before):
+      buffer.storeCell(bx, y, folded)
+    else:
+      buffer.content[y][bx] = folded
+      buffer.markDirty(bx, y)
 
-proc setRunes*(
+proc setRunesImpl(
     buffer: var Buffer,
     x, y: int,
-    runes: seq[Rune],
-    style: Style = defaultStyle(),
-    hyperlink: string = "",
-    tabWidth: int = DefaultTabWidth,
+    input: openArray[Rune],
+    style: Style,
+    hyperlink: string,
+    tabWidth: int,
 ) =
-  ## Set a sequence of runes starting at the given coordinates.
-  ## Handles Unicode characters and wide characters properly.
-  ## If hyperlink is provided, the text becomes a clickable link (OSC 8).
-  ##
-  ## `\t` expands to spaces up to the next `tabWidth` boundary measured
-  ## from the starting `x`, so consecutive tabs land on consistent stops.
-  ## When `tabWidth <= 0`, tab expansion is disabled and `\t` is replaced
-  ## with a single space. Other C0 control characters, DEL and C1 are always
-  ## replaced with a single space — leaving them in a cell symbol would
-  ## otherwise be re-emitted verbatim by the differential renderer and
-  ## shift subsequent cursor positioning on the real terminal.
-  if runes.len == 0:
+  ## `setRunes` body. `input` must already be free of non-scalar runes.
+  if input.len == 0:
     return
   if not buffer.isValidPos(x, y):
     return
@@ -746,8 +830,8 @@ proc setRunes*(
   # clusters occupy a single (possibly wide) cell whose width matches how the
   # terminal renders them. `text` carries the whole cluster; the C0/tab
   # branches key off the lead rune and ignore it.
-  for (leadIdx, text, width) in graphemeClusters(runes):
-    let n = int(runes[leadIdx])
+  for (leadIdx, text, width) in graphemeClusters(input):
+    let n = int(input[leadIdx])
     if n == 0x09 and tabWidth > 0:
       # Tab: expand to spaces up to next tab stop relative to startX.
       # Bail out early once we've hit the right edge so that a run of
@@ -788,14 +872,39 @@ proc setRunes*(
       break
 
     if buffer.isValidPos(currentX, y):
+      # `[]=` places the shadow of a width-2 lead itself.
       buffer[currentX, y] = cell(text, style, hyperlink)
-      # For wide characters, mark the next cell as occupied (empty)
-      # Also inherit the hyperlink for proper link region handling
-      if width == 2 and buffer.isValidPos(currentX + 1, y):
-        buffer[currentX + 1, y] = cell("", style, hyperlink)
       lastBaseX = currentX
 
     currentX += width
+
+proc setRunes*(
+    buffer: var Buffer,
+    x, y: int,
+    runes: seq[Rune],
+    style: Style = defaultStyle(),
+    hyperlink: string = "",
+    tabWidth: int = DefaultTabWidth,
+) =
+  ## Set a sequence of runes starting at the given coordinates.
+  ## Handles Unicode characters and wide characters properly.
+  ## If hyperlink is provided, the text becomes a clickable link (OSC 8).
+  ##
+  ## `\t` expands to spaces up to the next `tabWidth` boundary measured
+  ## from the starting `x`, so consecutive tabs land on consistent stops.
+  ## When `tabWidth <= 0`, tab expansion is disabled and `\t` is replaced
+  ## with a single space. Other C0 control characters, DEL and C1 are always
+  ## replaced with a single space — leaving them in a cell symbol would
+  ## otherwise be re-emitted verbatim by the differential renderer and
+  ## shift subsequent cursor positioning on the real terminal.
+  ## Non-scalar runes are replaced with U+FFFD, matching `setString`.
+  # One rune maps to one rune, so the layout is unchanged; copy only when a
+  # rune needs it.
+  for r in runes:
+    if sanitizeRune(r) != r:
+      buffer.setRunesImpl(x, y, sanitizeRunes(runes), style, hyperlink, tabWidth)
+      return
+  buffer.setRunesImpl(x, y, runes, style, hyperlink, tabWidth)
 
 proc setRunes*(
     buffer: var Buffer,
@@ -818,12 +927,14 @@ proc setString*(
 ) =
   ## Set a string starting at the given coordinates.
   ## See `setRunes` for tab and control character semantics.
+  ## Non-scalar code points are replaced with U+FFFD; other malformed input
+  ## keeps `std/unicode`'s lenient decode.
   if text.len == 0:
     return
   try:
-    buffer.setRunes(x, y, text.toRunes, style, hyperlink, tabWidth)
+    buffer.setRunesImpl(x, y, text.toRunesSanitized, style, hyperlink, tabWidth)
   except CatchableError:
-    # Malformed UTF-8 or other unexpected error — stop gracefully.
+    # Non-scalar code points are handled above; guard other failures.
     return
 
 proc setString*(
@@ -854,10 +965,12 @@ proc setString*(
   ## space — tab-stop expansion is intentionally skipped here because the
   ## alignment math is built around a fixed `textWidth`; the (x, y) overload
   ## of `setString` is the place to use real tab semantics.
+  ## Non-scalar code points are replaced with U+FFFD; other malformed input
+  ## keeps `std/unicode`'s lenient decode.
   if text.len == 0 or area.isEmpty:
     return
 
-  let runes = text.toRunes
+  let runes = text.toRunesSanitized
 
   # Calculate display width of text by grapheme cluster (control chars treated
   # as 1 column). `clusterMetrics` measures without building cluster strings;
@@ -931,9 +1044,8 @@ proc setString*(
         break
 
       if buffer.isValidPos(currentX, y):
+        # `[]=` places the shadow of a width-2 lead itself.
         buffer[currentX, y] = cell(clusterText, style, hyperlink)
-        if width == 2 and buffer.isValidPos(currentX + 1, y):
-          buffer[currentX + 1, y] = cell("", style, hyperlink)
         lastBaseX = currentX
 
       currentX += width
@@ -953,6 +1065,8 @@ proc foldZeroWidthRune*(buffer: var Buffer, x, y: int, rune: Rune) =
   ## into the wide lead at `x - 2`. It is a no-op (the rune is dropped) when
   ## there is no base cell to the left or the coordinates are out of range —
   ## mirroring how `setRunes` drops a leading mark with nothing to attach to.
+  ## A fold that changes the cluster's width (VS16 promotes, VS15 demotes)
+  ## re-normalizes the wide pair.
   if y < 0 or y >= buffer.area.height:
     return
   var bx = x - 1
@@ -972,8 +1086,10 @@ proc setCell*(
 ) =
   ## Set a single character cell at (x, y) with a known display width.
   ## Unlike setString, this skips UTF-8 parsing and width calculation.
-  ## For wide characters (width=2), the next cell is automatically marked empty.
-  ## If there is not enough room for the shadow cell, the character is not written.
+  ## A `width` of 2 always keeps two columns: the second cell is the glyph's
+  ## shadow, or a blank when the glyph only takes one column (a sanitized
+  ## symbol, or an over-declared width). If there is not enough room for the
+  ## second cell, the character is not written.
   ## Caller is responsible for providing correct width.
   ##
   ## Wide-character consistency is maintained via `[]=` (see its doc).
@@ -989,11 +1105,13 @@ proc setCell*(
   if width == 2 and x + 1 >= buffer.area.width:
     return
   let safe = sanitizeCellSymbol(symbol)
-  buffer[x, y] = Cell(symbol: safe, style: style, hyperlink: hyperlink)
-  if width == 2:
-    # A collapsed symbol is one column wide, so its second column is a blank.
-    let second = if safe == symbol: "" else: " "
-    buffer[x + 1, y] = Cell(symbol: second, style: style, hyperlink: hyperlink)
+  # `[]=` places the shadow of a width-2 lead itself.
+  let written = Cell(symbol: safe, style: style, hyperlink: hyperlink)
+  buffer[x, y] = written
+  if width == 2 and cellWidth(written) != 2:
+    # The declaration reserved two columns, so blank the second one when the
+    # glyph only takes one (a sanitized symbol, or an over-declared width).
+    buffer[x + 1, y] = cell(" ", style, hyperlink)
 
 proc setCell*(
     buffer: var Buffer,
@@ -1051,7 +1169,11 @@ proc setString*(
   buffer.setRunes(pos, runes, style, hyperlink, tabWidth)
 
 proc resize*(buffer: var Buffer, newArea: Rect) =
-  ## Resize the buffer to a new area
+  ## Resize the buffer to a new area.
+  ##
+  ## Content is copied where the areas overlap. A wide pair cut by the new
+  ## edges is not left split: a lead that loses its shadow, or a shadow that
+  ## loses its lead, is replaced with a blank.
   let oldContent = buffer.content
   let oldArea = buffer.area
 
@@ -1077,6 +1199,19 @@ proc resize*(buffer: var Buffer, newArea: Rect) =
         if oldX >= 0 and oldX < oldArea.width and oldY >= 0 and oldY < oldArea.height and
             newX >= 0 and newX < newArea.width and newY >= 0 and newY < newArea.height:
           buffer.content[newY][newX] = oldContent[oldY][oldX]
+
+  # A resize can slice a wide pair at the new edges: a copied lead may lose
+  # the shadow that fell outside, or a copied shadow its lead. Interior pairs
+  # are copied whole, so normalizing the two edge columns is enough.
+  if not intersection.isEmpty:
+    for newY in 0 ..< newArea.height:
+      let first = buffer.content[newY][0]
+      if first.isShadow:
+        buffer.content[newY][0] = cell(" ", first.style)
+      let lastX = newArea.width - 1
+      let last = buffer.content[newY][lastX]
+      if cellWidth(last) == 2:
+        buffer.content[newY][lastX] = cell(" ", last.style)
 
   # Mark entire new buffer as dirty after resize
   buffer.markDirtyRect(newArea)
@@ -1143,6 +1278,10 @@ proc diff*(old, new: Buffer): seq[tuple[pos: Position, cell: Cell]] =
 # Buffer merging and copying
 proc merge*(dest: var Buffer, src: Buffer, srcArea: Rect, destPos: Position) =
   ## Merge part of source buffer into destination buffer
+  ##
+  ## Cells are written through `[]=`, so a wide pair cut by `srcArea` or by
+  ## the destination edge is not split: a lead alone keeps its shadow, and a
+  ## shadow alone becomes a blank.
   let clippedSrcArea = src.area.intersection(srcArea)
 
   for y in clippedSrcArea.y ..< clippedSrcArea.bottom:

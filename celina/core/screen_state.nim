@@ -166,7 +166,7 @@ proc planInline*(
 
 proc planStart*(reply: Option[Position], termHeight, height: int): InlineAnchor =
   ## `planInline` at start: from the cursor row, or the next row when the
-  ## cursor is not in column 0, so a prompt such as `Name: ` stays.
+  ## cursor is not in column 0, so a prompt such as `Name:` stays on its row.
   let cursorRow = if reply.isSome and reply.get.x != 0: -1 else: 0
   planInline(reply, cursorRow, termHeight, height)
 

@@ -5,7 +5,7 @@
 ##
 ## No I/O operations are performed here - only data validation and parsing.
 
-import std/options
+import std/[options, unicode]
 
 const Utf8ReplacementChar* = "\xEF\xBF\xBD"
   ## UTF-8 encoding of U+FFFD REPLACEMENT CHARACTER (3 bytes: EF BF BD).
@@ -51,6 +51,24 @@ proc utf8ByteLength*(firstByte: byte): int =
       return 0 # Invalid (> 0xF4 or pattern mismatch)
   else:
     return 0 # Invalid UTF-8 start byte
+
+proc structuralUtf8Length*(firstByte: byte): int =
+  ## Byte length implied by the lead byte's bit pattern, including encodings
+  ## `utf8ByteLength` rejects. Returns 0 when the byte cannot start a sequence.
+  if firstByte < 0x80:
+    1
+  elif (firstByte and 0xE0) == 0xC0:
+    2
+  elif (firstByte and 0xF0) == 0xE0:
+    3
+  elif (firstByte and 0xF8) == 0xF0:
+    4
+  elif (firstByte and 0xFC) == 0xF8:
+    5
+  elif (firstByte and 0xFE) == 0xFC:
+    6
+  else:
+    0
 
 proc isUtf8ContinuationByte*(b: byte): bool =
   ## Check if a byte is a valid UTF-8 continuation byte (10xxxxxx)
@@ -235,6 +253,28 @@ proc assembleUtf8Char*(firstByte: byte, next: Utf8ByteSource): Utf8AssemblyResul
   return Utf8AssemblyResult(
     text: buildUtf8String(firstByte, continuationBytes), leftover: none(byte)
   )
+
+proc sanitizeRune*(r: Rune): Rune {.inline.} =
+  ## Return `r` when it is a Unicode scalar value, U+FFFD otherwise.
+  let n = int(r)
+  if n < 0 or n > 0x10FFFF or (n >= 0xD800 and n <= 0xDFFF):
+    Rune(0xFFFD)
+  else:
+    r
+
+proc sanitizeRunes*(runes: sink seq[Rune]): seq[Rune] =
+  ## Replace every non-scalar rune with U+FFFD, preserving the length.
+  result = runes
+  for r in result.mitems:
+    r = sanitizeRune(r)
+
+proc toRunesSanitized*(s: string): seq[Rune] =
+  ## Decode UTF-8, replacing non-scalar code points with U+FFFD.
+  ##
+  ## `toRunes` can decode malformed input to surrogates or values past
+  ## U+10FFFF, which assert in unicodedb; one replacement per rune preserves
+  ## cluster widths.
+  sanitizeRunes(s.toRunes)
 
 proc utf8CharLength*(s: string): int =
   ## Get the number of UTF-8 characters in a string (not bytes)
