@@ -489,11 +489,16 @@ suite "Async Input Functions":
     let hasInput = waitFor reader.hasInputAsync(0)
     check hasInput == false
 
-  test "readCharAsync returns valid char":
-    let reader = newAsyncInputReader()
-    let ch = waitFor reader.readCharAsync()
-    check ch.ord >= 0
-    reader.closeAsyncInputReader()
+  test "readCharAsync tells a 0x00 byte from no byte":
+    proc read() =
+      let reader = newAsyncInputReader()
+      try:
+        check (waitFor reader.readCharAsync()) == some('\0')
+        check (waitFor reader.readCharAsync()).isNone
+      finally:
+        reader.closeAsyncInputReader()
+
+    withStdinInput("\0", read)
 
   test "hasInputAsync reports a stashed pending byte":
     let reader = newAsyncInputReader()
@@ -506,7 +511,7 @@ suite "Async Input Functions":
       reader.setPendingByteAsync('Z'.byte)
       check waitFor reader.hasInputAsync(0)
       # And it is exactly what the next read hands back, not stranded.
-      check reader.readCharNonBlocking() == 'Z'
+      check reader.readCharNonBlocking() == some('Z')
     finally:
       reader.closeAsyncInputReader()
 
@@ -624,7 +629,7 @@ suite "Cursor position query":
         let started = epochTime()
         check (waitFor reader.queryCursorPositionAsync(2000)).isNone
         check epochTime() - started < 0.5
-        check reader.readCharNonBlocking() == 'k'
+        check reader.readCharNonBlocking() == some('k')
       finally:
         reader.closeAsyncInputReader()
 
@@ -650,7 +655,7 @@ suite "Cursor position query":
         let reader = newAsyncInputReader()
         try:
           answer = waitFor reader.queryCursorPositionAsync(1000)
-          if reader.readCharNonBlocking() != 'k':
+          if reader.readCharNonBlocking() != some('k'):
             answer = none(Position)
         finally:
           reader.closeAsyncInputReader()

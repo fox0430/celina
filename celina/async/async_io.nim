@@ -147,31 +147,23 @@ proc takeCloseNotice*(reader: AsyncInputReader): bool =
   reader.closeReported = true
   true
 
-proc readCharNonBlocking*(reader: AsyncInputReader): char =
-  ## Read a single character non-blocking
+proc readCharNonBlocking*(reader: AsyncInputReader): Option[char] =
+  ## Read a single byte non-blocking, or `none` if there is none yet. 0x00 is a
+  ## real byte (Ctrl+Space).
   # Highest priority: a byte pushed back from a previous UTF-8 assembly
   # failure (Unicode §3.9 resync). Consume it before the regular buffer or
   # any stdin read so it becomes the first byte of the next event.
   if reader.pendingByte.isSome:
     let b = reader.pendingByte.get
     reader.pendingByte = none(byte)
-    return char(b)
+    return some(char(b))
+
+  if reader.buffer.len == 0 and reader.hasDataAvailable(0):
+    reader.buffer.add(reader.readNonBlocking())
 
   if reader.buffer.len > 0:
-    result = reader.buffer[0]
+    result = some(reader.buffer[0])
     reader.buffer = reader.buffer[1 ..^ 1]
-    return
-
-  if reader.hasDataAvailable(0):
-    let newData = reader.readNonBlocking()
-    if newData.len > 0:
-      reader.buffer.add(newData)
-      if reader.buffer.len > 0:
-        result = reader.buffer[0]
-        reader.buffer = reader.buffer[1 ..^ 1]
-        return
-
-  result = '\0'
 
 # Async Wrapper Functions
 
@@ -206,10 +198,10 @@ proc hasInputAsync*(
 
   return reader.hasDataAvailable(timeoutMs)
 
-proc readCharAsync*(reader: AsyncInputReader): Future[char] {.async.} =
-  ## Read a character asynchronously
+proc readCharAsync*(reader: AsyncInputReader): Future[Option[char]] {.async.} =
+  ## Async `readCharNonBlocking`.
   if reader.isNil:
-    return '\0'
+    return none(char)
 
   # Yield to other async tasks
   await sleepMs(0)

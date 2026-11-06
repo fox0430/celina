@@ -334,6 +334,61 @@ suite "Mouse Event Parsing (Async)":
         finally:
           restoreStdin(p)
 
+suite "NUL bytes (Async)":
+  proc readEvents(input: string, count: int): seq[Event] =
+    var events: seq[Event]
+    proc read() =
+      let reader = newAsyncInputReader()
+      try:
+        for _ in 1 .. count:
+          events.add(waitFor reader.readKeyAsync())
+      finally:
+        reader.closeAsyncInputReader()
+
+    withStdinInput(input, read)
+    events
+
+  test "0x00 reads as Ctrl+Space":
+    let events = readEvents("\x00a", 2)
+    check events[0].kind == EventKind.Key
+    check events[0].key.code == Space
+    check events[0].key.modifiers == {Ctrl}
+    check events[1].key.char == "a"
+
+  test "ESC 0x00 reads as Ctrl+Alt+Space":
+    let events = readEvents("\x1b\x00", 1)
+    check events[0].kind == EventKind.Key
+    check events[0].key.code == Space
+    check events[0].key.modifiers == {Ctrl, Alt}
+
+  test "0x00 ends a CSI sequence and stays a key":
+    let events = readEvents("\x1b[\x00", 2)
+    check events[0].kind == EventKind.Unknown
+    check events[1].key.code == Space
+    check events[1].key.modifiers == {Ctrl}
+
+  test "0x00 after an Alt UTF-8 lead byte stays a key":
+    let events = readEvents("\x1b\xC3\x00", 2)
+    check events[0].key.char == Utf8ReplacementChar
+    check Alt in events[0].key.modifiers
+    check events[1].key.code == Space
+    check events[1].key.modifiers == {Ctrl}
+
+  test "0x00 in a paste stays in the text":
+    let events = readEvents("\x1b[200~a\x00b\x1b[201~c", 2)
+    check events[0].kind == Paste
+    check events[0].pastedText == "a\x00b"
+    check events[1].key.char == "c"
+
+  test "0x00 after a UTF-8 lead byte is its own key":
+    let events = readEvents("\xC3\x00", 2)
+    check events[0].key.char == Utf8ReplacementChar
+    check events[1].key.code == Space
+    check events[1].key.modifiers == {Ctrl}
+
+  test "No byte is not a key":
+    check readEvents("", 1)[0].kind == EventKind.Unknown
+
 suite "Async Event Stream":
   test "AsyncEventStream creation":
     var eventReceived = false

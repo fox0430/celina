@@ -46,10 +46,10 @@ proc parseMouseEventX10(reader: AsyncInputReader): Future[Event] {.async.} =
 
   # Read 3 bytes for X10 format (async I/O)
   for i in 0 .. 2:
-    let ch = await reader.readCharAsync()
-    if ch == '\0':
+    let next = await reader.readCharAsync()
+    if next.isNone:
       return Event(kind: Unknown)
-    data[i] = ch
+    data[i] = next.get
 
   # Use shared parsing logic - no duplication with sync version!
   return parseMouseDataX10(data).toEvent()
@@ -65,10 +65,11 @@ proc parseMouseEventSGR(reader: AsyncInputReader): Future[Event] {.async.} =
 
   # Read until we get M or m, with safety limits (async I/O)
   while readCount < MaxSGRMouseReadBytes:
-    ch = await reader.readCharAsync()
-    readCount.inc()
-    if ch == '\0':
+    let next = await reader.readCharAsync()
+    if next.isNone:
       return Event(kind: Unknown)
+    ch = next.get
+    readCount.inc()
     if ch == 'M' or ch == 'm':
       break
     buffer.add(ch)
@@ -117,11 +118,11 @@ proc readUtf8CharAsync(
   for i in 1 ..< byteLen:
     let nextByte = await reader.readCharAsync()
 
-    if nextByte == '\0':
+    if nextByte.isNone:
       # Truncated: nothing to push back.
       return Utf8AssemblyResult(text: Utf8ReplacementChar, leftover: none(byte))
 
-    let b = nextByte.byte
+    let b = nextByte.get.byte
     # As in `assembleUtf8Char`, the second byte must also stay inside the
     # lead-byte-specific range so overlong encodings and surrogates are
     # rejected; an out-of-range byte is surfaced as leftover for re-injection.
@@ -145,9 +146,9 @@ proc readByteTupleAsync(
     reader: AsyncInputReader
 ): Future[tuple[success: bool, ch: char]] {.async.} =
   ## Async adapter that exposes readCharAsync() with the same shape the
-  ## unified routing template expects (sentinel '\0' becomes success=false).
-  let ch = await reader.readCharAsync()
-  return (success: ch != '\0', ch: ch)
+  ## unified routing template expects.
+  let next = await reader.readCharAsync()
+  return (success: next.isSome, ch: next.get('\0'))
 
 proc readPasteContentAsync(reader: AsyncInputReader): Future[string] {.async.} =
   ## Read all content until paste end sequence ESC[201~ (async mode).
@@ -164,12 +165,12 @@ proc readPasteContentAsync(reader: AsyncInputReader): Future[string] {.async.} =
       resultStr.add(pending)
       return resultStr
 
-    let ch = await reader.readCharAsync()
-    if ch == '\0':
+    let next = await reader.readCharAsync()
+    if next.isNone:
       resultStr.add(pending)
       return resultStr
 
-    if stepPasteEnd(state, pending, ch, resultStr):
+    if stepPasteEnd(state, pending, next.get, resultStr):
       return resultStr
 
 # Async key reading with escape sequence support
@@ -179,12 +180,14 @@ proc readKeyAsync*(reader: AsyncInputReader): Future[Event] {.async.} =
   ## (or `readStdinAsync` took it) a closed reader reports `Unknown`, so a
   ## caller loop should watch `isClosed`.
   try:
-    let ch = await reader.readCharAsync()
+    let next = await reader.readCharAsync()
 
-    if ch == '\0':
+    if next.isNone:
       if reader.takeCloseNotice():
         return Event(kind: InputClosed)
       return Event(kind: Unknown)
+
+    let ch = next.get
 
     # Handle Ctrl+C (quit signal)
     if ch == '\x03':
