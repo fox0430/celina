@@ -97,6 +97,37 @@ suite "Async Key Reading":
         reader.closeAsyncInputReader()
         restoreStdin(p)
 
+  test "readKeyAsync reads Ctrl+C as CSI u as Quit, and a cut-off [ as Unknown":
+    let p = redirectStdinFromPipe()
+    if p.saved != -1:
+      let reader = newAsyncInputReader()
+      try:
+        feedPipe(p, "\x1b[99;5u\x1b[")
+        check (waitFor reader.readKeyAsync()).kind == EventKind.Quit
+        check (waitFor reader.readKeyAsync()).kind == EventKind.Unknown
+      finally:
+        reader.closeAsyncInputReader()
+        restoreStdin(p)
+
+  test "readKeyAsync reads CSI u keys and drops unmapped sequences":
+    let p = redirectStdinFromPipe()
+    if p.saved != -1:
+      let reader = newAsyncInputReader()
+      try:
+        feedPipe(p, "\x1b[105;5u\x1b[91;5u\x1b[46;5u\x1b[99~\x1b[105;\x1b[Ax")
+        check (waitFor reader.readKeyAsync()).key.code == Tab
+        check (waitFor reader.readKeyAsync()).key.code == Escape
+        let dot = (waitFor reader.readKeyAsync()).key
+        check dot.char == "."
+        check dot.modifiers == {Ctrl}
+        check (waitFor reader.readKeyAsync()).kind == EventKind.Unknown
+        check (waitFor reader.readKeyAsync()).kind == EventKind.Unknown
+        check (waitFor reader.readKeyAsync()).key.code == ArrowUp
+        check (waitFor reader.readKeyAsync()).key.char == "x"
+      finally:
+        reader.closeAsyncInputReader()
+        restoreStdin(p)
+
   test "AsyncEventError type is properly defined":
     let error = newException(AsyncEventError, "Test error")
     check error.msg == "Test error"

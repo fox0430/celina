@@ -1,6 +1,6 @@
 # Test suite for escape_sequence_logic module
 
-import std/unittest
+import std/[strutils, unittest]
 
 import ../celina/core/escape_sequence_logic
 import ../celina/core/key_logic
@@ -48,108 +48,6 @@ suite "Escape Sequence Logic Tests":
       check result.isValid == true
       check result.keyEvent.code == KeyCode.Escape
 
-  suite "Multi-digit Function Key Processing":
-    test "processMultiDigitFunctionKey with valid 15~ (F5)":
-      let result = processMultiDigitFunctionKey('1', '5', '~', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.F5
-
-    test "processMultiDigitFunctionKey with valid 17~ (F6)":
-      let result = processMultiDigitFunctionKey('1', '7', '~', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.F6
-
-    test "processMultiDigitFunctionKey with valid 18~ (F7)":
-      let result = processMultiDigitFunctionKey('1', '8', '~', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.F7
-
-    test "processMultiDigitFunctionKey with valid 19~ (F8)":
-      let result = processMultiDigitFunctionKey('1', '9', '~', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.F8
-
-    test "processMultiDigitFunctionKey with valid 20~ (F9)":
-      let result = processMultiDigitFunctionKey('2', '0', '~', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.F9
-
-    test "processMultiDigitFunctionKey with valid 21~ (F10)":
-      let result = processMultiDigitFunctionKey('2', '1', '~', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.F10
-
-    test "processMultiDigitFunctionKey with invalid tilde":
-      let result = processMultiDigitFunctionKey('1', '5', 'X', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.Escape
-
-    test "processMultiDigitFunctionKey with invalid flag":
-      let result = processMultiDigitFunctionKey('1', '5', '~', false)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.Escape
-
-  suite "Modified Key Sequence Processing":
-    test "processModifiedKeySequence with Shift+ArrowUp (1;2A)":
-      let result = processModifiedKeySequence('1', '2', true, 'A', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.ArrowUp
-      check KeyModifier.Shift in result.keyEvent.modifiers
-
-    test "processModifiedKeySequence with Alt+ArrowRight (1;3C)":
-      let result = processModifiedKeySequence('1', '3', true, 'C', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.ArrowRight
-      check KeyModifier.Alt in result.keyEvent.modifiers
-
-    test "processModifiedKeySequence with Ctrl+ArrowLeft (1;5D)":
-      let result = processModifiedKeySequence('1', '5', true, 'D', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.ArrowLeft
-      check KeyModifier.Ctrl in result.keyEvent.modifiers
-
-    test "processModifiedKeySequence with Shift+Home (1;2H)":
-      let result = processModifiedKeySequence('1', '2', true, 'H', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.Home
-      check KeyModifier.Shift in result.keyEvent.modifiers
-
-    test "processModifiedKeySequence with invalid modChar":
-      let result = processModifiedKeySequence('1', '2', false, 'A', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.Escape
-
-    test "processModifiedKeySequence with invalid keyChar":
-      let result = processModifiedKeySequence('1', '2', true, 'A', false)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.Escape
-
-    test "processModifiedKeySequence with unknown key":
-      let result = processModifiedKeySequence('1', '2', true, 'X', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.Escape
-
-  suite "Numeric Sequence Classification":
-    test "classifyNumericSequence with single digit + tilde":
-      let kind = classifyNumericSequence('~', true)
-      check kind == NskSingleDigitWithTilde
-
-    test "classifyNumericSequence with multi-digit":
-      let kind = classifyNumericSequence('5', true)
-      check kind == NskMultiDigit
-
-    test "classifyNumericSequence with modified key":
-      let kind = classifyNumericSequence(';', true)
-      check kind == NskModifiedKey
-
-    test "classifyNumericSequence with invalid character":
-      let kind = classifyNumericSequence('X', true)
-      check kind == NskInvalid
-
-    test "classifyNumericSequence with invalid flag":
-      let kind = classifyNumericSequence('~', false)
-      check kind == NskInvalid
-
   suite "Bracket Sequence Classification":
     test "classifyBracketSequence with arrow key A (up)":
       let kind = classifyBracketSequence('A')
@@ -183,11 +81,6 @@ suite "Escape Sequence Logic Tests":
       let kind = classifyBracketSequence('<')
       check kind == BskMouseSGR
 
-    test "classifyBracketSequence with numeric sequence (1-6)":
-      for digit in '1' .. '6':
-        let kind = classifyBracketSequence(digit)
-        check kind == BskNumeric
-
     test "classifyBracketSequence with focus in (I)":
       let kind = classifyBracketSequence('I')
       check kind == BskFocusIn
@@ -196,9 +89,9 @@ suite "Escape Sequence Logic Tests":
       let kind = classifyBracketSequence('O')
       check kind == BskFocusOut
 
-    test "classifyBracketSequence with invalid character":
-      let kind = classifyBracketSequence('X')
-      check kind == BskInvalid
+    test "classifyBracketSequence leaves the rest to the CSI scan":
+      for ch in ['0', '1', '9', ';', '?', 'X', 'u', '~', '\x1b']:
+        check classifyBracketSequence(ch) == BskGeneric
 
   suite "Simple Bracket Sequence Processing":
     test "processSimpleBracketSequence with arrow up":
@@ -241,57 +134,11 @@ suite "Escape Sequence Logic Tests":
       check result.isValid == true
       check result.keyEvent.code == KeyCode.Escape
 
-  suite "Single Digit Numeric Processing":
-    test "processSingleDigitNumeric with 1 (Home)":
-      let result = processSingleDigitNumeric('1')
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.Home
-
-    test "processSingleDigitNumeric with 2 (Insert)":
-      let result = processSingleDigitNumeric('2')
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.Insert
-
-    test "processSingleDigitNumeric with 3 (Delete)":
-      let result = processSingleDigitNumeric('3')
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.Delete
-
-    test "processSingleDigitNumeric with 4 (End)":
-      let result = processSingleDigitNumeric('4')
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.End
-
-    test "processSingleDigitNumeric with 5 (PageUp)":
-      let result = processSingleDigitNumeric('5')
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.PageUp
-
-    test "processSingleDigitNumeric with 6 (PageDown)":
-      let result = processSingleDigitNumeric('6')
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.PageDown
-
   suite "Edge Cases and Error Handling":
     test "processVT100FunctionKey with null character":
       let result = processVT100FunctionKey('\0', true)
       check result.isValid == true
       check result.keyEvent.code == KeyCode.Escape
-
-    test "processMultiDigitFunctionKey with null characters":
-      let result = processMultiDigitFunctionKey('\0', '\0', '\0', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.Escape
-
-    test "processModifiedKeySequence with null characters":
-      let result = processModifiedKeySequence('\0', '\0', true, '\0', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.Escape
-
-    test "classifyNumericSequence with all invalid inputs":
-      for ch in ['\0', '\x01', '\x7F', '\xFF']:
-        let kind = classifyNumericSequence(ch, false)
-        check kind == NskInvalid
 
     test "processSimpleBracketSequence with control characters":
       for ch in ['\0', '\x01', '\x7F']:
@@ -312,14 +159,11 @@ suite "Escape Sequence Logic Tests":
     test "Classification functions are deterministic":
       # Same input should always produce same output
       for i in 1 .. 10:
-        check classifyNumericSequence('~', true) == NskSingleDigitWithTilde
         check classifyBracketSequence('A') == BskArrowKey
 
     test "Invalid flags always produce escape key":
       let r1 = processVT100FunctionKey('P', false)
-      let r2 = processMultiDigitFunctionKey('1', '5', '~', false)
       check r1.keyEvent.code == KeyCode.Escape
-      check r2.keyEvent.code == KeyCode.Escape
 
   suite "Paste End State Machine":
     proc feed(input: string): tuple[output: string, completed: bool, residual: string] =
@@ -465,22 +309,188 @@ suite "Escape Sequence Logic Tests":
       check not r.found
       check r.typeahead == ""
 
-    test "matchCursorReply follows the bytes after ESC [":
-      check matchCursorReply("") == crmPartial
-      check matchCursorReply("12") == crmPartial
-      check matchCursorReply("12;") == crmPartial
-      check matchCursorReply("12;40") == crmPartial
-      check matchCursorReply("12;40R") == crmComplete
-      check matchCursorReply("12345;12345R") == crmComplete
-      check matchCursorReply("1;2R") == crmComplete
+  suite "CSI Sequences":
+    proc scanOf(body: string): CsiScan =
+      ## Feed the bytes after `ESC [` until the scan stops.
+      for ch in body:
+        result.feed(ch)
+        if result.state != cssReading:
+          break
 
-    test "matchCursorReply rejects other sequences at the first byte off":
-      check matchCursorReply("A") == crmNone
-      check matchCursorReply("<") == crmNone
-      check matchCursorReply("3~") == crmNone
-      check matchCursorReply("1;5A") == crmNone
-      check matchCursorReply(";1R") == crmNone
-      check matchCursorReply("1;R") == crmNone
-      check matchCursorReply("123456") == crmNone
-      check matchCursorReply("1;123456") == crmNone
-      check matchCursorReply("1;1Rx") == crmNone
+    proc keyOf(body: string): KeyEvent =
+      let action = scanOf(body).action()
+      check action.kind == cakKey
+      action.key
+
+    proc ignored(body: string): bool =
+      scanOf(body).action().kind == cakIgnore
+
+    test "the scan stops at the final byte":
+      let scan = scanOf("105;5ux")
+      check scan.state == cssDone
+
+    test "a scan with no final byte is cut off, and ignored":
+      var scan = scanOf("105;5")
+      check scan.state == cssReading
+      scan.state = cssTruncated
+      check scan.action().kind == cakIgnore
+
+    test "a scan stops at its byte limit":
+      for filler in ['1', ';', ' ']:
+        var scan = CsiScan()
+        for _ in 1 ..< MaxCsiScanBytes:
+          scan.feed(filler)
+          check scan.state == cssReading
+        scan.feed(filler)
+        check scan.state == cssTruncated
+        check scan.action().kind == cakIgnore
+
+    test "a byte outside the sequence ends the scan":
+      for stray in ['\x1b', '\x03', '\xe3']:
+        let scan = scanOf("105;" & stray)
+        check scan.state == cssStray
+        check scan.stray == stray
+        check scan.action().kind == cakIgnore
+
+    test "Ctrl+I, Ctrl+M and Ctrl+[ are the keys of their control bytes":
+      check keyOf("105;5u") == KeyEvent(code: Tab, char: "\t")
+      check keyOf("109;5u") == KeyEvent(code: Enter, char: "\r")
+      check keyOf("91;5u") == KeyEvent(code: Escape, char: "\x1b")
+
+    test "a final byte on the last allowed byte still finishes":
+      var scan = CsiScan()
+      for _ in 1 ..< MaxCsiScanBytes:
+        scan.feed('1')
+      scan.feed('~')
+      check scan.state == cssDone
+
+    test "Ctrl+letter means what its legacy byte means":
+      check scanOf("99;5u").action().kind == cakQuit
+      check scanOf("27;5;99~").action().kind == cakQuit
+      check scanOf("67;5u").action().kind == cakQuit
+      check keyOf("104;5u") == KeyEvent(code: Backspace, char: "\x08")
+      check keyOf("73;5u") == KeyEvent(code: Tab, char: "\t")
+      check keyOf("64;5u") == KeyEvent(code: Space, char: " ", modifiers: {Ctrl})
+      check keyOf("92;5u") == KeyEvent(code: Char, char: "4", modifiers: {Ctrl})
+
+    test "other modifiers and plain letters are not control bytes":
+      check keyOf("99;7u") == KeyEvent(code: Char, char: "c", modifiers: {Ctrl, Alt})
+      check keyOf("99u") == KeyEvent(code: Char, char: "c")
+      check keyOf("99;3u") == KeyEvent(code: Char, char: "c", modifiers: {Alt})
+      check keyOf("99:67;2u") == KeyEvent(code: Char, char: "C", modifiers: {Shift})
+
+    test "with more modifiers they stay letters":
+      check keyOf("105;6u") == KeyEvent(code: Char, char: "i", modifiers: {Ctrl, Shift})
+      check keyOf("105;7u") == KeyEvent(code: Char, char: "i", modifiers: {Ctrl, Alt})
+
+    test "CSI u gives a character with its modifiers":
+      check keyOf("97;5u") == KeyEvent(code: Char, char: "a", modifiers: {Ctrl})
+      check keyOf("46;5u") == KeyEvent(code: Char, char: ".", modifiers: {Ctrl})
+      check keyOf("97u") == KeyEvent(code: Char, char: "a")
+      check keyOf("12354;3u") == KeyEvent(code: Char, char: "あ", modifiers: {Alt})
+
+    test "CSI u gives named keys":
+      check keyOf("13;5u") == KeyEvent(code: Enter, char: "\r", modifiers: {Ctrl})
+      check keyOf("9;5u") == KeyEvent(code: Tab, char: "\t", modifiers: {Ctrl})
+      check keyOf("127;5u").code == Backspace
+      check keyOf("32;5u") == KeyEvent(code: Space, char: " ", modifiers: {Ctrl})
+      check keyOf("27;3u") == KeyEvent(code: Escape, char: "\x1b", modifiers: {Alt})
+
+    test "Shift+Tab is BackTab":
+      check keyOf("9;2u") == KeyEvent(code: BackTab)
+      check keyOf("9;6u") == KeyEvent(code: BackTab, modifiers: {Ctrl})
+
+    test "BackTab holds no Shift in any form":
+      check keyOf("1;2Z") == keyOf("9;2u")
+      check keyOf("27;2;9~") == keyOf("9;2u")
+      check keyOf("1;6Z") == keyOf("9;6u")
+
+    test "modifyOtherKeys is the same key as CSI u":
+      check keyOf("27;5;105~") == keyOf("105;5u")
+      check keyOf("27;5;97~") == keyOf("97;5u")
+      check keyOf("27;5;13~") == keyOf("13;5u")
+
+    test "kitty's sub-fields do not change an unshifted key":
+      check keyOf("97:65;5:1u") == keyOf("97;5u")
+      check keyOf("97;133u") == KeyEvent(code: Char, char: "a", modifiers: {Ctrl})
+
+    test "Shift uses the alternate key, or the uppercase letter":
+      check keyOf("97:65;2u") == KeyEvent(code: Char, char: "A", modifiers: {Shift})
+      check keyOf("97;2u") == KeyEvent(code: Char, char: "A", modifiers: {Shift})
+      check keyOf("49:33;2u") == KeyEvent(code: Char, char: "!", modifiers: {Shift})
+      check keyOf("49;2u") == KeyEvent(code: Char, char: "1", modifiers: {Shift})
+      check keyOf("27;2;97~") == KeyEvent(code: Char, char: "A", modifiers: {Shift})
+
+    test "a chord with Super, Hyper or Meta is ignored":
+      for body in [
+        "97;9u", "97;17u", "97;33u", "97;13u", "13;9u", "32;9u", "27;9;97~", "1;9A",
+        "1;33D", "1;17H", "3;9~", "15;9~", "1;9P",
+      ]:
+        check ignored(body)
+
+    test "Caps Lock and Num Lock do not hide a key":
+      check keyOf("97;65u") == KeyEvent(code: Char, char: "a")
+      check keyOf("97;129u") == KeyEvent(code: Char, char: "a")
+      check keyOf("1;65A") == KeyEvent(code: ArrowUp)
+      check keyOf("3;129~") == KeyEvent(code: Delete)
+
+    test "a kitty release is not a key press":
+      check ignored("97;5:3u")
+      check ignored("1;5:3A")
+      check keyOf("97;5:2u").char == "a"
+
+    test "codepoints that are not keys are ignored":
+      for body in ["0u", "1;5u", "128u", "55296u", "57344u", "1114112u", "99999999999u"]:
+        check ignored(body)
+
+    test "numeric keys keep their modifiers":
+      check keyOf("3~").code == Delete
+      check keyOf("3;5~") == KeyEvent(code: Delete, modifiers: {Ctrl})
+      check keyOf("6;2~") == KeyEvent(code: PageDown, modifiers: {Shift})
+      check keyOf("7~") == KeyEvent(code: Home)
+      check keyOf("8;5~") == KeyEvent(code: End, modifiers: {Ctrl})
+
+    test "function keys keep their modifiers":
+      check keyOf("15~").code == F5
+      check keyOf("24~").code == F12
+      check keyOf("15;2~") == KeyEvent(code: F5, modifiers: {Shift})
+      check keyOf("1;2P") == KeyEvent(code: F1, modifiers: {Shift})
+      check keyOf("1;5Q") == KeyEvent(code: F2, modifiers: {Ctrl})
+      check keyOf("1;2S") == KeyEvent(code: F4, modifiers: {Shift})
+
+    test "arrows and navigation keys keep their modifiers":
+      check keyOf("1;5A") == KeyEvent(code: ArrowUp, modifiers: {Ctrl})
+      check keyOf("1;2H") == KeyEvent(code: Home, modifiers: {Shift})
+      check keyOf("1;8F") == KeyEvent(code: End, modifiers: {Ctrl, Shift, Alt})
+
+    test "bracketed paste":
+      check scanOf("200~").action().kind == cakPaste
+      check ignored("201~")
+
+    test "paste start takes no other parameters":
+      for body in ["200;5~", "200;2~", "200:1~", "200;~"]:
+        check ignored(body)
+
+    test "rxvt's $ ends a sequence after one number":
+      for body in ["7$", "3$", "2$", "23$"]:
+        let scan = scanOf(body & "x")
+        check scan.state == cssDone
+        check scan.action().kind == cakIgnore
+
+    test "$ stays an intermediate byte elsewhere":
+      for body in ["?1;2$y", "1;2$y", "$y", "?25$y"]:
+        let scan = scanOf(body)
+        check scan.state == cssDone
+        check scan.action().kind == cakIgnore
+      check scanOf("1;2$").state == cssReading
+
+    test "sequences that are not keys are ignored":
+      for body in [
+        "12;40R", "1;5R", "99~", "16~", "X", "?62c", "?1u", ">1;2c", "=1u", "1 q",
+        "2 q", "P", "1P",
+      ]:
+        check ignored(body)
+
+    test "parameters too long to be a key are ignored":
+      check ignored("1".repeat(40) & "u")
+      check scanOf("1".repeat(40) & "u").state == cssDone

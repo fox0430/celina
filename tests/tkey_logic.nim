@@ -240,35 +240,35 @@ suite "Numeric Key Code Mapping":
 
 suite "Modifier Code Parsing":
   test "Shift modifier (2)":
-    let modifiers = parseModifierCode('2')
+    let modifiers = parseModifierCode(2)
     check modifiers == {Shift}
 
   test "Alt modifier (3)":
-    let modifiers = parseModifierCode('3')
+    let modifiers = parseModifierCode(3)
     check modifiers == {Alt}
 
   test "Shift+Alt modifier (4)":
-    let modifiers = parseModifierCode('4')
+    let modifiers = parseModifierCode(4)
     check modifiers == {Shift, Alt}
 
   test "Ctrl modifier (5)":
-    let modifiers = parseModifierCode('5')
+    let modifiers = parseModifierCode(5)
     check modifiers == {Ctrl}
 
   test "Ctrl+Shift modifier (6)":
-    let modifiers = parseModifierCode('6')
+    let modifiers = parseModifierCode(6)
     check modifiers == {Ctrl, Shift}
 
   test "Ctrl+Alt modifier (7)":
-    let modifiers = parseModifierCode('7')
+    let modifiers = parseModifierCode(7)
     check modifiers == {Ctrl, Alt}
 
   test "Ctrl+Shift+Alt modifier (8)":
-    let modifiers = parseModifierCode('8')
+    let modifiers = parseModifierCode(8)
     check modifiers == {Ctrl, Shift, Alt}
 
   test "No modifier (1)":
-    let modifiers = parseModifierCode('1')
+    let modifiers = parseModifierCode(1)
     check modifiers == {}
 
 suite "Apply Modifiers":

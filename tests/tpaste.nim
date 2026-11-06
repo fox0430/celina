@@ -3,7 +3,6 @@
 import std/[unittest, strutils]
 
 import ../celina/core/events
-import ../celina/core/escape_sequence_logic
 import ../celina/core/terminal_common
 
 suite "Bracketed Paste Mode Tests":
@@ -33,20 +32,6 @@ suite "Bracketed Paste Mode Tests":
       let event = Event(kind: Paste, pastedText: "こんにちは 🎉")
       check event.kind == Paste
       check event.pastedText == "こんにちは 🎉"
-
-  suite "Sequence Detection":
-    test "isPasteStartSequence":
-      check isPasteStartSequence('2', '0', '0', '~')
-      check not isPasteStartSequence('2', '0', '1', '~')
-      check not isPasteStartSequence('1', '5', '~', '\0')
-      check not isPasteStartSequence('2', '0', '0', 'A')
-      check not isPasteStartSequence('1', '0', '0', '~')
-
-    test "isPasteEndSequence":
-      check isPasteEndSequence('2', '0', '1', '~')
-      check not isPasteEndSequence('2', '0', '0', '~')
-      check not isPasteEndSequence('2', '0', '1', 'A')
-      check not isPasteEndSequence('1', '0', '1', '~')
 
   suite "Terminal Control Sequences":
     test "BracketedPasteEnable format":

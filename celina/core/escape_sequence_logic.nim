@@ -4,6 +4,8 @@
 ## blocking, non-blocking, and async parsers. It eliminates code duplication
 ## by separating parsing logic from I/O operations.
 
+import std/[strutils, unicode]
+
 import key_logic
 export key_logic.KeyEvent, key_logic.KeyCode
 export key_logic.mapVT100FunctionKey, key_logic.mapFunctionKey
@@ -20,11 +22,38 @@ type
     row*, col*: int ## 0-based
     typeahead*: string ## the other bytes, in order
 
-  CursorReplyMatch* = enum
+  CursorReplyMatch = enum
     ## How the bytes after `ESC [` compare with a cursor position report
     crmPartial ## a prefix of `row ; col R`
     crmComplete
     crmNone
+
+  CsiScanState* = enum
+    ## Where the bytes after `ESC [` have got to
+    cssReading
+    cssDone ## ended by a final byte
+    cssTruncated ## no more bytes arrived, or `MaxCsiScanBytes` did
+    cssStray ## a byte that cannot be in a CSI sequence ended it
+
+  CsiScan* = object ## A CSI sequence read up to its final byte
+    state*: CsiScanState
+    params: string
+    length: int
+    intermediates: bool
+    overflow: bool
+    final: char
+    stray*: char ## the byte that ended a `cssStray` scan, not part of the sequence
+
+  CsiActionKind* = enum
+    ## What a CSI sequence means to the event readers
+    cakIgnore ## not an input event
+    cakKey
+    cakPaste ## bracketed paste content follows
+    cakQuit ## Ctrl+C
+
+  CsiAction* = object ## The meaning of a CSI sequence
+    kind*: CsiActionKind
+    key*: KeyEvent
 
   PasteEndState* = enum
     ## State machine for detecting paste end sequence ESC[201~
@@ -50,74 +79,15 @@ proc processVT100FunctionKey*(ch: char, isValid: bool): EscapeResult =
   else:
     return escapeResult()
 
-proc processMultiDigitFunctionKey*(
-    firstDigit, secondDigit, tilde: char, isValid: bool
-): EscapeResult =
-  ## Process multi-digit function keys: ESC[15~ (F5-F12)
-  if isValid and tilde == '~':
-    let twoDigitSeq = $firstDigit & $secondDigit
-    return EscapeResult(isValid: true, keyEvent: mapFunctionKey(twoDigitSeq))
-  else:
-    return escapeResult()
-
-proc processModifiedKeySequence*(
-    digit: char, modChar: char, modValid: bool, keyChar: char, keyValid: bool
-): EscapeResult =
-  ## Process modified key sequences: ESC[1;2A (Shift/Ctrl/Alt + key)
-  if not modValid or not keyValid:
-    return escapeResult()
-
-  let modifiers = parseModifierCode(modChar)
-
-  # Try arrow keys with modifiers
-  let arrowKey = mapArrowKey(keyChar)
-  if arrowKey.code != KeyCode.Escape:
-    return EscapeResult(isValid: true, keyEvent: applyModifiers(arrowKey, modifiers))
-
-  # Try navigation keys with modifiers
-  let navKey = mapNavigationKey(keyChar)
-  if navKey.code != KeyCode.Escape:
-    return EscapeResult(isValid: true, keyEvent: applyModifiers(navKey, modifiers))
-
-  # Handle modified special keys (numeric codes with ~)
-  if keyChar == '~':
-    let numKey = mapNumericKeyCode(digit)
-    if numKey.code != KeyCode.Escape:
-      return EscapeResult(isValid: true, keyEvent: applyModifiers(numKey, modifiers))
-
-  return escapeResult()
-
-type NumericSequenceKind* = enum
-  ## Classification of numeric escape sequences after ESC[digit
-  NskSingleDigitWithTilde # ESC[1~
-  NskMultiDigit # ESC[15~
-  NskModifiedKey # ESC[1;2A
-  NskInvalid
-
-proc classifyNumericSequence*(nextChar: char, isValid: bool): NumericSequenceKind =
-  ## Classify numeric sequence type by next character: '~' / digit / ';'
-  if not isValid:
-    return NskInvalid
-
-  if nextChar == '~':
-    return NskSingleDigitWithTilde
-  elif nextChar in {'0' .. '9'}:
-    return NskMultiDigit
-  elif nextChar == ';':
-    return NskModifiedKey
-  else:
-    return NskInvalid
-
 type BracketSequenceKind* = enum
   ## Classification of bracket escape sequences after ESC[
   BskArrowKey # ESC[A, ESC[B, ESC[C, ESC[D
   BskNavigationKey # ESC[H, ESC[F, ESC[Z
   BskMouseX10 # ESC[M
   BskMouseSGR # ESC[<
-  BskNumeric # ESC[1~, ESC[15~, ESC[1;2A
   BskFocusIn # ESC[I
   BskFocusOut # ESC[O
-  BskInvalid
+  BskGeneric # anything else, read to its final byte with `CsiScan`
 
 proc classifyBracketSequence*(final: char): BracketSequenceKind =
   ## Classify bracket sequence type by character after ESC[
@@ -130,8 +100,6 @@ proc classifyBracketSequence*(final: char): BracketSequenceKind =
     return BskMouseX10
   of '<':
     return BskMouseSGR
-  of '1' .. '6':
-    return BskNumeric
   else:
     discard
 
@@ -143,7 +111,7 @@ proc classifyBracketSequence*(final: char): BracketSequenceKind =
   if navKey.code != KeyCode.Escape:
     return BskNavigationKey
 
-  return BskInvalid
+  return BskGeneric
 
 proc processSimpleBracketSequence*(final: char, isValid: bool): EscapeResult =
   ## Process simple bracket sequences: ESC[A/H (arrow/navigation keys)
@@ -162,19 +130,185 @@ proc processSimpleBracketSequence*(final: char, isValid: bool): EscapeResult =
 
   return escapeResult()
 
-proc processSingleDigitNumeric*(digit: char): EscapeResult =
-  ## Process single digit numeric sequences: ESC[1~ (Home/Insert/Delete etc)
-  EscapeResult(isValid: true, keyEvent: mapNumericKeyCode(digit))
+# CSI sequences (I/O independent)
 
-# Bracketed paste mode sequence detection
+const
+  MaxCsiBytes = 32 ## longer parameters are read, but ignored
+  MaxCsiScanBytes* = 64
+    ## A scan gives up here. At `readKeyInput`'s 50 ms a byte, this bounds how
+    ## long a stream of parameter bytes holds it to 3.2 s.
+  MaxCsiNumber = 0x110000 ## past every codepoint; bigger numbers stop here
 
-proc isPasteStartSequence*(d1, d2, d3, final: char): bool {.inline.} =
-  ## Check if sequence is ESC[200~ (paste start)
-  d1 == '2' and d2 == '0' and d3 == '0' and final == '~'
+proc feed*(scan: var CsiScan, ch: char) =
+  ## Advance `scan` by one byte after `ESC [`.
+  case ch
+  of '\x30' .. '\x3f':
+    if scan.params.len < MaxCsiBytes:
+      scan.params.add(ch)
+    else:
+      scan.overflow = true
+  of '\x20' .. '\x2f':
+    # rxvt ends Shift+Home and the like with `$`: `CSI 7 $`.
+    if ch == '$' and not scan.intermediates and scan.params.len > 0 and
+        scan.params.allCharsInSet(Digits):
+      scan.state = cssDone
+      scan.final = ch
+    else:
+      scan.intermediates = true
+  of '\x40' .. '\x7e':
+    scan.state = cssDone
+    scan.final = ch
+  else:
+    scan.state = cssStray
+    scan.stray = ch
 
-proc isPasteEndSequence*(d1, d2, d3, final: char): bool {.inline.} =
-  ## Check if sequence is ESC[201~ (paste end)
-  d1 == '2' and d2 == '0' and d3 == '1' and final == '~'
+  inc scan.length
+  if scan.state == cssReading and scan.length >= MaxCsiScanBytes:
+    scan.state = cssTruncated
+
+proc csiFields(params: string): seq[seq[int]] =
+  ## Split digits into `;` fields of `:` sub-fields. An empty one reads as 0.
+  for field in params.split(';'):
+    var values: seq[int]
+    for value in field.split(':'):
+      var number = 0
+      for digit in value:
+        number = min(number * 10 + digit.ord - '0'.ord, MaxCsiNumber)
+      values.add(number)
+    result.add(values)
+
+proc at(fields: seq[seq[int]], field: int, sub = 0): int =
+  if field < fields.len and sub < fields[field].len:
+    fields[field][sub]
+  else:
+    0
+
+proc keyAction(key: KeyEvent): CsiAction =
+  CsiAction(kind: cakKey, key: key)
+
+proc namedKeyAction(key: KeyEvent, modifiers: set[KeyModifier]): CsiAction =
+  ## The `map*Key` procs answer Escape for a code they do not know.
+  if key.code == Escape:
+    CsiAction(kind: cakIgnore)
+  elif key.code == BackTab:
+    keyAction(applyModifiers(key, modifiers - {Shift}))
+  else:
+    keyAction(applyModifiers(key, modifiers))
+
+proc shiftedCode(code, alternate: int): int =
+  ## The character Shift produces: the alternate key the terminal sends, else
+  ## the uppercase of an ASCII letter.
+  if alternate >= 0x21 and alternate <= 0x7e or alternate >= 0xa0 and alternate <= 0xd7ff or
+      alternate >= 0xf900 and alternate <= 0x10ffff:
+    return alternate
+  if code >= ord('a') and code <= ord('z'):
+    return code - ord('a') + ord('A')
+  code
+
+proc ctrlAction(code: int): CsiAction =
+  ## The event of the control byte Ctrl+`code` is everywhere else, so that
+  ## Ghostty and others sending it as CSI u mean the same thing.
+  let ch = char(code and 0x1f)
+  case ch
+  of '\x03':
+    CsiAction(kind: cakQuit)
+  of '\x1b':
+    keyAction(escapeKey())
+  else:
+    let letter = mapCtrlLetterKey(ch)
+    let number = mapCtrlNumberKey(ch)
+    if letter.isCtrlKey:
+      keyAction(letter.keyEvent)
+    elif number.isCtrlKey:
+      keyAction(number.keyEvent)
+    else:
+      keyAction(mapBasicKey(ch))
+
+proc codepointAction(code, alternate: int, modifiers: set[KeyModifier]): CsiAction =
+  ## The key of `CSI code : alternate ; modifiers u` and
+  ## `CSI 27 ; modifiers ; code ~`.
+  if modifiers == {Ctrl} and (code in 0x40 .. 0x5f or code in 0x61 .. 0x7a):
+    return ctrlAction(code)
+
+  case code
+  of 9:
+    if Shift in modifiers:
+      keyAction(applyModifiers(KeyEvent(code: BackTab), modifiers - {Shift}))
+    else:
+      keyAction(applyModifiers(mapBasicKey('\t'), modifiers))
+  of 8, 13, 32, 127:
+    keyAction(applyModifiers(mapBasicKey(char(code)), modifiers))
+  of 27:
+    keyAction(applyModifiers(escapeKey(), modifiers))
+  of 0x21 .. 0x7e, 0xa0 .. 0xd7ff, 0xf900 .. 0x10ffff:
+    # Ctrl+letter is a chord, not text, and the legacy bytes carry no Shift.
+    let charCode =
+      if Shift in modifiers and Ctrl notin modifiers:
+        shiftedCode(code, alternate)
+      else:
+        code
+    keyAction(KeyEvent(code: Char, char: Rune(charCode).toUTF8, modifiers: modifiers))
+  else:
+    # The kitty protocol's functional keys are in the private use area.
+    CsiAction(kind: cakIgnore)
+
+proc action*(scan: CsiScan): CsiAction =
+  ## The meaning of a finished scan. A sequence that was cut off, or that no key
+  ## maps to, is ignored: its bytes are not input.
+  const KeyParams = {'0' .. '9', ':', ';'}
+  if scan.state != cssDone or scan.intermediates or scan.overflow or
+      not scan.params.allCharsInSet(KeyParams):
+    return CsiAction(kind: cakIgnore)
+
+  let fields = csiFields(scan.params)
+  const ReleaseEvent = 3 # kitty's `modifiers : event-type`
+  if fields.at(1, 1) == ReleaseEvent:
+    return CsiAction(kind: cakIgnore)
+
+  # Super, Hyper and Meta have no `KeyModifier`. Without them a shortcut would
+  # read as the plain key.
+  const UnmappedModifiers = 8 or 16 or 32
+  if (max(fields.at(1) - 1, 0) and UnmappedModifiers) != 0:
+    return CsiAction(kind: cakIgnore)
+
+  let modifiers = parseModifierCode(fields.at(1))
+  case scan.final
+  of 'u':
+    codepointAction(fields.at(0), fields.at(0, 1), modifiers)
+  of '~':
+    let first = fields.at(0)
+    case first
+    of 27:
+      codepointAction(fields.at(2), fields.at(2, 1), modifiers)
+    of 200:
+      if fields.len == 1 and fields[0].len == 1:
+        CsiAction(kind: cakPaste)
+      else:
+        CsiAction(kind: cakIgnore)
+    of 1 .. 9:
+      # rxvt sends Home as 7~ and End as 8~.
+      let key =
+        case first
+        of 7:
+          KeyEvent(code: Home)
+        of 8:
+          KeyEvent(code: End)
+        else:
+          mapNumericKeyCode(char('0'.ord + first))
+      namedKeyAction(key, modifiers)
+    else:
+      namedKeyAction(mapFunctionKey($first), modifiers)
+  else:
+    # `CSI 1 ; modifiers P/Q/S` are F1/F2/F4. R has the shape of a cursor
+    # position report, so the modified F3 stays unreadable.
+    if scan.final in {'P', 'Q', 'S'} and fields.len > 1 and fields.at(0) == 1:
+      namedKeyAction(mapVT100FunctionKey(scan.final), modifiers)
+    else:
+      let arrow = mapArrowKey(scan.final)
+      if arrow.code != Escape:
+        namedKeyAction(arrow, modifiers)
+      else:
+        namedKeyAction(mapNavigationKey(scan.final), modifiers)
 
 # Bracketed paste content reading (I/O independent state machine)
 
@@ -315,12 +449,3 @@ proc extractCursorReply*(bytes: string): CursorReply =
       typeahead: bytes[0 ..< start] & bytes[i .. ^1],
     )
   CursorReply(typeahead: bytes)
-
-proc matchCursorReply*(bytes: string): CursorReplyMatch =
-  ## Match the bytes after `ESC [` against the rest of a cursor position report.
-  ## The event readers use it to drop a reply that came after its query.
-  var i = 0
-  var row, col: int
-  result = scanCursorReply(bytes, i, row, col)
-  if result == crmComplete and i < bytes.len:
-    result = crmNone
