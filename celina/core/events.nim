@@ -409,6 +409,8 @@ template parseEscapeSequenceUnified*(
   ## Reading to the final byte covers a cursor position report
   ## (`CSI row ; col R`) that came after `queryCursorPosition` stopped waiting.
   ## A byte that cannot be in a sequence ends it and goes back.
+  ##
+  ## `ESC O` with no final byte after it is Alt+Shift+O.
   block:
     let first = readByte
     if not first.success:
@@ -455,8 +457,16 @@ template parseEscapeSequenceUnified*(
               Event(kind: Unknown)
       of 'O':
         let vt = readByte
-        let p = processVT100FunctionKey(vt.ch, vt.success)
-        Event(kind: Key, key: p.keyEvent)
+        if vt.success and vt.ch in Ss3FinalBytes:
+          let action = ss3Action(vt.ch)
+          if action.kind == cakKey:
+            Event(kind: Key, key: action.key)
+          else:
+            Event(kind: Unknown)
+        else:
+          if vt.success:
+            unread($vt.ch)
+          Event(kind: Key, key: mapAltKey('O'))
       else:
         # Alt+key: terminals encode Alt by prefixing the key's usual bytes
         # with ESC (e.g. ESC 'a' = Alt+a). ASCII bytes map directly; a

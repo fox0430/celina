@@ -433,6 +433,22 @@ suite "NUL bytes (Async)":
     check events[0].key.code == Space
     check events[0].key.modifiers == {Ctrl, Alt}
 
+  test "SS3 reads cursor keys and consumes an unmapped final":
+    let events = readEvents("\x1bOA\x1bOj", 2)
+    check events[0].key.code == ArrowUp
+    check events[1].kind == EventKind.Unknown
+
+  test "ESC O alone is Alt+Shift+O":
+    let events = readEvents("\x1bO", 1)
+    check events[0].key.char == "O"
+    check events[0].key.modifiers == {Alt}
+
+  test "A byte that cannot be a final goes back after ESC O":
+    let events = readEvents("\x1bO\x00", 2)
+    check events[0].key.char == "O"
+    check events[1].key.code == Space
+    check events[1].key.modifiers == {Ctrl}
+
   test "0x00 ends a CSI sequence and stays a key":
     let events = readEvents("\x1b[\x00", 2)
     check events[0].kind == EventKind.Unknown

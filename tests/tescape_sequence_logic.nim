@@ -17,36 +17,24 @@ suite "Escape Sequence Logic Tests":
       check result.isValid == true
       check result.keyEvent.code == KeyCode.Escape
 
-  suite "VT100 Function Key Processing":
-    test "processVT100FunctionKey with valid P (F1)":
-      let result = processVT100FunctionKey('P', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.F1
+  suite "SS3 Key Processing":
+    test "ss3Action decodes F1-F4":
+      check ss3Action('P').key.code == KeyCode.F1
+      check ss3Action('Q').key.code == KeyCode.F2
+      check ss3Action('R').key.code == KeyCode.F3
+      check ss3Action('S').key.code == KeyCode.F4
 
-    test "processVT100FunctionKey with valid Q (F2)":
-      let result = processVT100FunctionKey('Q', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.F2
+    test "ss3Action decodes application cursor keys":
+      check ss3Action('A').key.code == ArrowUp
+      check ss3Action('B').key.code == ArrowDown
+      check ss3Action('C').key.code == ArrowRight
+      check ss3Action('D').key.code == ArrowLeft
+      check ss3Action('H').key.code == Home
+      check ss3Action('F').key.code == End
 
-    test "processVT100FunctionKey with valid R (F3)":
-      let result = processVT100FunctionKey('R', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.F3
-
-    test "processVT100FunctionKey with valid S (F4)":
-      let result = processVT100FunctionKey('S', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.F4
-
-    test "processVT100FunctionKey with invalid character":
-      let result = processVT100FunctionKey('X', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.Escape
-
-    test "processVT100FunctionKey with invalid flag":
-      let result = processVT100FunctionKey('P', false)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.Escape
+    test "ss3Action ignores other finals":
+      for final in ['X', 'j', '~']:
+        check ss3Action(final).kind == cakIgnore
 
   suite "Bracket Sequence Classification":
     test "classifyBracketSequence with arrow key A (up)":
@@ -135,11 +123,6 @@ suite "Escape Sequence Logic Tests":
       check result.keyEvent.code == KeyCode.Escape
 
   suite "Edge Cases and Error Handling":
-    test "processVT100FunctionKey with null character":
-      let result = processVT100FunctionKey('\0', true)
-      check result.isValid == true
-      check result.keyEvent.code == KeyCode.Escape
-
     test "processSimpleBracketSequence with control characters":
       for ch in ['\0', '\x01', '\x7F']:
         let result = processSimpleBracketSequence(ch, true)
@@ -150,7 +133,7 @@ suite "Escape Sequence Logic Tests":
     test "All escape fallbacks return same key":
       let key1 = escapeKey()
       let key2 = escapeResult().keyEvent
-      let key3 = processVT100FunctionKey('X', true).keyEvent
+      let key3 = processSimpleBracketSequence('X', true).keyEvent
       check key1.code == key2.code
       check key2.code == key3.code
       check key1.char == key2.char
@@ -162,7 +145,7 @@ suite "Escape Sequence Logic Tests":
         check classifyBracketSequence('A') == BskArrowKey
 
     test "Invalid flags always produce escape key":
-      let r1 = processVT100FunctionKey('P', false)
+      let r1 = processSimpleBracketSequence('A', false)
       check r1.keyEvent.code == KeyCode.Escape
 
   suite "Paste End State Machine":

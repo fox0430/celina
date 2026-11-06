@@ -2041,6 +2041,80 @@ suite "Events Module Tests":
           setStdinNonBlockingPinned(originalPin)
           restoreStdin(p)
 
+  suite "SS3 sequences":
+    proc readEvents(input: string, count: int): seq[Event] =
+      var events: seq[Event]
+      proc read() =
+        for _ in 1 .. count:
+          let event = readKeyInput()
+          check event.isSome
+          if event.isSome:
+            events.add(event.get)
+
+      withStdinInput(input, read)
+      events
+
+    proc readEventsBlocking(input: string, count: int): seq[Event] =
+      ## Drive the blocking reader; the ended stdin lets it see EOF.
+      var events: seq[Event]
+      proc read() =
+        for _ in 1 .. count:
+          events.add(readKey())
+
+      withEndedStdin(input, read)
+      events
+
+    test "Application cursor keys":
+      check readEvents("\eOA", 1)[0].key.code == ArrowUp
+      check readEvents("\eOD", 1)[0].key.code == ArrowLeft
+      check readEvents("\eOH", 1)[0].key.code == Home
+      check readEvents("\eOF", 1)[0].key.code == End
+
+    test "F1 is unchanged":
+      check readEvents("\eOP", 1)[0].key.code == F1
+
+    test "An unmapped final byte gives Unknown and is consumed":
+      let events = readEvents("\eOjx", 2)
+      check events[0].kind == EventKind.Unknown
+      check events[1].key.char == "x"
+
+    test "ESC O alone is Alt+Shift+O":
+      let key = readEvents("\eO", 1)[0].key
+      check key.code == Char
+      check key.char == "O"
+      check key.modifiers == {Alt}
+
+    test "A byte that cannot be a final goes back":
+      let events = readEvents("\eO\r", 2)
+      check events[0].key.char == "O"
+      check events[0].key.modifiers == {Alt}
+      check events[1].key.code == Enter
+
+    test "Blocking reader decodes SS3 finals":
+      let events = readEventsBlocking("\eOA\eOP\eOjx", 4)
+      check events[0].key.code == ArrowUp
+      check events[1].key.code == F1
+      check events[2].kind == EventKind.Unknown
+      check events[3].key.char == "x"
+
+    test "Blocking reader reads a cut-off ESC O as Alt+O":
+      # The blocking byte reader fails only at end of input, so the cut-off
+      # path needs an ended stdin rather than a timeout.
+      let events = readEventsBlocking("\eO", 2)
+      check events[0].key.code == Char
+      check events[0].key.char == "O"
+      check events[0].key.modifiers == {Alt}
+      check events[1].kind == EventKind.InputClosed
+
+    test "Blocking reader puts back a byte that cannot be a final":
+      let events = readEventsBlocking("\eO\r" & "\eO" & "\x80", 4)
+      check events[0].key.char == "O"
+      check events[0].key.modifiers == {Alt}
+      check events[1].key.code == Enter
+      check events[2].key.char == "O"
+      check events[2].key.modifiers == {Alt}
+      check events[3].key.char == Utf8ReplacementChar
+
   suite "Alt UTF-8 Validation":
     ## The Alt branch assembles UTF-8 inline, so it must validate the second
     ## byte like `assembleUtf8Char`.

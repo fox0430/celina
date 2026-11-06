@@ -72,13 +72,6 @@ proc escapeResult*(): EscapeResult {.inline.} =
   ## Create an EscapeResult with Escape key (fallback for invalid sequences)
   EscapeResult(isValid: true, keyEvent: escapeKey())
 
-proc processVT100FunctionKey*(ch: char, isValid: bool): EscapeResult =
-  ## Process VT100 function keys: ESC O P/Q/R/S (F1-F4)
-  if isValid:
-    return EscapeResult(isValid: true, keyEvent: mapVT100FunctionKey(ch))
-  else:
-    return escapeResult()
-
 type BracketSequenceKind* = enum
   ## Classification of bracket escape sequences after ESC[
   BskArrowKey # ESC[A, ESC[B, ESC[C, ESC[D
@@ -133,6 +126,7 @@ proc processSimpleBracketSequence*(final: char, isValid: bool): EscapeResult =
 # CSI sequences (I/O independent)
 
 const
+  Ss3FinalBytes* = {'@' .. '~'}
   SequenceByteWaitMs* = 50
     ## how long a reader waits for the next byte of a sequence or character
   PasteByteWaitMs* = 1000 ## the same for the next byte of paste content
@@ -256,6 +250,22 @@ proc codepointAction(code, alternate: int, modifiers: set[KeyModifier]): CsiActi
     # The kitty protocol's functional keys are in the private use area.
     CsiAction(kind: cakIgnore)
 
+proc cursorKeyAction(final: char, modifiers: set[KeyModifier]): CsiAction =
+  let arrow = mapArrowKey(final)
+  if arrow.code != Escape:
+    namedKeyAction(arrow, modifiers)
+  else:
+    namedKeyAction(mapNavigationKey(final), modifiers)
+
+proc ss3Action*(final: char): CsiAction =
+  ## The meaning of `ESC O final`: F1-F4, or an arrow, Home or End from a
+  ## terminal in application cursor mode (DECCKM).
+  let function = mapVT100FunctionKey(final)
+  if function.code != Escape:
+    keyAction(function)
+  else:
+    cursorKeyAction(final, {})
+
 proc action*(scan: CsiScan): CsiAction =
   ## The meaning of a finished scan. A sequence that was cut off, or that no key
   ## maps to, is ignored: its bytes are not input.
@@ -308,11 +318,7 @@ proc action*(scan: CsiScan): CsiAction =
     if scan.final in {'P', 'Q', 'S'} and fields.len > 1 and fields.at(0) == 1:
       namedKeyAction(mapVT100FunctionKey(scan.final), modifiers)
     else:
-      let arrow = mapArrowKey(scan.final)
-      if arrow.code != Escape:
-        namedKeyAction(arrow, modifiers)
-      else:
-        namedKeyAction(mapNavigationKey(scan.final), modifiers)
+      cursorKeyAction(scan.final, modifiers)
 
 # Bracketed paste content reading (I/O independent state machine)
 
