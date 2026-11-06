@@ -133,10 +133,14 @@ proc processSimpleBracketSequence*(final: char, isValid: bool): EscapeResult =
 # CSI sequences (I/O independent)
 
 const
+  SequenceByteWaitMs* = 50
+    ## how long a reader waits for the next byte of a sequence or character
+  PasteByteWaitMs* = 1000 ## the same for the next byte of paste content
   MaxCsiBytes = 32 ## longer parameters are read, but ignored
   MaxCsiScanBytes* = 64
-    ## A scan gives up here. At `readKeyInput`'s 50 ms a byte, this bounds how
-    ## long a stream of parameter bytes holds it to 3.2 s.
+    ## A scan gives up here. At `SequenceByteWaitMs` a byte, this bounds how long
+    ## a stream of parameter bytes holds a reader to 3.2 s (a blocking stdin has
+    ## no per-byte limit).
   MaxCsiNumber = 0x110000 ## past every codepoint; bigger numbers stop here
 
 proc feed*(scan: var CsiScan, ch: char) =
