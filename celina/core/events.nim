@@ -4,7 +4,7 @@
 ## including escape sequences and arrow keys for POSIX systems.
 
 import std/[os, posix, options, strutils, strformat, atomics, monotimes]
-from std/times import initDuration, inMilliseconds
+from std/times import initDuration, inMilliseconds, inMicroseconds
 
 import geometry, mouse_logic, utf8_utils, key_logic, escape_sequence_logic
 from terminal_common import
@@ -378,83 +378,58 @@ template parseEscapeSequenceUnified*(
   ## For non-blocking callers, the post-ESC timeout check (standalone ESC vs
   ## start of a sequence) must be performed by the caller before invocation.
   ##
-  ## A cursor position report (`CSI row ; col R`) gives `Unknown`, so a reply
-  ## that came after `queryCursorPosition` stopped waiting does not turn into
-  ## keys. The modified F3 keys of the same shape (`CSI 1;n R`) go with it.
+  ## A CSI sequence is read to its final byte, so one that no key maps to gives
+  ## `Unknown` rather than turning its tail into keys. `readKeyInput` waits for
+  ## each byte, and `readKey` waits on a blocking stdin. `readKey` on raw mode's
+  ## non-blocking stdin and the async reader only see bytes that have already
+  ## arrived, so there a sequence split across reads is cut off and its tail
+  ## becomes keys. Reading to the final byte covers a cursor position report
+  ## (`CSI row ; col R`) that came after `queryCursorPosition` stopped waiting.
+  ## A byte that cannot be in a sequence ends it and goes back.
   block:
     let first = readByte
-    var bracket = (success: false, ch: '\0')
-    var reply = crmNone
-    if first.success and first.ch == '[':
-      let b = readByte
-      bracket = (success: b.success, ch: b.ch)
-      # Read ahead to tell a cursor position report; other bytes go back.
-      if b.success and b.ch in {'0' .. '9'}:
-        var ahead = $b.ch
-        reply = matchCursorReply(ahead)
-        while reply == crmPartial:
-          let next = readByte
-          if not next.success:
-            break
-          ahead.add(next.ch)
-          reply = matchCursorReply(ahead)
-        if reply != crmComplete:
-          unread(ahead[1 .. ^1])
     if not first.success:
       Event(kind: Key, key: KeyEvent(code: KeyCode.Escape, char: "\x1b"))
-    elif reply == crmComplete:
-      Event(kind: Unknown)
     else:
       case first.ch
       of '[':
-        case classifyBracketSequence(bracket.ch)
-        of BskArrowKey, BskNavigationKey:
-          let p = processSimpleBracketSequence(bracket.ch, bracket.success)
-          Event(kind: Key, key: p.keyEvent)
-        of BskMouseX10:
-          parseMouseX10
-        of BskMouseSGR:
-          parseMouseSGR
-        of BskNumeric:
-          let digit = bracket.ch
-          let numeric = readByte
-          case classifyNumericSequence(numeric.ch, numeric.success)
-          of NskSingleDigitWithTilde:
-            let p = processSingleDigitNumeric(digit)
+        let bracket = readByte
+        if not bracket.success:
+          Event(kind: Unknown)
+        else:
+          case classifyBracketSequence(bracket.ch)
+          of BskArrowKey, BskNavigationKey:
+            let p = processSimpleBracketSequence(bracket.ch, bracket.success)
             Event(kind: Key, key: p.keyEvent)
-          of NskMultiDigit:
-            let second = numeric.ch
-            let third = readByte
-            if third.success and third.ch in {'0' .. '9'}:
-              let tilde = readByte
-              let tildeMatched = tilde.success and tilde.ch == '~'
-              if tildeMatched and isPasteStartSequence(digit, second, third.ch, '~'):
-                Event(kind: Paste, pastedText: readPaste)
-              elif tildeMatched and isPasteEndSequence(digit, second, third.ch, '~'):
-                # Orphaned paste end - shouldn't happen in normal flow
-                Event(kind: Unknown)
+          of BskMouseX10:
+            parseMouseX10
+          of BskMouseSGR:
+            parseMouseSGR
+          of BskFocusIn:
+            Event(kind: FocusIn)
+          of BskFocusOut:
+            Event(kind: FocusOut)
+          of BskGeneric:
+            var scan = CsiScan()
+            scan.feed(bracket.ch)
+            while scan.state == cssReading:
+              let next = readByte
+              if next.success:
+                scan.feed(next.ch)
               else:
-                # Unknown 3-digit sequence (tilde missing or unrecognized)
-                Event(kind: Key, key: escapeKey())
-            else:
-              let p =
-                processMultiDigitFunctionKey(digit, second, third.ch, third.success)
-              Event(kind: Key, key: p.keyEvent)
-          of NskModifiedKey:
-            let modifier = readByte
-            let key = readByte
-            let p = processModifiedKeySequence(
-              digit, modifier.ch, modifier.success, key.ch, key.success
-            )
-            Event(kind: Key, key: p.keyEvent)
-          of NskInvalid:
-            Event(kind: Key, key: escapeKey())
-        of BskFocusIn:
-          Event(kind: FocusIn)
-        of BskFocusOut:
-          Event(kind: FocusOut)
-        of BskInvalid:
-          Event(kind: Key, key: escapeKey())
+                scan.state = cssTruncated
+            if scan.state == cssStray:
+              unread($scan.stray)
+            let action = scan.action()
+            case action.kind
+            of cakKey:
+              Event(kind: Key, key: action.key)
+            of cakPaste:
+              Event(kind: Paste, pastedText: readPaste)
+            of cakQuit:
+              Event(kind: Quit)
+            of cakIgnore:
+              Event(kind: Unknown)
       of 'O':
         let vt = readByte
         let p = processVT100FunctionKey(vt.ch, vt.success)
@@ -664,18 +639,21 @@ proc readByteWithTimeoutNonBlocking(
   if pendingByte.isSome or queuedInput.len > 0:
     return readByteNonBlocking(STDIN_FILENO)
 
-  var readSet: TFdSet
-  FD_ZERO(readSet)
-  FD_SET(STDIN_FILENO, readSet)
-  # select(2) rejects tv_usec >= 1_000_000 with EINVAL, so carry whole seconds.
-  var timeout = Timeval(
-    tv_sec: Time(timeoutUs div 1_000_000), tv_usec: Suseconds(timeoutUs mod 1_000_000)
-  )
-  if select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout) <= 0:
-    # Timeout or error - no further byte of the sequence has arrived.
-    return (false, '\0', true)
-
-  readByteNonBlocking(STDIN_FILENO)
+  let deadline = getMonoTime() + initDuration(microseconds = timeoutUs)
+  while true:
+    var readSet: TFdSet
+    FD_ZERO(readSet)
+    FD_SET(STDIN_FILENO, readSet)
+    let left = max((deadline - getMonoTime()).inMicroseconds, 0)
+    # select(2) rejects tv_usec >= 1_000_000 with EINVAL, so carry whole seconds.
+    var timeout =
+      Timeval(tv_sec: Time(left div 1_000_000), tv_usec: Suseconds(left mod 1_000_000))
+    let r = select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout)
+    if r > 0:
+      return readByteNonBlocking(STDIN_FILENO)
+    # A resize must not split a sequence.
+    if r == 0 or errno != EINTR:
+      return (false, '\0', true)
 
 # Non-blocking mouse event parsing
 

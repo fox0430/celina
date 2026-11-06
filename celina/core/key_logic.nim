@@ -297,8 +297,8 @@ proc mapVT100FunctionKey*(ch: char): KeyEvent =
   else:
     KeyEvent(code: Escape, char: "\x1b")
 
-proc parseModifierCode*(modChar: char): set[KeyModifier] =
-  ## Parse modifier code from escape sequence
+proc parseModifierCode*(code: int): set[KeyModifier] =
+  ## Parse the modifier parameter of an escape sequence
   ##
   ## Modifier encoding (1-based, subtract 1 for bit flags):
   ## 1=None, 2=Shift, 3=Alt, 4=Shift+Alt, 5=Ctrl,
@@ -306,13 +306,12 @@ proc parseModifierCode*(modChar: char): set[KeyModifier] =
   ##
   ## Example:
   ## ```nim
-  ## assert parseModifierCode('2') == {Shift}
-  ## assert parseModifierCode('5') == {Ctrl}
-  ## assert parseModifierCode('8') == {Ctrl, Shift, Alt}
+  ## assert parseModifierCode(2) == {Shift}
+  ## assert parseModifierCode(5) == {Ctrl}
+  ## assert parseModifierCode(8) == {Ctrl, Shift, Alt}
   ## ```
-  let modifierCode = int(modChar) - int('0')
   # Subtract 1 because modifier codes are 1-based (1=no mods, 2=Shift, etc.)
-  let modifier = modifierCode - 1
+  let modifier = max(code - 1, 0)
   var modifiers: set[KeyModifier] = {}
 
   if (modifier and 1) != 0:

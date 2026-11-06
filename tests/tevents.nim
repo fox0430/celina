@@ -5,6 +5,7 @@ from std/times import epochTime
 
 import ../celina/core/events {.all.}
 import ../celina/core/[mouse_logic, geometry]
+from ../celina/core/escape_sequence_logic import MaxCsiScanBytes
 from ../celina/core/terminal_common import getRawModeConfig, applyTerminalConfig
 import stdout_capture
 
@@ -73,6 +74,14 @@ proc interruptedArrowWriter(args: tuple[wfd: cint, reader: Pthread]) {.thread.} 
   discard usleep(Useconds(30_000))
   var rest = "[A"
   discard posix.write(args.wfd, addr rest[0], rest.len.cint)
+
+# Thread body: interrupt the reader while it waits, then send a byte.
+proc interruptedByteWriter(args: tuple[wfd: cint, reader: Pthread]) {.thread.} =
+  discard usleep(Useconds(30_000))
+  discard pthread_kill(args.reader, SIGUSR1)
+  discard usleep(Useconds(30_000))
+  var b = 'x'
+  discard posix.write(args.wfd, addr b, 1)
 
 proc ignoreSignal(sig: cint) {.noconv.} =
   discard
@@ -2414,6 +2423,26 @@ suite "Events Module Tests":
           discard sigaction(SIGUSR1, oldAct, nil)
           restoreStdin(p)
 
+    test "a signal does not end the wait for the next byte":
+      var p = redirectStdinFromPipe()
+      if p.saved != -1:
+        var act, oldAct: Sigaction
+        act.sa_handler = ignoreSignal
+        discard sigemptyset(act.sa_mask)
+        act.sa_flags = 0 # no SA_RESTART: the parked select fails with EINTR
+        check sigaction(SIGUSR1, act, oldAct) == 0
+        try:
+          clearPendingByte()
+          var writer: Thread[tuple[wfd: cint, reader: Pthread]]
+          createThread(writer, interruptedByteWriter, (p.wfd, pthread_self()))
+          let r = readByteWithTimeoutNonBlocking(5_000_000)
+          joinThread(writer)
+          check r.success
+          check r.ch == 'x'
+        finally:
+          discard sigaction(SIGUSR1, oldAct, nil)
+          restoreStdin(p)
+
     test "a busy non-blocking stdin is not an end of input":
       var p = redirectStdinFromPipe()
       if p.saved != -1:
@@ -2652,6 +2681,178 @@ suite "Events Module Tests":
           check ev.pastedText == "hi"
         finally:
           queuedInput = ""
+          restoreStdin(p)
+
+    test "Ghostty's Ctrl+I, Ctrl+M and Ctrl+[ are one key each":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b[105;5u\x1b[109;5u\x1b[91;5u\x1b[46;5ux")
+          check readKeyInput().get.key.code == Tab
+          check readKeyInput().get.key.code == Enter
+          check readKeyInput().get.key.code == Escape
+          let dot = readKeyInput().get.key
+          check dot.char == "."
+          check dot.modifiers == {Ctrl}
+          check nextChar() == "x"
+          check readKeyInput().isNone
+        finally:
+          queuedInput = ""
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "a CSI scan gives up at its byte limit":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b[" & repeat('1', MaxCsiScanBytes) & "x")
+          check readKeyInput().get.kind == EventKind.Unknown
+          check nextChar() == "x"
+        finally:
+          queuedInput = ""
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "Ctrl+C as CSI u is Quit":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b[99;5u\x1b[27;5;99~x")
+          check readKeyInput().get.kind == Quit
+          check readKeyInput().get.kind == Quit
+          check nextChar() == "x"
+        finally:
+          queuedInput = ""
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "rxvt's $ does not take the next key":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b[7$x")
+          check readKeyInput().get.kind == EventKind.Unknown
+          check nextChar() == "x"
+        finally:
+          queuedInput = ""
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "a paste start with extra parameters does not start a paste":
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          feedPipe(p, "\x1b[200;5~y")
+          check readKey().kind == EventKind.Unknown
+          check readKey().key.char == "y"
+        finally:
+          queuedInput = ""
+          restoreStdin(p)
+
+    test "a CSI sequence cut off right after [ is not Escape":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b[")
+          check readKeyInput().get.kind == EventKind.Unknown
+          check readKeyInput().isNone
+        finally:
+          queuedInput = ""
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "readKey reads a CSI u key to its end":
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          clearPendingByte()
+          feedPipe(p, "\x1b[105;5uy")
+          check readKey().key.code == Tab
+          check readKey().key.char == "y"
+        finally:
+          queuedInput = ""
+          restoreStdin(p)
+
+    test "an unmapped CSI sequence leaves no keys behind":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b[99~\x1b[?62c\x1b[?1u\x1b[Xz")
+          for _ in 0 ..< 4:
+            check readKeyInput().get.kind == EventKind.Unknown
+          check nextChar() == "z"
+          check readKeyInput().isNone
+        finally:
+          queuedInput = ""
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "rxvt Home/End and modified F1/F2/F4 arrive as keys":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b[7~\x1b[8~\x1b[1;2P\x1b[1;5S")
+          check readKeyInput().get.key == KeyEvent(code: Home)
+          check readKeyInput().get.key == KeyEvent(code: End)
+          check readKeyInput().get.key == KeyEvent(code: F1, modifiers: {Shift})
+          check readKeyInput().get.key == KeyEvent(code: F4, modifiers: {Ctrl})
+          check readKeyInput().isNone
+        finally:
+          queuedInput = ""
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "a CSI sequence with no final byte gives one Unknown and nothing else":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b[1")
+          check readKeyInput().get.kind == EventKind.Unknown
+          check nextChar() == ""
+          check readKeyInput().isNone
+        finally:
+          queuedInput = ""
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+
+    test "a CSI sequence cut off by ESC gives that ESC back":
+      let originalPin = isStdinNonBlockingPinned()
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b[105;\x1b[A")
+          check readKeyInput().get.kind == EventKind.Unknown
+          check readKeyInput().get.key.code == ArrowUp
+        finally:
+          queuedInput = ""
+          setStdinNonBlockingPinned(originalPin)
           restoreStdin(p)
 
     test "bytes read ahead go back before the queued typeahead":
