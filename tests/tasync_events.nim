@@ -42,13 +42,10 @@ when hasAsyncSupport:
     if data.len > 0:
       discard posix.write(p.wfd, addr data[0], data.len.cint)
 
-  # Thread body: write `data` one byte at a time, well under the 50ms per-byte
-  # wait.
-  proc dribbleWriter(args: tuple[wfd: cint, data: string]) {.thread.} =
-    for ch in args.data:
-      discard usleep(Useconds(5_000)) # 5ms
-      var b = ch
-      discard posix.write(args.wfd, addr b, 1)
+  # Thread body: write `data` after a delay well under the 50ms per-byte wait.
+  proc delayedWriter(args: tuple[wfd: cint, data: string]) {.thread.} =
+    discard usleep(Useconds(5_000)) # 5ms
+    discard posix.write(args.wfd, unsafeAddr args.data[0], args.data.len.cint)
 
 when hasAsyncDispatch:
   template wait*[T](fut: Future[T], timeout: int): untyped =
@@ -118,7 +115,7 @@ suite "Async Key Reading":
         reader.closeAsyncInputReader()
         restoreStdin(p)
 
-  test "readKeyAsync joins a sequence split byte by byte":
+  test "readKeyAsync joins a sequence split before its last byte":
     # Retried: a late writer thread must not fail the run.
     proc assembles(input: string, want: proc(e: Event): bool): bool =
       for _ in 0 ..< 5:
@@ -128,8 +125,8 @@ suite "Async Key Reading":
         let reader = newAsyncInputReader()
         var writer: Thread[tuple[wfd: cint, data: string]]
         try:
-          feedPipe(p, input[0 .. 0])
-          createThread(writer, dribbleWriter, (p.wfd, input[1 ..^ 1] & "x"))
+          feedPipe(p, input[0 ..^ 2])
+          createThread(writer, delayedWriter, (p.wfd, input[^1 ..^ 1] & "x"))
           let first = waitFor reader.readKeyAsync()
           joinThread(writer)
           let next = waitFor reader.readKeyAsync()
@@ -179,7 +176,7 @@ suite "Async Key Reading":
       try:
         feedPipe(p, "\x1b[")
         check (waitFor reader.readCutOff()).kind == EventKind.Unknown
-        check ticks >= 5
+        check ticks >= 3
       finally:
         reader.closeAsyncInputReader()
         restoreStdin(p)

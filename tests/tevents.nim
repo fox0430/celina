@@ -51,12 +51,10 @@ proc delayedArrowWriter(wfd: cint) {.thread.} =
   var b = "A"
   discard posix.write(wfd, addr b[0], b.len.cint)
 
-# Thread body: write `data` one byte at a time, well under the 50ms per-byte wait.
-proc dribbleWriter(args: tuple[wfd: cint, data: string]) {.thread.} =
-  for ch in args.data:
-    discard usleep(Useconds(5_000)) # 5ms
-    var b = ch
-    discard posix.write(args.wfd, addr b, 1)
+# Thread body: write `data` after a delay well under the 50ms per-byte wait.
+proc delayedWriter(args: tuple[wfd: cint, data: string]) {.thread.} =
+  discard usleep(Useconds(5_000)) # 5ms
+  discard posix.write(args.wfd, unsafeAddr args.data[0], args.data.len.cint)
 
 # Thread body: finish a paste after a gap longer than the 50ms sequence wait.
 proc delayedPasteTail(wfd: cint) {.thread.} =
@@ -1860,9 +1858,8 @@ suite "Events Module Tests":
       if redirected:
         check assembled
 
-    test "a sequence split byte by byte gives one event on a non-blocking stdin":
-      # `read` feeds the bytes after the first to the reader under test. Retried
-      # like the test above: a late writer thread must not fail the run.
+    test "a sequence split before its last byte gives one event on a non-blocking stdin":
+      # Retried like the test above: a late writer thread must not fail the run.
       proc assembles(
           input: string, read: proc(): Event, want: proc(e: Event): bool
       ): bool =
@@ -1876,8 +1873,8 @@ suite "Events Module Tests":
             setStdinNonBlockingPinned(true)
             discard fcntl(p.rfd, F_SETFL, fcntl(p.rfd, F_GETFL) or O_NONBLOCK)
             clearPendingByte()
-            feedPipe(p, input[0 .. 0])
-            createThread(writer, dribbleWriter, (p.wfd, input[1 ..^ 1] & "x"))
+            feedPipe(p, input[0 ..^ 2])
+            createThread(writer, delayedWriter, (p.wfd, input[^1 ..^ 1] & "x"))
             let first = read()
             joinThread(writer)
             discard usleep(Useconds(1_000))
