@@ -51,6 +51,19 @@ proc delayedArrowWriter(wfd: cint) {.thread.} =
   var b = "A"
   discard posix.write(wfd, addr b[0], b.len.cint)
 
+# Thread body: write `data` one byte at a time, well under the 50ms per-byte wait.
+proc dribbleWriter(args: tuple[wfd: cint, data: string]) {.thread.} =
+  for ch in args.data:
+    discard usleep(Useconds(5_000)) # 5ms
+    var b = ch
+    discard posix.write(args.wfd, addr b, 1)
+
+# Thread body: finish a paste after a gap longer than the 50ms sequence wait.
+proc delayedPasteTail(wfd: cint) {.thread.} =
+  discard usleep(Useconds(100_000)) # 100ms
+  var b = "b\x1b[201~"
+  discard posix.write(wfd, addr b[0], b.len.cint)
+
 # Thread body: write the tail of a cursor position report after a short delay,
 # so the query sees the reply split across reads.
 proc delayedReplyTail(wfd: cint) {.thread.} =
@@ -1846,6 +1859,82 @@ suite "Events Module Tests":
           break
       if redirected:
         check assembled
+
+    test "a sequence split byte by byte gives one event on a non-blocking stdin":
+      # `read` feeds the bytes after the first to the reader under test. Retried
+      # like the test above: a late writer thread must not fail the run.
+      proc assembles(
+          input: string, read: proc(): Event, want: proc(e: Event): bool
+      ): bool =
+        let originalPin = isStdinNonBlockingPinned()
+        for _ in 0 ..< 5:
+          let p = redirectStdinFromPipe()
+          if p.saved == -1:
+            return true
+          var writer: Thread[tuple[wfd: cint, data: string]]
+          try:
+            setStdinNonBlockingPinned(true)
+            discard fcntl(p.rfd, F_SETFL, fcntl(p.rfd, F_GETFL) or O_NONBLOCK)
+            clearPendingByte()
+            feedPipe(p, input[0 .. 0])
+            createThread(writer, dribbleWriter, (p.wfd, input[1 ..^ 1] & "x"))
+            let first = read()
+            joinThread(writer)
+            discard usleep(Useconds(1_000))
+            let next = read()
+            if want(first) and next.kind == EventKind.Key and next.key.char == "x":
+              return true
+          finally:
+            setStdinNonBlockingPinned(originalPin)
+            restoreStdin(p)
+        false
+
+      proc isArrow(e: Event): bool =
+        e.kind == EventKind.Key and e.key.code == ArrowUp
+
+      proc isMousePress(e: Event): bool =
+        e.kind == Mouse and e.mouse.x == 10 and e.mouse.y == 5
+
+      proc isChar(e: Event): bool =
+        e.kind == EventKind.Key and e.key.char == "\xE3\x81\x82"
+
+      proc inputEvent(): Event =
+        readKeyInput().get(Event(kind: Unknown))
+
+      for read in [readKey, inputEvent]:
+        check assembles("\x1b[A", read, isArrow)
+        check assembles("\x1b[<0;11;6M", read, isMousePress)
+        check assembles("\x1b[M +&", read, isMousePress)
+        check assembles("\xE3\x81\x82", read, isChar)
+
+    test "readKey keeps a paste across a gap on a non-blocking stdin":
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          discard fcntl(p.rfd, F_SETFL, fcntl(p.rfd, F_GETFL) or O_NONBLOCK)
+          clearPendingByte()
+          feedPipe(p, "\x1b[200~a")
+          var writer: Thread[cint]
+          createThread(writer, delayedPasteTail, p.wfd)
+          let ev = readKey()
+          joinThread(writer)
+          check ev.kind == EventKind.Paste
+          check ev.pastedText == "ab"
+        finally:
+          restoreStdin(p)
+
+    test "readKey gives a cut-off sequence up on a non-blocking stdin":
+      let p = redirectStdinFromPipe()
+      if p.saved != -1:
+        try:
+          discard fcntl(p.rfd, F_SETFL, fcntl(p.rfd, F_GETFL) or O_NONBLOCK)
+          clearPendingByte()
+          feedPipe(p, "\x1b[")
+          check readKey().kind == EventKind.Unknown
+          feedPipe(p, "\x1b")
+          check readKey().key.code == Escape
+        finally:
+          restoreStdin(p)
 
     test "readKeyInput assembles an SGR mouse press from stdin":
       let originalPin = isStdinNonBlockingPinned()

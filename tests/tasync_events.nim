@@ -8,7 +8,8 @@ import ../celina/async/async_events {.all.}
 
 when hasAsyncSupport:
   import std/[options, times]
-  from std/posix import dup, dup2, pipe, close, write, isatty, STDIN_FILENO
+  from std/posix import
+    dup, dup2, pipe, close, write, isatty, usleep, Useconds, STDIN_FILENO
   import ./stdout_capture
 
   # --- Test helpers: drive the async byte readers from a controlled pipe.
@@ -40,6 +41,14 @@ when hasAsyncSupport:
   proc feedPipe(p: StdinPipe, data: string) =
     if data.len > 0:
       discard posix.write(p.wfd, addr data[0], data.len.cint)
+
+  # Thread body: write `data` one byte at a time, well under the 50ms per-byte
+  # wait.
+  proc dribbleWriter(args: tuple[wfd: cint, data: string]) {.thread.} =
+    for ch in args.data:
+      discard usleep(Useconds(5_000)) # 5ms
+      var b = ch
+      discard posix.write(args.wfd, addr b, 1)
 
 when hasAsyncDispatch:
   template wait*[T](fut: Future[T], timeout: int): untyped =
@@ -105,6 +114,72 @@ suite "Async Key Reading":
         feedPipe(p, "\x1b[99;5u\x1b[")
         check (waitFor reader.readKeyAsync()).kind == EventKind.Quit
         check (waitFor reader.readKeyAsync()).kind == EventKind.Unknown
+      finally:
+        reader.closeAsyncInputReader()
+        restoreStdin(p)
+
+  test "readKeyAsync joins a sequence split byte by byte":
+    # Retried: a late writer thread must not fail the run.
+    proc assembles(input: string, want: proc(e: Event): bool): bool =
+      for _ in 0 ..< 5:
+        let p = redirectStdinFromPipe()
+        if p.saved == -1:
+          return true
+        let reader = newAsyncInputReader()
+        var writer: Thread[tuple[wfd: cint, data: string]]
+        try:
+          feedPipe(p, input[0 .. 0])
+          createThread(writer, dribbleWriter, (p.wfd, input[1 ..^ 1] & "x"))
+          let first = waitFor reader.readKeyAsync()
+          joinThread(writer)
+          let next = waitFor reader.readKeyAsync()
+          if want(first) and next.kind == EventKind.Key and next.key.char == "x":
+            return true
+        finally:
+          reader.closeAsyncInputReader()
+          restoreStdin(p)
+      false
+
+    proc isArrow(e: Event): bool =
+      e.kind == EventKind.Key and e.key.code == ArrowUp
+
+    proc isMousePress(e: Event): bool =
+      e.kind == EventKind.Mouse and e.mouse.x == 10 and e.mouse.y == 5
+
+    proc isChar(e: Event): bool =
+      e.kind == EventKind.Key and e.key.char == "\xE3\x81\x82"
+
+    proc isCtrlI(e: Event): bool =
+      e.kind == EventKind.Key and e.key.code == Tab
+
+    check assembles("\x1b[A", isArrow)
+    check assembles("\x1b[<0;11;6M", isMousePress)
+    check assembles("\x1b[M +&", isMousePress)
+    check assembles("\xE3\x81\x82", isChar)
+    check assembles("\x1b[105;5u", isCtrlI)
+
+  test "readKeyAsync leaves the event loop running while it waits for a byte":
+    var ticks = 0
+
+    proc ticker(done: ptr bool) {.async.} =
+      while not done[]:
+        ticks.inc
+        await sleepMs(1)
+
+    proc readCutOff(reader: AsyncInputReader): Future[Event] {.async.} =
+      var done = false
+      let task = ticker(addr done)
+      result = await reader.readKeyAsync()
+      done = true
+      await task
+
+    let p = redirectStdinFromPipe()
+    if p.saved != -1:
+      let reader = newAsyncInputReader()
+      try:
+        feedPipe(p, "\x1b[")
+        check (waitFor reader.readCutOff()).kind == EventKind.Unknown
+        check ticks >= 5
       finally:
         reader.closeAsyncInputReader()
         restoreStdin(p)

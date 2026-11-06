@@ -3,7 +3,7 @@
 ## This module provides asynchronous event handling for keyboard input,
 ## mouse events, and other terminal events using either Chronos or std/asyncdispatch.
 
-import std/[options, strutils]
+import std/[monotimes, options, strutils, times]
 
 import async_backend, async_io
 import
@@ -11,6 +11,8 @@ import
     events, mouse_logic, utf8_utils, key_logic, escape_sequence_logic, terminal,
     geometry,
   ]
+
+const ByteWaitSliceMs = 2
 
 type
   AsyncEventError* = object of CatchableError
@@ -37,6 +39,17 @@ proc toEvent(data: mouse_logic.MouseEventData): Event =
     ),
   )
 
+proc readNextByteAsync(reader: AsyncInputReader): Future[Option[char]] {.async.} =
+  ## Read the next byte of a sequence or character, waiting for one split off by
+  ## the link (slow SSH/tmux). Sleeps in slices, so the wait does not hold the
+  ## event loop and a signal cannot end it early.
+  let deadline = getMonoTime() + initDuration(milliseconds = SequenceByteWaitMs)
+  while true:
+    result = reader.readCharNonBlocking()
+    if result.isSome or reader.isClosed or getMonoTime() >= deadline:
+      return
+    await sleepMs(ByteWaitSliceMs)
+
 proc parseMouseEventX10(reader: AsyncInputReader): Future[Event] {.async.} =
   ## Parse X10 mouse format: ESC[Mbxy
   ## where b is button byte, x,y are coordinate bytes
@@ -46,7 +59,7 @@ proc parseMouseEventX10(reader: AsyncInputReader): Future[Event] {.async.} =
 
   # Read 3 bytes for X10 format (async I/O)
   for i in 0 .. 2:
-    let next = await reader.readCharAsync()
+    let next = await reader.readNextByteAsync()
     if next.isNone:
       return Event(kind: Unknown)
     data[i] = next.get
@@ -65,7 +78,7 @@ proc parseMouseEventSGR(reader: AsyncInputReader): Future[Event] {.async.} =
 
   # Read until we get M or m, with safety limits (async I/O)
   while readCount < MaxSGRMouseReadBytes:
-    let next = await reader.readCharAsync()
+    let next = await reader.readNextByteAsync()
     if next.isNone:
       return Event(kind: Unknown)
     ch = next.get
@@ -116,7 +129,7 @@ proc readUtf8CharAsync(
   var continuationBytes: seq[byte] = @[]
   let (secondLo, secondHi) = utf8SecondByteRange(firstByte)
   for i in 1 ..< byteLen:
-    let nextByte = await reader.readCharAsync()
+    let nextByte = await reader.readNextByteAsync()
 
     if nextByte.isNone:
       # Truncated: nothing to push back.
@@ -145,8 +158,15 @@ proc readUtf8CharAsync(
 proc readByteTupleAsync(
     reader: AsyncInputReader
 ): Future[tuple[success: bool, ch: char]] {.async.} =
-  ## Async adapter that exposes readCharAsync() with the same shape the
+  ## Async adapter that exposes readNextByteAsync() with the same shape the
   ## unified routing template expects.
+  let next = await reader.readNextByteAsync()
+  return (success: next.isSome, ch: next.get('\0'))
+
+proc readDrainByteAsync(
+    reader: AsyncInputReader
+): Future[tuple[success: bool, ch: char]] {.async.} =
+  ## The template's `drainByte`: only a byte that is already there.
   let next = await reader.readCharAsync()
   return (success: next.isSome, ch: next.get('\0'))
 
@@ -160,7 +180,7 @@ proc readPasteContentAsync(reader: AsyncInputReader): Future[string] {.async.} =
 
   while true:
     # Check for data with reasonable timeout
-    let hasData = await reader.hasInputAsync(1000) # 1 second timeout
+    let hasData = await reader.hasInputAsync(PasteByteWaitMs)
     if not hasData:
       resultStr.add(pending)
       return resultStr
@@ -221,7 +241,7 @@ proc readKeyAsync*(reader: AsyncInputReader): Future[Event] {.async.} =
         await reader.parseMouseEventX10(),
         await reader.parseMouseEventSGR(),
         reader.unreadInput,
-        await reader.readByteTupleAsync(),
+        await reader.readDrainByteAsync(),
       )
 
     # Handle regular UTF-8 characters

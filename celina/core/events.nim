@@ -237,14 +237,38 @@ proc readRawByte(
     inputClosed.store(true)
     (false, '\0', false, false)
 
+proc waitForStdin(timeoutUs: int): bool =
+  ## Wait up to `timeoutUs` for stdin to become readable. A signal does not end
+  ## the wait, so a resize cannot split a sequence.
+  let deadline = getMonoTime() + initDuration(microseconds = timeoutUs)
+  while true:
+    var readSet: TFdSet
+    FD_ZERO(readSet)
+    FD_SET(STDIN_FILENO, readSet)
+    let left = max((deadline - getMonoTime()).inMicroseconds, 0)
+    # select(2) rejects tv_usec >= 1_000_000 with EINVAL, so carry whole seconds.
+    var timeout =
+      Timeval(tv_sec: Time(left div 1_000_000), tv_usec: Suseconds(left mod 1_000_000))
+    let r = select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout)
+    if r > 0:
+      return true
+    if r == 0 or errno != EINTR:
+      return false
+
 # Blocking I/O helper functions
-proc readNextByteBlocking(): tuple[success: bool, ch: char] =
+proc readNextByteBlocking(
+    waitUs: int = SequenceByteWaitMs * 1000
+): tuple[success: bool, ch: char] =
   ## Read the next byte of a sequence, retrying after a signal so a resize
-  ## cannot split it. `pendingByte` is not consulted: it belongs to event start
-  ## bytes.
+  ## cannot split it. On raw mode's non-blocking stdin it waits like
+  ## `readByteWithTimeoutNonBlocking`, so a byte split off by the link is still
+  ## read. `pendingByte` is not consulted: it belongs to event start bytes.
   while true:
     let r = readRawByte(STDIN_FILENO)
-    if not r.interrupted:
+    if r.wouldBlock:
+      if not waitForStdin(waitUs):
+        return (false, '\0')
+    elif not r.interrupted:
       return (r.success, r.ch)
 
 proc readDrainByteBlocking(): tuple[success: bool, ch: char] =
@@ -339,7 +363,7 @@ proc readPasteContentBlocking(): string =
   var state = PesNone
   var pending = ""
   while true:
-    let r = readNextByteBlocking()
+    let r = readNextByteBlocking(PasteByteWaitMs * 1000)
     if not r.success:
       # On read failure, flush any buffered partial-match bytes and return.
       result.add(pending)
@@ -379,11 +403,10 @@ template parseEscapeSequenceUnified*(
   ## start of a sequence) must be performed by the caller before invocation.
   ##
   ## A CSI sequence is read to its final byte, so one that no key maps to gives
-  ## `Unknown` rather than turning its tail into keys. `readKeyInput` waits for
-  ## each byte, and `readKey` waits on a blocking stdin. `readKey` on raw mode's
-  ## non-blocking stdin and the async reader only see bytes that have already
-  ## arrived, so there a sequence split across reads is cut off and its tail
-  ## becomes keys. Reading to the final byte covers a cursor position report
+  ## `Unknown` rather than turning its tail into keys. After `first`, every
+  ## reader waits for each `readByte`: up to `SequenceByteWaitMs`, or without
+  ## limit on a blocking stdin.
+  ## Reading to the final byte covers a cursor position report
   ## (`CSI row ; col R`) that came after `queryCursorPosition` stopped waiting.
   ## A byte that cannot be in a sequence ends it and goes back.
   block:
@@ -510,21 +533,6 @@ proc readUtf8Char(firstByte: byte): Utf8AssemblyResult =
         (false, 0.byte),
   )
 
-proc readUtf8CharNonBlocking(firstByte: byte): Utf8AssemblyResult =
-  ## Read a complete UTF-8 character in non-blocking mode. Thin stdin-backed
-  ## adapter over `assembleUtf8Char`. EAGAIN/EWOULDBLOCK, other read errors,
-  ## and short reads all collapse to "truncated sequence" and yield U+FFFD
-  ## with no leftover. An end of input latches the close like any other read.
-  assembleUtf8Char(
-    firstByte,
-    proc(): tuple[ok: bool, b: byte] =
-      let r = readRawByte(STDIN_FILENO)
-      if r.success:
-        (true, r.ch.byte)
-      else:
-        (false, 0.byte),
-  )
-
 # Advanced key reading with escape sequence support
 proc readKey*(): Event =
   ## Read a key event (blocking mode).
@@ -629,31 +637,34 @@ proc readByteNonBlocking(fd: cint): tuple[success: bool, ch: char, isTimeout: bo
   (r.success, r.ch, r.wouldBlock)
 
 proc readByteWithTimeoutNonBlocking(
-    timeoutUs: int = 50000
+    timeoutUs: int = SequenceByteWaitMs * 1000
 ): tuple[success: bool, ch: char, isTimeout: bool] =
   ## Wait up to `timeoutUs` for stdin to become readable, then read one byte.
-  ## All non-blocking sub-parsers (escape, mouse, paste) read continuation bytes
-  ## through this, so a byte split across packets (slow SSH/tmux) is still picked
+  ## All non-blocking sub-parsers (escape, mouse, paste, UTF-8) read continuation
+  ## bytes through this, so a byte split across packets (slow SSH/tmux) is still picked
   ## up rather than misread as a timeout. A buffered `pendingByte` or queued
   ## typeahead skips the wait.
   if pendingByte.isSome or queuedInput.len > 0:
     return readByteNonBlocking(STDIN_FILENO)
 
-  let deadline = getMonoTime() + initDuration(microseconds = timeoutUs)
-  while true:
-    var readSet: TFdSet
-    FD_ZERO(readSet)
-    FD_SET(STDIN_FILENO, readSet)
-    let left = max((deadline - getMonoTime()).inMicroseconds, 0)
-    # select(2) rejects tv_usec >= 1_000_000 with EINVAL, so carry whole seconds.
-    var timeout =
-      Timeval(tv_sec: Time(left div 1_000_000), tv_usec: Suseconds(left mod 1_000_000))
-    let r = select(STDIN_FILENO + 1, addr readSet, nil, nil, addr timeout)
-    if r > 0:
-      return readByteNonBlocking(STDIN_FILENO)
-    # A resize must not split a sequence.
-    if r == 0 or errno != EINTR:
-      return (false, '\0', true)
+  if waitForStdin(timeoutUs):
+    return readByteNonBlocking(STDIN_FILENO)
+  (false, '\0', true)
+
+proc readUtf8CharNonBlocking(firstByte: byte): Utf8AssemblyResult =
+  ## Read a complete UTF-8 character in non-blocking mode. Thin stdin-backed
+  ## adapter over `assembleUtf8Char`. A timeout, other read errors, and short
+  ## reads all collapse to "truncated sequence" and yield U+FFFD with no
+  ## leftover. An end of input latches the close like any other read.
+  assembleUtf8Char(
+    firstByte,
+    proc(): tuple[ok: bool, b: byte] =
+      let r = readByteWithTimeoutNonBlocking()
+      if r.success:
+        (true, r.ch.byte)
+      else:
+        (false, 0.byte),
+  )
 
 # Non-blocking mouse event parsing
 
@@ -731,7 +742,7 @@ proc readPasteContentNonBlocking(): string =
   var pending = ""
 
   while true:
-    let r = readByteWithTimeoutNonBlocking(1_000_000) # 1s per byte
+    let r = readByteWithTimeoutNonBlocking(PasteByteWaitMs * 1000)
     if not r.success:
       result.add(pending) # timeout/error: flush what we have
       return
@@ -750,14 +761,8 @@ proc readKeyInput*(): Option[Event] =
   let pinned = stdinNonBlockingPinned
   var flags: FdFlags
   var needRestore = false
-  # Ensure stdin is O_NONBLOCK before any raw fd read below. This path issues
-  # unguarded reads that assume non-blocking mode: the first readByteNonBlocking,
-  # and — for a multibyte lead byte — readUtf8CharNonBlocking's continuation
-  # read(2) (only the ESC/mouse/paste sub-parsers go through the select()-gated
-  # readByteWithTimeoutNonBlocking). A stashed pendingByte can itself be a UTF-8
-  # lead byte (e.g. the 0xC3 leftover of a 0xC3 0xC3 pair), so the toggle is
-  # still required when one is pending; skipping it would let that continuation
-  # read block indefinitely on a blocking fd.
+  # Ensure stdin is O_NONBLOCK before the first readByteNonBlocking, which is not
+  # guarded by select() like readByteWithTimeoutNonBlocking.
   if not pinned:
     let fdFlags = getFdFlags(STDIN_FILENO)
     if fdFlags.isNone:
