@@ -8,7 +8,8 @@ import std/[strutils, unicode]
 
 import key_logic
 export key_logic.KeyEvent, key_logic.KeyCode
-export key_logic.mapVT100FunctionKey, key_logic.mapFunctionKey
+export key_logic.mapVT100FunctionKey, key_logic.mapLinuxFunctionKey
+export key_logic.mapFunctionKey
 export key_logic.mapNumericKeyCode, key_logic.parseModifierCode
 export key_logic.applyModifiers, key_logic.mapArrowKey, key_logic.mapNavigationKey
 
@@ -80,6 +81,7 @@ type BracketSequenceKind* = enum
   BskMouseSGR # ESC[<
   BskFocusIn # ESC[I
   BskFocusOut # ESC[O
+  BskLinuxFunctionKey # ESC [ [ A..E, F1-F5 on the Linux console
   BskGeneric # anything else, read to its final byte with `CsiScan`
 
 proc classifyBracketSequence*(final: char): BracketSequenceKind =
@@ -93,6 +95,8 @@ proc classifyBracketSequence*(final: char): BracketSequenceKind =
     return BskMouseX10
   of '<':
     return BskMouseSGR
+  of '[':
+    return BskLinuxFunctionKey
   else:
     discard
 

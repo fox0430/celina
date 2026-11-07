@@ -328,6 +328,13 @@ suite "Function Key Mapping":
     check mapVT100FunctionKey('R').code == F3
     check mapVT100FunctionKey('S').code == F4
 
+  test "Linux console function keys F1-F5 (ESC [ [ X format)":
+    for (ch, code) in [('A', F1), ('B', F2), ('C', F3), ('D', F4), ('E', F5)]:
+      let key = mapLinuxFunctionKey(ch)
+      check key.code == code
+      check key.char == ""
+    check mapLinuxFunctionKey('F').code == Escape
+
   test "Invalid VT100 function key characters":
     # Non-function key characters should return Escape
     let resultA = mapVT100FunctionKey('A')

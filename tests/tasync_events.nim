@@ -438,6 +438,37 @@ suite "NUL bytes (Async)":
     check events[0].key.code == ArrowUp
     check events[1].kind == EventKind.Unknown
 
+  test "Linux console F1 and F5 leave no letter behind":
+    let events = readEvents("\x1b[[A\x1b[[Ex", 3)
+    check events[0].key.code == F1
+    check events[1].key.code == F5
+    check events[2].key.char == "x"
+
+  test "A byte after ESC [ [ that is no function key goes back":
+    let events = readEvents("\x1b[[q", 2)
+    check events[0].kind == EventKind.Unknown
+    check events[1].key.char == "q"
+
+  test "A non-ASCII byte after ESC [ [ goes back":
+    let events = readEvents("\x1b[[\xC3\xA9", 2)
+    check events[0].kind == EventKind.Unknown
+    check events[1].key.char == "\xC3\xA9"
+
+  test "An ESC after ESC [ [ starts the next sequence":
+    let events = readEvents("\x1b[[\x1b[A", 2)
+    check events[0].kind == EventKind.Unknown
+    check events[1].key.code == ArrowUp
+
+  test "A NUL after ESC [ [ goes back":
+    let events = readEvents("\x1b[[\x00", 2)
+    check events[0].kind == EventKind.Unknown
+    check events[1].key.code == Space
+    check events[1].key.modifiers == {Ctrl}
+
+  test "A cut-off ESC [ [ is Unknown":
+    let events = readEvents("\x1b[[", 1)
+    check events[0].kind == EventKind.Unknown
+
   test "ESC O alone is Alt+Shift+O":
     let events = readEvents("\x1bO", 1)
     check events[0].key.char == "O"
