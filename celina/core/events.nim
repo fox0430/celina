@@ -410,7 +410,8 @@ template parseEscapeSequenceUnified*(
   ## (`CSI row ; col R`) that came after `queryCursorPosition` stopped waiting.
   ## A byte that cannot be in a sequence ends it and goes back.
   ##
-  ## `ESC O` with no final byte after it is Alt+Shift+O.
+  ## `ESC [` with no sequence byte after it is Alt+[, and `ESC O` with no final
+  ## byte after it is Alt+Shift+O.
   block:
     let first = readByte
     if not first.success:
@@ -420,7 +421,7 @@ template parseEscapeSequenceUnified*(
       of '[':
         let bracket = readByte
         if not bracket.success:
-          Event(kind: Unknown)
+          Event(kind: Key, key: mapAltKey('['))
         else:
           case classifyBracketSequence(bracket.ch)
           of BskArrowKey, BskNavigationKey:
@@ -458,16 +459,19 @@ template parseEscapeSequenceUnified*(
                 scan.state = cssTruncated
             if scan.state == cssStray:
               unread($scan.stray)
-            let action = scan.action()
-            case action.kind
-            of cakKey:
-              Event(kind: Key, key: action.key)
-            of cakPaste:
-              Event(kind: Paste, pastedText: readPaste)
-            of cakQuit:
-              Event(kind: Quit)
-            of cakIgnore:
-              Event(kind: Unknown)
+            if scan.state == cssStray and scan.length == 1:
+              Event(kind: Key, key: mapAltKey('['))
+            else:
+              let action = scan.action()
+              case action.kind
+              of cakKey:
+                Event(kind: Key, key: action.key)
+              of cakPaste:
+                Event(kind: Paste, pastedText: readPaste)
+              of cakQuit:
+                Event(kind: Quit)
+              of cakIgnore:
+                Event(kind: Unknown)
       of 'O':
         let vt = readByte
         if vt.success and vt.ch in Ss3FinalBytes:
