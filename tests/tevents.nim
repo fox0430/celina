@@ -2097,6 +2097,72 @@ suite "Events Module Tests":
       check events[2].kind == EventKind.Unknown
       check events[3].key.char == "x"
 
+    test "Linux console F1-F5 leave no letter behind":
+      let events = readEvents("\e[[A\e[[B\e[[C\e[[D\e[[Ex", 6)
+      check events[0].key.code == F1
+      check events[1].key.code == F2
+      check events[2].key.code == F3
+      check events[3].key.code == F4
+      check events[4].key.code == F5
+      check events[5].key.char == "x"
+
+    test "A byte after ESC [ [ that is no function key goes back":
+      for tail in ["q", "1", "["]:
+        let events = readEvents("\e[[" & tail, 2)
+        check events[0].kind == EventKind.Unknown
+        check events[1].key.char == tail
+
+    test "A non-ASCII byte after ESC [ [ goes back":
+      let events = readEvents("\e[[\xC3\xA9", 2)
+      check events[0].kind == EventKind.Unknown
+      check events[1].key.char == "\xC3\xA9"
+
+    test "An ESC after ESC [ [ starts the next sequence":
+      let events = readEvents("\e[[\e[A", 2)
+      check events[0].kind == EventKind.Unknown
+      check events[1].key.code == ArrowUp
+
+    test "A NUL after ESC [ [ goes back":
+      let events = readEvents("\e[[\x00", 2)
+      check events[0].kind == EventKind.Unknown
+      check events[1].key.code == Space
+      check events[1].key.modifiers == {Ctrl}
+
+    test "A cut-off ESC [ [ is Unknown":
+      check readEvents("\e[[", 1)[0].kind == EventKind.Unknown
+
+    test "Blocking reader decodes Linux console function keys":
+      let events = readEventsBlocking("\e[[A\e[[Ex", 3)
+      check events[0].key.code == F1
+      check events[1].key.code == F5
+      check events[2].key.char == "x"
+
+    test "Blocking reader puts back a byte after ESC [ [":
+      let events = readEventsBlocking("\e[[q", 2)
+      check events[0].kind == EventKind.Unknown
+      check events[1].key.char == "q"
+
+    test "Blocking reader puts back a non-ASCII byte after ESC [ [":
+      let events = readEventsBlocking("\e[[\xC3\xA9", 2)
+      check events[0].kind == EventKind.Unknown
+      check events[1].key.char == "\xC3\xA9"
+
+    test "Blocking reader puts back an ESC after ESC [ [":
+      let events = readEventsBlocking("\e[[\e[A", 2)
+      check events[0].kind == EventKind.Unknown
+      check events[1].key.code == ArrowUp
+
+    test "Blocking reader puts back a NUL after ESC [ [":
+      let events = readEventsBlocking("\e[[\x00", 2)
+      check events[0].kind == EventKind.Unknown
+      check events[1].key.code == Space
+      check events[1].key.modifiers == {Ctrl}
+
+    test "Blocking reader reads a cut-off ESC [ [ as Unknown":
+      let events = readEventsBlocking("\e[[", 2)
+      check events[0].kind == EventKind.Unknown
+      check events[1].kind == EventKind.InputClosed
+
     test "Blocking reader reads a cut-off ESC O as Alt+O":
       # The blocking byte reader fails only at end of input, so the cut-off
       # path needs an ended stdin rather than a timeout.

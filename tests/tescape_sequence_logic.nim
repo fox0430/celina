@@ -37,6 +37,9 @@ suite "Escape Sequence Logic Tests":
         check ss3Action(final).kind == cakIgnore
 
   suite "Bracket Sequence Classification":
+    test "a second [ is the Linux console's function key form":
+      check classifyBracketSequence('[') == BskLinuxFunctionKey
+
     test "classifyBracketSequence with arrow key A (up)":
       let kind = classifyBracketSequence('A')
       check kind == BskArrowKey

@@ -274,6 +274,22 @@ proc mapFunctionKey*(sequence: string): KeyEvent =
   else:
     KeyEvent(code: Escape, char: "\x1b")
 
+proc mapLinuxFunctionKey*(ch: char): KeyEvent =
+  ## Map the Linux console's function keys ESC [ [ A..E to F1-F5
+  case ch
+  of 'A':
+    KeyEvent(code: F1, char: "")
+  of 'B':
+    KeyEvent(code: F2, char: "")
+  of 'C':
+    KeyEvent(code: F3, char: "")
+  of 'D':
+    KeyEvent(code: F4, char: "")
+  of 'E':
+    KeyEvent(code: F5, char: "")
+  else:
+    KeyEvent(code: Escape, char: "\x1b")
+
 proc mapVT100FunctionKey*(ch: char): KeyEvent =
   ## Map VT100-style function keys ESC O P/Q/R/S
   ##

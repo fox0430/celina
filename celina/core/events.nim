@@ -434,6 +434,19 @@ template parseEscapeSequenceUnified*(
             Event(kind: FocusIn)
           of BskFocusOut:
             Event(kind: FocusOut)
+          of BskLinuxFunctionKey:
+            let final = readByte
+            let key =
+              if final.success:
+                mapLinuxFunctionKey(final.ch)
+              else:
+                escapeKey()
+            if key.code != Escape:
+              Event(kind: Key, key: key)
+            else:
+              if final.success:
+                unread($final.ch)
+              Event(kind: Unknown)
           of BskGeneric:
             var scan = CsiScan()
             scan.feed(bracket.ch)
