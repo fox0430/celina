@@ -39,7 +39,7 @@ type
   CsiScan* = object ## A CSI sequence read up to its final byte
     state*: CsiScanState
     params: string
-    length: int
+    length*: int ## bytes fed, the stray one included
     intermediates: bool
     overflow: bool
     final: char
@@ -272,7 +272,8 @@ proc ss3Action*(final: char): CsiAction =
 
 proc action*(scan: CsiScan): CsiAction =
   ## The meaning of a finished scan. A sequence that was cut off, or that no key
-  ## maps to, is ignored: its bytes are not input.
+  ## maps to, is ignored: its bytes are not input. `ESC [` with no sequence byte
+  ## after it is not a sequence: the readers give Alt+[.
   const KeyParams = {'0' .. '9', ':', ';'}
   if scan.state != cssDone or scan.intermediates or scan.overflow or
       not scan.params.allCharsInSet(KeyParams):

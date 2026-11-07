@@ -103,14 +103,17 @@ suite "Async Key Reading":
         reader.closeAsyncInputReader()
         restoreStdin(p)
 
-  test "readKeyAsync reads Ctrl+C as CSI u as Quit, and a cut-off [ as Unknown":
+  test "readKeyAsync reads Ctrl+C as CSI u as Quit, and a lone ESC [ as Alt+[":
     let p = redirectStdinFromPipe()
     if p.saved != -1:
       let reader = newAsyncInputReader()
       try:
         feedPipe(p, "\x1b[99;5u\x1b[")
         check (waitFor reader.readKeyAsync()).kind == EventKind.Quit
-        check (waitFor reader.readKeyAsync()).kind == EventKind.Unknown
+        let key = (waitFor reader.readKeyAsync()).key
+        check key.code == Char
+        check key.char == "["
+        check key.modifiers == {Alt}
       finally:
         reader.closeAsyncInputReader()
         restoreStdin(p)
@@ -175,7 +178,7 @@ suite "Async Key Reading":
       let reader = newAsyncInputReader()
       try:
         feedPipe(p, "\x1b[")
-        check (waitFor reader.readCutOff()).kind == EventKind.Unknown
+        check (waitFor reader.readCutOff()).key.char == "["
         check ticks >= 3
       finally:
         reader.closeAsyncInputReader()
@@ -465,6 +468,17 @@ suite "NUL bytes (Async)":
     check events[1].key.code == Space
     check events[1].key.modifiers == {Ctrl}
 
+  test "A byte that cannot be in a sequence goes back after ESC [":
+    let events = readEvents("\x1b[\r", 2)
+    check events[0].key.char == "["
+    check events[0].key.modifiers == {Alt}
+    check events[1].key.code == Enter
+
+  test "A held Alt+[ gives a key each time":
+    for event in readEvents("\x1b[\x1b[\x1b[", 3):
+      check event.key.char == "["
+      check event.key.modifiers == {Alt}
+
   test "A cut-off ESC [ [ is Unknown":
     let events = readEvents("\x1b[[", 1)
     check events[0].kind == EventKind.Unknown
@@ -481,7 +495,7 @@ suite "NUL bytes (Async)":
     check events[1].key.modifiers == {Ctrl}
 
   test "0x00 ends a CSI sequence and stays a key":
-    let events = readEvents("\x1b[\x00", 2)
+    let events = readEvents("\x1b[1\x00", 2)
     check events[0].kind == EventKind.Unknown
     check events[1].key.code == Space
     check events[1].key.modifiers == {Ctrl}

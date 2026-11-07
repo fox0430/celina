@@ -1920,14 +1920,17 @@ suite "Events Module Tests":
         finally:
           restoreStdin(p)
 
-    test "readKey gives a cut-off sequence up on a non-blocking stdin":
+    test "readKey reads a lone ESC [ as Alt+[ on a non-blocking stdin":
       let p = redirectStdinFromPipe()
       if p.saved != -1:
         try:
           discard fcntl(p.rfd, F_SETFL, fcntl(p.rfd, F_GETFL) or O_NONBLOCK)
           clearPendingByte()
           feedPipe(p, "\x1b[")
-          check readKey().kind == EventKind.Unknown
+          let key = readKey().key
+          check key.code == Char
+          check key.char == "["
+          check key.modifiers == {Alt}
           feedPipe(p, "\x1b")
           check readKey().key.code == Escape
         finally:
@@ -2161,6 +2164,30 @@ suite "Events Module Tests":
     test "Blocking reader reads a cut-off ESC [ [ as Unknown":
       let events = readEventsBlocking("\e[[", 2)
       check events[0].kind == EventKind.Unknown
+      check events[1].kind == EventKind.InputClosed
+
+    test "A byte that cannot be in a sequence goes back after ESC [":
+      let events = readEvents("\e[\r", 2)
+      check events[0].key.char == "["
+      check events[0].key.modifiers == {Alt}
+      check events[1].key.code == Enter
+
+    test "A held Alt+[ gives a key each time":
+      for event in readEvents("\e[\e[\e[", 3):
+        check event.key.char == "["
+        check event.key.modifiers == {Alt}
+
+    test "Blocking reader puts back a byte after ESC [":
+      let events = readEventsBlocking("\e[\r", 2)
+      check events[0].key.char == "["
+      check events[0].key.modifiers == {Alt}
+      check events[1].key.code == Enter
+
+    test "Blocking reader reads a cut-off ESC [ as Alt+[":
+      let events = readEventsBlocking("\e[", 2)
+      check events[0].key.code == Char
+      check events[0].key.char == "["
+      check events[0].key.modifiers == {Alt}
       check events[1].kind == EventKind.InputClosed
 
     test "Blocking reader reads a cut-off ESC O as Alt+O":
@@ -2988,7 +3015,7 @@ suite "Events Module Tests":
           queuedInput = ""
           restoreStdin(p)
 
-    test "a CSI sequence cut off right after [ is not Escape":
+    test "a lone ESC [ is Alt+[":
       let originalPin = isStdinNonBlockingPinned()
       let p = redirectStdinFromPipe()
       if p.saved != -1:
@@ -2996,7 +3023,10 @@ suite "Events Module Tests":
           setStdinNonBlockingPinned(false)
           clearPendingByte()
           feedPipe(p, "\x1b[")
-          check readKeyInput().get.kind == EventKind.Unknown
+          let key = readKeyInput().get.key
+          check key.code == Char
+          check key.char == "["
+          check key.modifiers == {Alt}
           check readKeyInput().isNone
         finally:
           queuedInput = ""
