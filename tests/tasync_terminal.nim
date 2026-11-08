@@ -1506,6 +1506,53 @@ suite "AsyncTerminal emergencyRestore":
     check terminal.mouseEnabled
     terminal.cleanup()
 
+  test "emergencyRestore leaves the alternate screen after a full reset":
+    let terminal = createTestTerminal()
+    terminal.alternateScreen = true
+    let output = captureStdout(
+      proc() =
+        terminal.emergencyRestore()
+    )
+    check output == EmergencyResetSeq & AbortPartialSeq & EmergencyAltScreenTail
+    check not terminal.alternateScreen
+
+  test "emergencyRestore aborts before the alt-screen tail when the reset is cut":
+    when defined(linux):
+      let terminal = createTestTerminal()
+      terminal.alternateScreen = true
+      let output = captureCutStdout(
+        5,
+        proc() =
+          terminal.emergencyRestore(),
+      )
+      check output ==
+        EmergencyResetSeq[0 ..< 5] & AbortPartialSeq & EmergencyAltScreenTail
+      check not terminal.alternateScreen
+    else:
+      skip()
+
+  test "emergencyRestore aborts before the alt-screen tail when the cursor reset is cut":
+    when defined(linux):
+      let terminal = knownScreenTerminal(4, 2)
+      discard captureStdout(
+        proc() =
+          discard waitFor terminal.drawWithCursorAsync(
+            newBuffer(4, 2), 0, 0, true, SteadyBar, terminal.shownCursorStyle
+          )
+      )
+      terminal.alternateScreen = true
+      let output = captureCutStdout(
+        EmergencyResetSeq.len + 2,
+        proc() =
+          terminal.emergencyRestore(),
+      )
+      check output ==
+        EmergencyResetSeq & CursorStyleDefault[0 ..< 2] & AbortPartialSeq &
+        EmergencyAltScreenTail
+      check not terminal.alternateScreen
+    else:
+      skip()
+
 suite "AsyncTerminal cursor style reset":
   proc drawBar(terminal: AsyncTerminal) =
     discard waitFor terminal.drawWithCursorAsync(
@@ -1676,7 +1723,9 @@ suite "AsyncTerminal cleanupAsync":
       check restoredBeforeUnlock
       check fut.cancelled
       terminal.checkAllModesOff()
-      check output.endsWith(EmergencyResetAltScreenSeq)
+      check output.endsWith(
+        EmergencyResetSeq & AbortPartialSeq & EmergencyAltScreenTail
+      )
       check output.count(ShowCursorSeq) == 1
 
     test "a failed emergency reset leaves the mode flags set":

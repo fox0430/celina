@@ -748,6 +748,9 @@ proc disableRawModeQuietly(terminal: AsyncTerminal, reader: AsyncInputReader) =
   except CatchableError:
     discard
 
+const AbortedAltScreenTail = AbortPartialSeq & EmergencyAltScreenTail
+  ## The reset or cursor reset before the tail may have stopped partway.
+
 proc emergencyRestore*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) =
   ## Restore the terminal from a signal handler or crash hook, where a frame
   ## may have been cut off mid-write. See `Terminal.emergencyRestore`.
@@ -755,7 +758,7 @@ proc emergencyRestore*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) 
   ## alternate screen. A mode flag is cleared only once its disable went out
   ## in full, so a later cleanup retries a failed one. The screen is marked
   ## unknown, so a caller that keeps drawing after this redraws in full. Never
-  ## raises.
+  ## raises. The alternate-screen exit starts with its own abort.
   terminal.screen.invalidate()
   let fd = cint(STDOUT_FILENO)
   if writeAllBlocking(fd, EmergencyResetSeq) == EmergencyResetSeq.len:
@@ -766,7 +769,7 @@ proc emergencyRestore*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) 
       )
   terminal.disableRawModeQuietly(reader)
   if terminal.alternateScreen:
-    if writeAllBlocking(fd, EmergencyAltScreenTail) == EmergencyAltScreenTail.len:
+    if writeAllBlocking(fd, AbortedAltScreenTail) == AbortedAltScreenTail.len:
       terminal.alternateScreen = false
 
 when hasChronos:
