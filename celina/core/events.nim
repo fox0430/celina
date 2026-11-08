@@ -371,6 +371,11 @@ proc readPasteContentBlocking(): string =
     if stepPasteEnd(state, pending, r.ch, result):
       return
 
+proc withAlt(key: KeyEvent, alt: bool): KeyEvent {.inline.} =
+  result = key
+  if alt:
+    result.modifiers.incl(Alt)
+
 # Unified escape sequence parsing routing (shared with async via template).
 #
 # The template body lives here (rather than escape_sequence_logic.nim) because
@@ -392,8 +397,9 @@ proc readPasteContentBlocking(): string =
 #   unread        -> a sync proc taking a string, passed without arguments; puts
 #                    those bytes back in front of the input, so `readByte`
 #                    returns them next
-#   drainByte     -> same shape as `readByte`; skips the tail of an ill-formed
-#                    character and returns `success = false` instead of waiting
+#   drainByte     -> same shape as `readByte`, but returns `success = false`
+#                    instead of waiting; reads the tail of an ill-formed
+#                    character and the byte after `ESC ESC`
 
 template parseEscapeSequenceUnified*(
     readByte, readPaste, parseMouseX10, parseMouseSGR, unread, drainByte: untyped
@@ -411,79 +417,118 @@ template parseEscapeSequenceUnified*(
   ## A byte that cannot be in a sequence ends it and goes back.
   ##
   ## `ESC [` with no sequence byte after it is Alt+[, and `ESC O` with no final
-  ## byte after it is Alt+Shift+O.
+  ## byte after it is Alt+Shift+O. `ESC ESC [` / `ESC ESC O` are the rxvt/PuTTY
+  ## Alt+special encodings and decode as one Alt-modified key. The byte after
+  ## `ESC ESC` is read only if it is already there, so Alt+Escape does not wait.
+  ## A sequence cut off or ended by a stray byte gives Alt+Escape, and the bytes
+  ## after `ESC ESC` go back. A mouse, focus or paste report makes the first ESC
+  ## a lone Escape. A sequence no key maps to is `Unknown`, as after one ESC.
   block:
     let first = readByte
     if not first.success:
       Event(kind: Key, key: KeyEvent(code: KeyCode.Escape, char: "\x1b"))
     else:
-      case first.ch
+      var intro = first.ch
+      var alt = false
+      if first.ch == '\x1b':
+        let next = drainByte
+        if next.success:
+          if next.ch in {'[', 'O'}:
+            intro = next.ch
+            alt = true
+          else:
+            unread($next.ch)
+      case intro
       of '[':
         let bracket = readByte
         if not bracket.success:
-          Event(kind: Key, key: mapAltKey('['))
+          if alt:
+            unread("[")
+            Event(kind: Key, key: mapAltKey('\x1b'))
+          else:
+            Event(kind: Key, key: mapAltKey('['))
         else:
-          case classifyBracketSequence(bracket.ch)
-          of BskArrowKey, BskNavigationKey:
-            let p = processSimpleBracketSequence(bracket.ch, bracket.success)
-            Event(kind: Key, key: p.keyEvent)
-          of BskMouseX10:
-            parseMouseX10
-          of BskMouseSGR:
-            parseMouseSGR
-          of BskFocusIn:
-            Event(kind: FocusIn)
-          of BskFocusOut:
-            Event(kind: FocusOut)
-          of BskLinuxFunctionKey:
-            let final = readByte
-            let key =
-              if final.success:
-                mapLinuxFunctionKey(final.ch)
+          let bsk = classifyBracketSequence(bracket.ch)
+          if alt and bsk in {BskMouseX10, BskMouseSGR, BskFocusIn, BskFocusOut}:
+            unread("\x1b[" & bracket.ch)
+            Event(kind: Key, key: escapeKey())
+          else:
+            case bsk
+            of BskArrowKey, BskNavigationKey:
+              let p = processSimpleBracketSequence(bracket.ch, bracket.success)
+              Event(kind: Key, key: withAlt(p.keyEvent, alt))
+            of BskMouseX10:
+              parseMouseX10
+            of BskMouseSGR:
+              parseMouseSGR
+            of BskFocusIn:
+              Event(kind: FocusIn)
+            of BskFocusOut:
+              Event(kind: FocusOut)
+            of BskLinuxFunctionKey:
+              let final = readByte
+              let key =
+                if final.success:
+                  mapLinuxFunctionKey(final.ch)
+                else:
+                  escapeKey()
+              if key.code != Escape:
+                Event(kind: Key, key: withAlt(key, alt))
               else:
-                escapeKey()
-            if key.code != Escape:
-              Event(kind: Key, key: key)
-            else:
-              if final.success:
-                unread($final.ch)
-              Event(kind: Unknown)
-          of BskGeneric:
-            var scan = CsiScan()
-            scan.feed(bracket.ch)
-            while scan.state == cssReading:
-              let next = readByte
-              if next.success:
-                scan.feed(next.ch)
-              else:
-                scan.state = cssTruncated
-            if scan.state == cssStray:
-              unread($scan.stray)
-            if scan.state == cssStray and scan.length == 1:
-              Event(kind: Key, key: mapAltKey('['))
-            else:
-              let action = scan.action()
-              case action.kind
-              of cakKey:
-                Event(kind: Key, key: action.key)
-              of cakPaste:
-                Event(kind: Paste, pastedText: readPaste)
-              of cakQuit:
-                Event(kind: Quit)
-              of cakIgnore:
+                if final.success:
+                  unread($final.ch)
                 Event(kind: Unknown)
+            of BskGeneric:
+              var scan = CsiScan()
+              scan.feed(bracket.ch)
+              while scan.state == cssReading:
+                let next = readByte
+                if next.success:
+                  scan.feed(next.ch)
+                else:
+                  scan.state = cssTruncated
+              if scan.state == cssStray:
+                unread($scan.stray)
+              if scan.state == cssStray and scan.length == 1:
+                if alt:
+                  unread("[")
+                  Event(kind: Key, key: mapAltKey('\x1b'))
+                else:
+                  Event(kind: Key, key: mapAltKey('['))
+              else:
+                let action = scan.action()
+                case action.kind
+                of cakKey:
+                  Event(kind: Key, key: withAlt(action.key, alt))
+                of cakPaste:
+                  if alt:
+                    unread("\x1b[200~")
+                    Event(kind: Key, key: escapeKey())
+                  else:
+                    Event(kind: Paste, pastedText: readPaste)
+                of cakQuit:
+                  if alt:
+                    Event(kind: Key, key: mapAltKey('\x03'))
+                  else:
+                    Event(kind: Quit)
+                of cakIgnore:
+                  Event(kind: Unknown)
       of 'O':
         let vt = readByte
         if vt.success and vt.ch in Ss3FinalBytes:
           let action = ss3Action(vt.ch)
           if action.kind == cakKey:
-            Event(kind: Key, key: action.key)
+            Event(kind: Key, key: withAlt(action.key, alt))
           else:
             Event(kind: Unknown)
         else:
           if vt.success:
             unread($vt.ch)
-          Event(kind: Key, key: mapAltKey('O'))
+          if alt:
+            unread("O")
+            Event(kind: Key, key: mapAltKey('\x1b'))
+          else:
+            Event(kind: Key, key: mapAltKey('O'))
       else:
         # Alt+key: terminals encode Alt by prefixing the key's usual bytes
         # with ESC (e.g. ESC 'a' = Alt+a). ASCII bytes map directly; a

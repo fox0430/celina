@@ -409,20 +409,20 @@ suite "Mouse Event Parsing (Async)":
         finally:
           restoreStdin(p)
 
+proc readEvents(input: string, count: int): seq[Event] =
+  var events: seq[Event]
+  proc read() =
+    let reader = newAsyncInputReader()
+    try:
+      for _ in 1 .. count:
+        events.add(waitFor reader.readKeyAsync())
+    finally:
+      reader.closeAsyncInputReader()
+
+  withStdinInput(input, read)
+  events
+
 suite "NUL bytes (Async)":
-  proc readEvents(input: string, count: int): seq[Event] =
-    var events: seq[Event]
-    proc read() =
-      let reader = newAsyncInputReader()
-      try:
-        for _ in 1 .. count:
-          events.add(waitFor reader.readKeyAsync())
-      finally:
-        reader.closeAsyncInputReader()
-
-    withStdinInput(input, read)
-    events
-
   test "0x00 reads as Ctrl+Space":
     let events = readEvents("\x00a", 2)
     check events[0].kind == EventKind.Key
@@ -521,6 +521,47 @@ suite "NUL bytes (Async)":
 
   test "No byte is not a key":
     check readEvents("", 1)[0].kind == EventKind.Unknown
+
+suite "Alt+special (rxvt/PuTTY) (Async)":
+  test "Alt+arrows arrive as one Alt-modified key":
+    for (tail, code) in [
+      ("A", ArrowUp), ("B", ArrowDown), ("C", ArrowRight), ("D", ArrowLeft)
+    ]:
+      let key = readEvents("\x1b\x1b[" & tail, 1)[0].key
+      check key.code == code
+      check key.modifiers == {Alt}
+
+  test "Alt+SS3 and Alt+Linux keys arrive as one Alt-modified key":
+    let up = readEvents("\x1b\x1bOA", 1)[0].key
+    check up.code == ArrowUp
+    check up.modifiers == {Alt}
+    let f1 = readEvents("\x1b\x1bOP", 1)[0].key
+    check f1.code == F1
+    check f1.modifiers == {Alt}
+    let linuxF1 = readEvents("\x1b\x1b[[A", 1)[0].key
+    check linuxF1.code == F1
+    check linuxF1.modifiers == {Alt}
+
+  test "Alt+modified CSI keeps its modifiers and gains Alt":
+    let key = readEvents("\x1b\x1b[1;5A", 1)[0].key
+    check key.code == ArrowUp
+    check key.modifiers == {Ctrl, Alt}
+
+  test "A byte after ESC ESC that starts no sequence goes back":
+    let events = readEvents("\x1b\x1ba", 2)
+    check events[0].key.code == Escape
+    check events[0].key.modifiers == {Alt}
+    check events[1].key.char == "a"
+
+  test "A cut-off Alt+special keeps both keys":
+    let events = readEvents("\x1b\x1b[", 2)
+    check events[0].key == KeyEvent(code: Escape, char: "\x1b", modifiers: {Alt})
+    check events[1].key.char == "["
+
+  test "A report after ESC ESC keeps the Escape":
+    let events = readEvents("\x1b\x1b[I", 2)
+    check events[0].key == KeyEvent(code: Escape, char: "\x1b", modifiers: {})
+    check events[1].kind == FocusIn
 
 suite "Async Event Stream":
   test "AsyncEventStream creation":

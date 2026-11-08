@@ -75,6 +75,13 @@ proc delayedPipeClose(wfd: cint) {.thread.} =
   discard usleep(Useconds(50_000)) # 50ms
   discard close(wfd)
 
+# Thread body: close a pipe's write end once `cancel` is readable, or after 1s,
+# so a read that should not wait shows up as slow instead of hanging.
+proc closeUnlessCancelled(args: tuple[wfd, cancel: cint]) {.thread.} =
+  var fds = [TPollfd(fd: args.cancel, events: POLLIN)]
+  discard poll(addr fds[0], Tnfds(1), 1000)
+  discard close(args.wfd)
+
 # Thread body: send ESC, interrupt the reader with a signal while it waits for
 # the rest, then send `[A`.
 proc interruptedArrowWriter(args: tuple[wfd: cint, reader: Pthread]) {.thread.} =
@@ -2207,6 +2214,187 @@ suite "Events Module Tests":
       check events[2].key.char == "O"
       check events[2].key.modifiers == {Alt}
       check events[3].key.char == Utf8ReplacementChar
+
+  suite "Alt+special (rxvt/PuTTY)":
+    proc readEvents(input: string, count: int): seq[Event] =
+      var events: seq[Event]
+      proc read() =
+        for _ in 1 .. count:
+          let event = readKeyInput()
+          check event.isSome
+          if event.isSome:
+            events.add(event.get)
+
+      withStdinInput(input, read)
+      events
+
+    proc readEventsBlocking(input: string, count: int): seq[Event] =
+      var events: seq[Event]
+      proc read() =
+        for _ in 1 .. count:
+          events.add(readKey())
+
+      withEndedStdin(input, read)
+      events
+
+    test "Alt+arrows arrive as one Alt-modified key":
+      for (tail, code) in [
+        ("A", ArrowUp), ("B", ArrowDown), ("C", ArrowRight), ("D", ArrowLeft)
+      ]:
+        let key = readEvents("\x1b\x1b[" & tail, 1)[0].key
+        check key.code == code
+        check key.modifiers == {Alt}
+
+    test "Alt+Home and Alt+End arrive as one Alt-modified key":
+      check readEvents("\x1b\x1b[H", 1)[0].key ==
+        KeyEvent(code: Home, char: "", modifiers: {Alt})
+      check readEvents("\x1b\x1b[F", 1)[0].key ==
+        KeyEvent(code: End, char: "", modifiers: {Alt})
+
+    test "Alt+SS3 cursor keys and function keys arrive as one Alt-modified key":
+      let up = readEvents("\x1b\x1bOA", 1)[0].key
+      check up.code == ArrowUp
+      check up.modifiers == {Alt}
+      let f1 = readEvents("\x1b\x1bOP", 1)[0].key
+      check f1.code == F1
+      check f1.modifiers == {Alt}
+
+    test "Alt+Linux console function keys arrive as one Alt-modified key":
+      let f1 = readEvents("\x1b\x1b[[A", 1)[0].key
+      check f1.code == F1
+      check f1.modifiers == {Alt}
+
+    test "Alt+modified CSI keeps its modifiers and gains Alt":
+      let ctrlUp = readEvents("\x1b\x1b[1;5A", 1)[0].key
+      check ctrlUp.code == ArrowUp
+      check ctrlUp.modifiers == {Ctrl, Alt}
+
+    test "A byte after ESC ESC that starts no sequence goes back":
+      let events = readEvents("\x1b\x1ba", 2)
+      check events[0].key.code == Escape
+      check events[0].key.modifiers == {Alt}
+      check events[1].key.char == "a"
+      check events[1].key.modifiers == {}
+
+    test "An unmapped Alt sequence is Unknown and leaves no keys behind":
+      for input in ["\x1b\x1b[7$", "\x1b\x1bOk"]:
+        var events: seq[Option[Event]]
+        proc read() =
+          events.add(readKeyInput())
+          events.add(readKeyInput())
+
+        withStdinInput(input, read)
+        check events[0].isSome and events[0].get.kind == EventKind.Unknown
+        check events[1].isNone
+
+    test "A cut-off Alt+special keeps both keys":
+      let bracket = readEvents("\x1b\x1b[", 2)
+      check bracket[0].key == KeyEvent(code: Escape, char: "\x1b", modifiers: {Alt})
+      check bracket[1].key.char == "["
+      check bracket[1].key.modifiers == {}
+      let ss3 = readEvents("\x1b\x1bO", 2)
+      check ss3[0].key == KeyEvent(code: Escape, char: "\x1b", modifiers: {Alt})
+      check ss3[1].key.char == "O"
+      let ss3Digit = readEvents("\x1b\x1bO5", 3)
+      check ss3Digit[0].key.code == Escape
+      check ss3Digit[1].key.char == "O"
+      check ss3Digit[2].key.char == "5"
+      let stray = readEvents("\x1b\x1b[\x01", 3)
+      check stray[0].key == KeyEvent(code: Escape, char: "\x1b", modifiers: {Alt})
+      check stray[1].key.char == "["
+      check stray[2].key.modifiers == {Ctrl}
+
+    test "A report after ESC ESC keeps the Escape":
+      let plainEscape = KeyEvent(code: Escape, char: "\x1b", modifiers: {})
+      let focusIn = readEvents("\x1b\x1b[I", 2)
+      check focusIn[0].key == plainEscape
+      check focusIn[1].kind == FocusIn
+      let focusOut = readEvents("\x1b\x1b[O", 2)
+      check focusOut[0].key == plainEscape
+      check focusOut[1].kind == FocusOut
+      let sgr = readEvents("\x1b\x1b[<0;1;1M", 2)
+      check sgr[0].key == plainEscape
+      check sgr[1].kind == Mouse
+      check sgr[1].mouse.modifiers == {}
+      let x10 = readEvents("\x1b\x1b[M" & char(32) & char(33) & char(33), 2)
+      check x10[0].key == plainEscape
+      check x10[1].kind == Mouse
+      check x10[1].mouse.modifiers == {}
+      let paste = readEvents("\x1b\x1b[200~hi\x1b[201~", 2)
+      check paste[0].key == plainEscape
+      check paste[1].kind == Paste
+      check paste[1].pastedText == "hi"
+
+    test "Alt+Ctrl+C as CSI u is a key, not Quit":
+      let ev = readEvents("\x1b\x1b[99;5u", 1)[0]
+      check ev.kind == EventKind.Key
+      check ev.key == KeyEvent(code: Char, char: "c", modifiers: {Ctrl, Alt})
+
+    test "Blocking reader does not wait after Alt+Escape":
+      var cancel: array[2, cint]
+      if pipe(cancel) == 0:
+        var p = redirectStdinFromPipe()
+        if p.saved != -1:
+          feedPipe(p, "\x1b\x1b")
+          var closer: Thread[tuple[wfd, cancel: cint]]
+          createThread(closer, closeUnlessCancelled, (p.wfd, cancel[0]))
+          try:
+            clearPendingByte()
+            let started = epochTime()
+            let key = readKey().key
+            check epochTime() - started < 0.5
+            check key == KeyEvent(code: Escape, char: "\x1b", modifiers: {Alt})
+          finally:
+            var b = 'x'
+            discard posix.write(cancel[1], addr b, 1)
+            joinThread(closer)
+            p.wfd = -1
+            restoreStdin(p)
+        discard close(cancel[0])
+        discard close(cancel[1])
+
+    test "Blocking reader decodes Alt+special as one Alt-modified key":
+      let events = readEventsBlocking("\x1b\x1b[A\x1b\x1bOA\x1b\x1b[[A", 3)
+      check events[0].key.code == ArrowUp
+      check events[0].key.modifiers == {Alt}
+      check events[1].key.code == ArrowUp
+      check events[1].key.modifiers == {Alt}
+      check events[2].key.code == F1
+      check events[2].key.modifiers == {Alt}
+
+    test "Blocking reader puts back a byte after ESC ESC":
+      let events = readEventsBlocking("\x1b\x1bq", 2)
+      check events[0].key.code == Escape
+      check events[0].key.modifiers == {Alt}
+      check events[1].key.char == "q"
+
+    test "readKeyInput assembles a split Alt+arrow":
+      let originalPin = isStdinNonBlockingPinned()
+      var assembled = false
+      var redirected = false
+      for _ in 0 ..< 5:
+        let p = redirectStdinFromPipe()
+        if p.saved == -1:
+          break
+        redirected = true
+        try:
+          setStdinNonBlockingPinned(false)
+          clearPendingByte()
+          feedPipe(p, "\x1b\x1b[")
+          var writer: Thread[tuple[wfd: cint, data: string]]
+          createThread(writer, delayedWriter, (p.wfd, "A"))
+          let ev = readKeyInput()
+          joinThread(writer)
+          assembled =
+            ev.isSome and ev.get.kind == EventKind.Key and ev.get.key.code == ArrowUp and
+            ev.get.key.modifiers == {Alt}
+        finally:
+          setStdinNonBlockingPinned(originalPin)
+          restoreStdin(p)
+        if assembled:
+          break
+      if redirected:
+        check assembled
 
   suite "Alt UTF-8 Validation":
     ## The Alt branch assembles UTF-8 inline, so it must validate the second
