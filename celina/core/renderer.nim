@@ -55,7 +55,7 @@ proc render*(renderer: Renderer, force: bool = false) =
     cursorState.y,
     cursorState.visible,
     cursorState.style,
-    cursorState.lastStyle,
+    renderer.terminal.shownCursorStyle,
     force = force,
   )
 

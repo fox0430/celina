@@ -72,7 +72,7 @@ proc renderAsync*(renderer: AsyncRenderer, force: bool = false) {.async.} =
     cursorState.y,
     cursorState.visible,
     cursorState.style,
-    cursorState.lastStyle,
+    renderer.terminal.shownCursorStyle,
     force = force,
   )
 

@@ -902,6 +902,78 @@ suite "Terminal Module Tests":
       terminal.cleanup()
       check not terminal.alternateScreen
 
+  suite "Cursor style reset":
+    proc drawBar(terminal: Terminal) =
+      discard terminal.drawWithCursor(
+        newBuffer(4, 2), 0, 0, true, SteadyBar, terminal.shownCursorStyle
+      )
+
+    test "cleanup puts back a style a frame set":
+      let terminal = knownScreenTerminal(4, 2)
+      let output = captureStdout(
+        proc() =
+          terminal.drawBar()
+          terminal.cleanup()
+      )
+      check output.count(CursorStyleDefault) == 1
+      check output.find(CursorStyleDefault) > output.find(getCursorStyleSeq(SteadyBar))
+      check terminal.shownCursorStyle == CursorStyle.Default
+
+    test "cleanup leaves the style alone when no frame changed it":
+      let terminal = knownScreenTerminal(4, 2)
+      let output = captureStdout(
+        proc() =
+          discard terminal.drawWithCursor(
+            newBuffer(4, 2), 0, 0, true, CursorStyle.Default, terminal.shownCursorStyle
+          )
+          terminal.cleanup()
+      )
+      check CursorStyleDefault notin output
+
+    test "suspend puts it back and the first frame after resume sends it again":
+      let terminal = knownScreenTerminal(4, 2)
+      let suspended = captureStdout(
+        proc() =
+          terminal.drawBar()
+          terminal.suspend()
+      )
+      check CursorStyleDefault in suspended
+      let resumed = captureStdout(
+        proc() =
+          terminal.resume()
+          terminal.drawBar()
+      )
+      check getCursorStyleSeq(SteadyBar) in resumed
+      check terminal.shownCursorStyle == SteadyBar
+
+    test "a caller's own lastStyle still sends the style after resume":
+      let terminal = knownScreenTerminal(4, 2)
+      var last = CursorStyle.Default
+      discard captureStdout(
+        proc() =
+          last = terminal.drawWithCursor(newBuffer(4, 2), 0, 0, true, SteadyBar, last)
+          terminal.suspend()
+          terminal.resume()
+      )
+      check last == SteadyBar
+      let output = captureStdout(
+        proc() =
+          discard terminal.drawWithCursor(newBuffer(4, 2), 0, 0, true, SteadyBar, last)
+      )
+      check getCursorStyleSeq(SteadyBar) in output
+
+    test "emergencyRestore puts back a style a frame set":
+      let terminal = knownScreenTerminal(4, 2)
+      discard captureStdout(
+        proc() =
+          terminal.drawBar()
+      )
+      let output = captureStdout(
+        proc() =
+          terminal.emergencyRestore()
+      )
+      check output == EmergencyResetSeq & CursorStyleDefault
+
   suite "Setup Rollback":
     test "setup rolls back partial state when raw mode fails":
       # Regression: enableAlternateScreen succeeds (write to a pipe) but

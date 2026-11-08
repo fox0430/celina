@@ -1,10 +1,11 @@
-import std/unittest
+import std/[unittest, strutils]
 
 import ../celina/async/async_backend
 
 when hasAsyncSupport:
   import ../celina/async/[async_renderer, async_terminal, async_buffer]
   import ../celina/core/[buffer, cursor, geometry, colors, terminal_common, errors]
+  import ./stdout_capture
 
   suite "AsyncRenderer Module Tests":
     suite "AsyncRenderer Creation":
@@ -408,3 +409,23 @@ when hasAsyncSupport:
           check buf.area.height == 1
         except TerminalError:
           skip()
+
+    suite "Cursor style across suspend":
+      test "the first render after resume sends the style again":
+        let term = newAsyncTerminal()
+        let rend = newAsyncRenderer(term)
+        rend.resize(4, 2)
+        rend.setCursorStyle(SteadyBar)
+        rend.showCursorAt(0, 0)
+        let handedBack = captureStdout(
+          proc() =
+            waitFor rend.renderAsync()
+            waitFor term.suspendAsync()
+            waitFor term.resumeAsync()
+        )
+        check CursorStyleDefault in handedBack
+        let output = captureStdout(
+          proc() =
+            waitFor rend.renderAsync()
+        )
+        check getCursorStyleSeq(SteadyBar) in output

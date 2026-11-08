@@ -1,8 +1,9 @@
-import std/unittest
+import std/[unittest, strutils]
 
 import
   ../celina/core/
     [renderer, terminal, buffer, cursor, geometry, colors, terminal_common, errors]
+import ./stdout_capture
 
 # Test suite for Renderer module
 suite "Renderer Module Tests":
@@ -336,3 +337,23 @@ suite "Renderer Module Tests":
         check buf.area.height == 1
       except TerminalError:
         skip()
+
+  suite "Cursor style across suspend":
+    test "the first render after resume sends the style again":
+      let term = newTerminal()
+      let rend = newRenderer(term)
+      rend.resize(4, 2)
+      rend.setCursorStyle(SteadyBar)
+      rend.showCursorAt(0, 0)
+      let handedBack = captureStdout(
+        proc() =
+          rend.render()
+          term.suspend()
+          term.resume()
+      )
+      check CursorStyleDefault in handedBack
+      let output = captureStdout(
+        proc() =
+          rend.render()
+      )
+      check getCursorStyleSeq(SteadyBar) in output

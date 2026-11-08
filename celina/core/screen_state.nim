@@ -11,6 +11,7 @@
 ## ```nim
 ## if force: screen.invalidate()
 ## var plan = screen.planFrame(buffer, cursor, wrap)
+## screen.markSent(plan)
 ## when adopt and shared:
 ##   screen.stage(plan, buffer)
 ## let outcome = outcomeOf(writeStream(plan.bytes, plan.onPartial), plan.bytes.len)
@@ -21,7 +22,8 @@
 ## ```
 ##
 ## `planFrame` decides full-vs-diff, appends cursor commands, wraps in sync
-## output and names the partial-write reset. `stage`/`finishAdopt` keep
+## output and names the partial-write reset. `markSent` must come before the
+## write, so a hand back after a cut frame still resets the cursor style. `stage`/`finishAdopt` keep
 ## `lastBuffer` to frames actually shown. Writes live in output_stream.nim.
 ##
 ## An inline viewport (`setViewport`) puts the buffer's row 0 at `originRow`
@@ -46,6 +48,8 @@ type
     cursorRow: int ## inline: the cursor's row in the viewport
     height: int ## inline: the viewport's height
     exitArmed: bool ## inline: `takeExitMove` still has to move below the viewport
+    cursorStyle: CursorStyle ## the style the last cursor frame applied in full
+    styleSent: bool ## a non-default DECSCUSR may have gone out since the last reset
 
   CursorRequest* = object
     enabled*: bool ## false for the paths that leave the cursor alone
@@ -196,6 +200,43 @@ proc viewportSize*(s: ScreenState, termSize: Size): Size =
   else:
     termSize
 
+proc cursorStyle*(s: ScreenState): CursorStyle {.inline.} =
+  ## The cursor style the terminal shows, as far as cursor frames applied it in
+  ## full. `CursorStyle.Default` again after `recordCursorReset`.
+  s.cursorStyle
+
+proc cursorReset*(s: ScreenState): string =
+  ## The bytes that put the cursor style back before the terminal is handed
+  ## back: `CursorStyleDefault` if a frame may have left another style, else
+  ## "", since `\e[0 q` prints a stray `q` on the Linux console. Write them
+  ## under the stdout lock, then `recordCursorReset`.
+  if s.styleSent: CursorStyleDefault else: ""
+
+proc cursorResetOwed*(s: ScreenState): bool {.inline.} =
+  ## Whether `cursorReset` is non-empty. For a signal handler, which writes
+  ## `CursorStyleDefault` itself rather than copy a string.
+  s.styleSent
+
+proc markSent*(s: var ScreenState, plan: FramePlan) =
+  ## Call before writing `plan`: a restore from a signal that cuts the frame
+  ## still knows a non-default DECSCUSR may be out.
+  if plan.newStyle != plan.lastStyle and plan.newStyle != CursorStyle.Default:
+    s.styleSent = true
+
+proc recordCursorReset*(s: var ScreenState, outcome: StreamWrite) =
+  ## Record the hand back: the next run or resume sends the app's style again.
+  ## A reset that did not go out in full stays owed, for a later cleanup.
+  if outcome == swAll:
+    s.styleSent = false
+  s.cursorStyle = CursorStyle.Default
+
+template writeCursorReset*(s: var ScreenState, write: untyped) =
+  ## Write `cursorReset` with `write`, an expression over the injected `bytes`
+  ## that returns the count written, and record the outcome.
+  block:
+    let bytes {.inject.} = s.cursorReset()
+    s.recordCursorReset(outcomeOf(write, bytes.len))
+
 proc takeExitMove*(s: var ScreenState): string =
   ## Inline, once per `enterInline`: the bytes that put the cursor at the start
   ## of the row below the viewport, so the shell continues under the last
@@ -222,8 +263,12 @@ proc planFrame*(
     cursor.enabled and showsCursor(cursor.x, cursor.y, cursor.visible) and
     (not s.inline or cursor.y < buffer.area.height)
   if cursor.enabled:
+    # A caller's `lastStyle` can be stale after a hand back reset the style, so
+    # the style is also sent when the terminal does not show it.
+    if cursor.style == cursor.lastStyle:
+      result.lastStyle = s.cursorStyle
     result.newStyle = appendCursorCommands(
-      result.bytes, cursor.x, cursor.y, shown, cursor.style, cursor.lastStyle,
+      result.bytes, cursor.x, cursor.y, shown, cursor.style, result.lastStyle,
       s.originRow,
     )
   else:
@@ -272,8 +317,12 @@ proc stage*(s: var ScreenState, plan: var FramePlan, buffer: var Buffer) =
     s.lastBuffer.clearDirty()
 
 proc applyOutcome(s: var ScreenState, plan: FramePlan, outcome: StreamWrite) =
-  ## The `known`, `epoch` and cursor row half of `finish`, shared by every
-  ## variant.
+  ## The `known`, `epoch`, cursor row and cursor style half of `finish`,
+  ## shared by every variant.
+  if plan.newStyle != plan.lastStyle and outcome == swAll:
+    s.cursorStyle = plan.newStyle
+    if plan.newStyle == CursorStyle.Default:
+      s.styleSent = false
   if plan.cursorRow >= 0 and outcome != swNone:
     s.cursorRow = if outcome == swAll: plan.cursorRow else: 0
   if outcome == swPartial:

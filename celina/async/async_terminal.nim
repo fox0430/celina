@@ -22,7 +22,7 @@ import ../core/[geometry, colors, buffer, terminal_common, errors, screen_state]
 from async_io import
   AsyncInputReader, clearPendingByteAsync, tryWriteAsync, writeOrRaiseAsync,
   writeStdoutAsync, tryWriteBlocking, writeOrRaiseBlocking, withStdoutLock,
-  queryCursorPositionAsync
+  queryCursorPositionAsync, writeStdoutBlocking
 from ../core/output_stream import
   swAll, swPartial, srAbort, srOsc8, srSgr, srSyncEnd, outcomeOf, setPendingReset,
   writeStreamLocked
@@ -57,6 +57,10 @@ proc `lastBuffer=`*(terminal: AsyncTerminal, buffer: Buffer) {.inline.} =
   ## Assignment half of `lastBuffer`. Needed separately because a `var` return
   ## alone is not an assignment target on Nim 2.0.x.
   terminal.screen.lastBuffer = buffer
+
+proc shownCursorStyle*(terminal: AsyncTerminal): CursorStyle {.inline.} =
+  ## Async `Terminal.shownCursorStyle`.
+  terminal.screen.cursorStyle
 
 proc invalidate*(terminal: AsyncTerminal) =
   ## Mark the screen unknown, so the next frame is a full render. Call it
@@ -405,7 +409,8 @@ proc moveCursorAsync*(dx, dy: int) {.async.} =
     await sleepMs(0)
 
 proc setCursorStyleAsync*(style: CursorStyle) {.async.} =
-  ## Set cursor appearance style asynchronously
+  ## Set cursor appearance style asynchronously. Not tracked, like the sync
+  ## `setCursorStyle`.
   await tryWriteAsync(getCursorStyleSeq(style))
   await sleepMs(0)
 
@@ -518,6 +523,7 @@ proc presentFrame(
     if force:
       terminal.screen.invalidate()
     var plan = terminal.screen.planFrame(buffer, cursor, wrap)
+    terminal.screen.markSent(plan)
     try:
       let written = await writeStreamLocked(plan.bytes, plan.onPartial)
       outcome = outcomeOf(written, plan.bytes.len)
@@ -548,6 +554,7 @@ proc presentFrameAdopt(
       if force:
         terminal.screen.invalidate()
       var plan = terminal.screen.planFrame(buffer, cursor, wrap)
+      terminal.screen.markSent(plan)
       terminal.screen.stage(plan, buffer)
       try:
         let written = await writeStreamLocked(plan.bytes, plan.onPartial)
@@ -670,6 +677,20 @@ proc setupWithMouseAndPasteAsync*(
   await terminal.enableMouseAsync()
   await terminal.enableBracketedPasteAsync()
 
+proc writeCursorResetAsync(terminal: AsyncTerminal) {.async.} =
+  ## Frames mark their style before the write, so nothing owed means no wait
+  ## behind a frame in flight.
+  if terminal.screen.cursorReset().len == 0:
+    terminal.screen.recordCursorReset(swAll)
+    return
+  var outcome = swPartial # a cancel mid-write leaves the reset owed
+  withStdoutLock:
+    let bytes = terminal.screen.cursorReset()
+    try:
+      outcome = outcomeOf(await writeStreamLocked(bytes, {}), bytes.len)
+    finally:
+      terminal.screen.recordCursorReset(outcome)
+
 proc runDisableSequence(terminal: AsyncTerminal, reader: AsyncInputReader = nil) =
   ## LIFO disable sequence shared by the sync `cleanup`. A mode added here
   ## belongs in `EmergencyResetSeq` too.
@@ -709,6 +730,7 @@ proc cleanup*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) =
   ## A signal handler must use `emergencyRestore` instead: it writes straight to
   ## the fd, which a signal handler needs. See `Terminal.emergencyRestore`.
   tryWriteBlocking(terminal.screen.takeExitMove())
+  terminal.screen.writeCursorReset(writeStdoutBlocking(bytes))
   tryWriteBlocking(ShowCursorSeq)
   runDisableSequence(terminal, reader)
 
@@ -738,6 +760,10 @@ proc emergencyRestore*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) 
   let fd = cint(STDOUT_FILENO)
   if writeAllBlocking(fd, EmergencyResetSeq) == EmergencyResetSeq.len:
     terminal.clearModeFlags()
+    if terminal.screen.cursorResetOwed:
+      terminal.screen.recordCursorReset(
+        outcomeOf(writeAllBlocking(fd, CursorStyleDefault), CursorStyleDefault.len)
+      )
   terminal.disableRawModeQuietly(reader)
   if terminal.alternateScreen:
     if writeAllBlocking(fd, EmergencyAltScreenTail) == EmergencyAltScreenTail.len:
@@ -755,6 +781,7 @@ when hasChronos:
     try:
       if (await writeStdoutAsync(EmergencyResetSeq)) == EmergencyResetSeq.len:
         terminal.clearModeFlags()
+        await terminal.writeCursorResetAsync()
     except CatchableError:
       discard
     terminal.disableRawModeQuietly(reader)
@@ -779,6 +806,8 @@ proc cleanupStepsAsync(terminal: AsyncTerminal, reader: AsyncInputReader) {.asyn
 
   step:
     await tryWriteAsync(terminal.screen.takeExitMove())
+  step:
+    await terminal.writeCursorResetAsync()
   step:
     await showCursorAsync()
   step:
@@ -854,6 +883,7 @@ proc suspendAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.as
 
   # Return to shell mode. A mode added here belongs in `EmergencyResetSeq` too.
   # The first write sends the reset a cut frame needs, so nothing is prepended.
+  await terminal.writeCursorResetAsync()
   await showCursorAsync()
   await terminal.disableSyncOutputAsync()
   await terminal.disableFocusEventsAsync()
@@ -978,9 +1008,10 @@ proc drawWithCursorAsync*(
   ## A chronos cancel is not a hiccup: it propagates, so a `cancelAndWait`
   ## shutdown sees it, and the screen state records the partial write.
   ##
-  ## Returns the updated lastCursorStyle value on success, or the original
-  ## `lastCursorStyle` on failure. Caller is responsible for tracking this state
-  ## (e.g., via CursorManager.updateLastStyle()).
+  ## Returns the updated lastCursorStyle value on success, or the style the
+  ## terminal showed before on failure. Caller is responsible for tracking this state
+  ## (e.g., via CursorManager.updateLastStyle()); passing
+  ## `terminal.shownCursorStyle` also covers a suspend or a rerun.
   let presented = await terminal.presentFrame(
     buffer,
     CursorRequest(
@@ -1024,8 +1055,8 @@ proc drawWithCursorAdoptAsync*(
   ## emitted. A write that did not go out in full hands a swap back (unless
   ## `asyncBuffer` was resized meanwhile) and makes the next frame a full render.
   ##
-  ## Returns the updated lastCursorStyle value on success, or the original
-  ## `lastCursorStyle` on failure.
+  ## Returns the updated lastCursorStyle value on success, or the style the
+  ## terminal showed before on failure.
   let presented = await terminal.presentFrameAdopt(
     asyncBuffer,
     CursorRequest(

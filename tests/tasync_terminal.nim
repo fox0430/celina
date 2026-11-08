@@ -1506,6 +1506,60 @@ suite "AsyncTerminal emergencyRestore":
     check terminal.mouseEnabled
     terminal.cleanup()
 
+suite "AsyncTerminal cursor style reset":
+  proc drawBar(terminal: AsyncTerminal) =
+    discard waitFor terminal.drawWithCursorAsync(
+      newBuffer(4, 2), 0, 0, true, SteadyBar, terminal.shownCursorStyle
+    )
+
+  test "cleanupAsync puts back a style a frame set":
+    let terminal = knownScreenTerminal(4, 2)
+    let output = captureStdout(
+      proc() =
+        terminal.drawBar()
+        waitFor terminal.cleanupAsync()
+    )
+    check output.count(CursorStyleDefault) == 1
+    check terminal.shownCursorStyle == CursorStyle.Default
+
+  test "cleanup leaves the style alone when no frame changed it":
+    let terminal = knownScreenTerminal(4, 2)
+    let output = captureStdout(
+      proc() =
+        discard waitFor terminal.drawWithCursorAsync(
+          newBuffer(4, 2), 0, 0, true, CursorStyle.Default, terminal.shownCursorStyle
+        )
+        terminal.cleanup()
+    )
+    check CursorStyleDefault notin output
+
+  test "suspendAsync puts it back and the first frame after resume sends it again":
+    let terminal = knownScreenTerminal(4, 2)
+    let suspended = captureStdout(
+      proc() =
+        terminal.drawBar()
+        waitFor terminal.suspendAsync()
+    )
+    check CursorStyleDefault in suspended
+    let resumed = captureStdout(
+      proc() =
+        waitFor terminal.resumeAsync()
+        terminal.drawBar()
+    )
+    check getCursorStyleSeq(SteadyBar) in resumed
+
+  test "emergencyRestore puts back a style a frame set":
+    let terminal = knownScreenTerminal(4, 2)
+    discard captureStdout(
+      proc() =
+        terminal.drawBar()
+    )
+    let output = captureStdout(
+      proc() =
+        terminal.emergencyRestore()
+    )
+    check output == EmergencyResetSeq & CursorStyleDefault
+
 suite "AsyncTerminal cleanupAsync":
   test "cleanupAsync resets all toggleable flags":
     let terminal = createTestTerminal()
