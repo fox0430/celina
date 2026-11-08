@@ -459,6 +459,11 @@ suite "Screen state: cursor style":
 
   test "an unchanged style is not sent":
     var state = knownScreen(4, 2)
+    let first = newBuffer(4, 2)
+    let bar = CursorRequest(
+      enabled: true, x: 0, y: 0, visible: true, style: SteadyBar, lastStyle: Default
+    )
+    state.finish(state.planFrame(first, bar, false), first, swAll)
     let plan = state.planFrame(
       newBuffer(4, 2),
       CursorRequest(
@@ -475,6 +480,84 @@ suite "Screen state: cursor style":
     check plan.appliedStyle(swAll) == CursorStyle.Default
     check ShowCursorSeq notin plan.bytes
     check HideCursorSeq notin plan.bytes
+
+suite "Screen state: cursor style reset":
+  proc barRequest(lastStyle = CursorStyle.Default): CursorRequest =
+    CursorRequest(
+      enabled: true, x: 0, y: 0, visible: true, style: SteadyBar, lastStyle: lastStyle
+    )
+
+  proc present(state: var ScreenState, cursor: CursorRequest, outcome: StreamWrite) =
+    let frame = newBuffer(4, 2)
+    let plan = state.planFrame(frame, cursor, false)
+    state.markSent(plan)
+    state.finish(plan, frame, outcome)
+
+  proc takeCursorReset(state: var ScreenState): string =
+    result = state.cursorReset()
+    state.recordCursorReset(swAll)
+
+  test "a style a frame set is reset once and tracked as the default":
+    var state = knownScreen(4, 2)
+    state.present(barRequest(), swAll)
+    check state.cursorStyle == SteadyBar
+    check state.takeCursorReset() == CursorStyleDefault
+    check state.cursorStyle == CursorStyle.Default
+    check state.takeCursorReset() == ""
+
+  test "no reset when no frame changed the style":
+    var state = knownScreen(4, 2)
+    state.present(cursorAt(0, 0), swAll)
+    check state.takeCursorReset() == ""
+
+  test "a stale lastStyle does not hide a style the terminal lacks":
+    var state = knownScreen(4, 2)
+    let plan = state.planFrame(newBuffer(4, 2), barRequest(SteadyBar), false)
+    check getCursorStyleSeq(SteadyBar) in plan.bytes
+    check plan.appliedStyle(swNone) == CursorStyle.Default
+
+  test "a hidden cursor with a stale lastStyle keeps the tracked style":
+    var state = knownScreen(4, 2)
+    var request = barRequest(SteadyBlock)
+    request.visible = false
+    state.present(request, swAll)
+    check state.cursorStyle == CursorStyle.Default
+    check state.takeCursorReset() == ""
+
+  test "a frame back to the default style needs no reset":
+    var state = knownScreen(4, 2)
+    state.present(barRequest(), swAll)
+    state.present(cursorAt(0, 0), swAll)
+    check state.cursorStyle == CursorStyle.Default
+    check state.takeCursorReset() == ""
+
+  test "a reset that did not go out stays owed":
+    var state = knownScreen(4, 2)
+    state.present(barRequest(), swAll)
+    state.recordCursorReset(swNone)
+    check state.cursorStyle == CursorStyle.Default
+    check state.cursorReset() == CursorStyleDefault
+
+  test "a cut frame may have sent the style, so it is reset but sent again":
+    var state = knownScreen(4, 2)
+    state.present(barRequest(), swPartial)
+    check state.cursorStyle == CursorStyle.Default
+    check state.takeCursorReset() == CursorStyleDefault
+
+  test "a style is owed a reset from before its frame is written":
+    var state = knownScreen(4, 2)
+    let plan = state.planFrame(newBuffer(4, 2), barRequest(), false)
+    state.markSent(plan)
+    check state.cursorReset() == CursorStyleDefault
+
+  test "paths without cursor handling keep the tracked style":
+    var state = knownScreen(4, 2)
+    state.present(barRequest(), swAll)
+    state.present(noCursor, swAll)
+    let clear = state.planClear(size(4, 2))
+    state.finishClear(clear, swAll)
+    check state.cursorStyle == SteadyBar
+    check state.takeCursorReset() == CursorStyleDefault
 
 suite "Screen state: inline viewport":
   test "a viewport change marks the screen unknown":

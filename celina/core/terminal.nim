@@ -54,6 +54,14 @@ proc `lastBuffer=`*(terminal: Terminal, buffer: Buffer) {.inline.} =
   ## alone is not an assignment target on Nim 2.0.x.
   terminal.screen.lastBuffer = buffer
 
+proc shownCursorStyle*(terminal: Terminal): CursorStyle {.inline.} =
+  ## The cursor style the terminal shows, as far as `drawWithCursor` frames
+  ## applied it. `CursorStyle.Default` again after `cleanup` and `suspend`,
+  ## which put a changed style back, so a non-default style is sent again
+  ## after a resume or a rerun. A style another program left while suspended
+  ## is not undone for an app that uses `CursorStyle.Default`.
+  terminal.screen.cursorStyle
+
 proc invalidate*(terminal: Terminal) =
   ## Mark the screen unknown, so the next frame is a full render. Call it
   ## after writing to the screen behind celina's back: the free
@@ -378,7 +386,8 @@ proc moveCursor*(dx, dy: int) =
     moveCursorRight(dx)
 
 proc setCursorStyle*(style: CursorStyle) =
-  ## Set cursor appearance style
+  ## Set cursor appearance style. Not tracked: `cleanup` and `suspend` put
+  ## back only a style set through `drawWithCursor` or a `Renderer`.
   tryWrite(getCursorStyleSeq(style))
 
 # Screen control
@@ -464,6 +473,7 @@ template presentFrame(
     if force:
       terminal.screen.invalidate()
     let plan = terminal.screen.planFrame(buffer, cursor, wrap)
+    terminal.screen.markSent(plan)
     # `writeWithRetry` flushes the C stdio buffer first, so a frame cannot
     # overtake a `stdout.write` that preceded it.
     let outcome = outcomeOf(writeWithRetry(plan.bytes, plan.onPartial), plan.bytes.len)
@@ -535,7 +545,8 @@ proc cleanup*(terminal: Terminal) =
   ##
   ## The first write sends the reset a cut frame needs (OSC 8, SGR, the
   ## synchronized output block), so nothing has to be prepended here. After an
-  ## inline viewport, the cursor first goes below it, once.
+  ## inline viewport, the cursor first goes below it, once. A cursor style a
+  ## frame set is put back to the terminal's default.
   template guard(body: untyped) =
     try:
       body
@@ -544,6 +555,8 @@ proc cleanup*(terminal: Terminal) =
 
   guard:
     tryWrite(terminal.screen.takeExitMove())
+  guard:
+    terminal.screen.writeCursorReset(writeWithRetry(bytes))
   guard:
     showCursor()
   guard:
@@ -570,13 +583,21 @@ proc emergencyRestore*(terminal: Terminal) =
   ##
   ## The screen is marked unknown: the terminal no longer shows `lastBuffer`, so
   ## a caller that keeps drawing after this must redraw in full. The output
-  ## stream's pending reset is left alone, since this path is not async-signal-safe
-  ## enough to add a write.
+  ## stream's pending reset is left alone. A cursor style a frame may have set
+  ## is put back with a second write, only after the reset went out in full.
   terminal.screen.invalidate()
-  discard writeAllBlocking(
-    cint(STDOUT_FILENO),
-    if terminal.alternateScreen: EmergencyResetAltScreenSeq else: EmergencyResetSeq,
-  )
+  let fd = cint(STDOUT_FILENO)
+  # Consts passed straight to the write: nothing is copied in a signal handler.
+  let resetSent =
+    if terminal.alternateScreen:
+      writeAllBlocking(fd, EmergencyResetAltScreenSeq) == EmergencyResetAltScreenSeq.len
+    else:
+      writeAllBlocking(fd, EmergencyResetSeq) == EmergencyResetSeq.len
+  # A wedged tty already took the write budget; do not wait on it twice.
+  if resetSent and terminal.screen.cursorResetOwed:
+    terminal.screen.recordCursorReset(
+      outcomeOf(writeAllBlocking(fd, CursorStyleDefault), CursorStyleDefault.len)
+    )
   terminal.syncOutputEnabled = false
   terminal.focusEventsEnabled = false
   terminal.bracketedPasteEnabled = false
@@ -679,6 +700,7 @@ proc suspend*(terminal: Terminal) =
   # Return to shell mode. A mode added here belongs in `EmergencyResetSeq` too.
   # The first write sends the reset a cut frame needs, so nothing is prepended.
   try:
+    terminal.screen.writeCursorReset(writeWithRetry(bytes))
     showCursor()
   except CatchableError:
     discard
@@ -791,9 +813,10 @@ proc drawWithCursor*(
   ## Output is automatically wrapped with synchronized output sequences (DEC mode 2026)
   ## to prevent flickering on supported terminals.
   ##
-  ## Returns the updated lastCursorStyle value on success, or the original
-  ## `lastCursorStyle` on failure (the frame may have stopped before its DECSCUSR,
-  ## so the next frame sends it again). Caller is responsible for tracking this state.
+  ## Returns the updated lastCursorStyle value on success, or the style the
+  ## terminal showed before on failure (the frame may have stopped before its
+  ## DECSCUSR, so the next frame sends it again). Caller is responsible for tracking this state;
+  ## passing `terminal.shownCursorStyle` also covers a suspend or a rerun.
   ##
   ## The buffer's contents are preserved across the call (copy semantics). For a
   ## zero-copy renderer-owned hot path, use `drawWithCursorAdopt` instead.
@@ -837,8 +860,8 @@ proc drawWithCursorAdopt*(
   ## MUST fully re-fill `buffer` each frame. Used by `Renderer.render`. A
   ## write that did not go out in full adopts nothing, as with `drawAdopt`.
   ##
-  ## Returns the updated lastCursorStyle value on success, or the original
-  ## `lastCursorStyle` on failure.
+  ## Returns the updated lastCursorStyle value on success, or the style the
+  ## terminal showed before on failure.
   terminal.presentFrame(
     buffer,
     CursorRequest(

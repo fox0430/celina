@@ -1473,8 +1473,8 @@ suite "EmergencyResetSeq":
       check sequence notin EmergencyResetAltScreenSeq
 
   test "Leaves the cursor style alone":
-    # `cleanup` does not reset it, and `\e[0 q` prints a stray `q` on the
-    # Linux console.
+    # `\e[0 q` prints a stray `q` on the Linux console, so `emergencyRestore`
+    # adds it only when a frame changed the style.
     check CursorStyleDefault notin EmergencyResetAltScreenSeq
 
   test "Does not leave the alternate screen":
