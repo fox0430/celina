@@ -178,7 +178,10 @@ proc ceilMs*(d: times.Duration): int =
   ## `d` in whole milliseconds, rounded up so a wait of that many reaches its
   ## end; 0 when it is not positive.
   let ns = d.inNanoseconds
-  if ns <= 0: 0 else: int((ns + 999_999) div 1_000_000)
+  if ns <= 0:
+    0
+  else:
+    int((ns + 999_999) div 1_000_000)
 
 proc hasInput*(reader: AsyncInputReader, timeoutMs: int = 0): bool =
   ## Blocking `hasInputAsync`, for code that cannot await: waits up to
