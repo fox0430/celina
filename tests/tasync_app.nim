@@ -1954,6 +1954,123 @@ when hasAsyncSupport:
         else:
           check output.count(makeCursorPositionSeq(0, 4) & "\r\n") == 1
 
+  when defined(posix):
+    suite "AsyncApp renderNow":
+      test "a handler draws a frame before it returns":
+        var calls = 0
+        var drawn = false
+        var framesBefore, framesAfter: int
+        var output: string
+        proc runOnce() =
+          output = captureStdout(
+            proc() =
+              let app = newAsyncApp(
+                AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+              )
+              var label = "start"
+              app.onRenderAsync proc(buffer: var Buffer) =
+                buffer.setString(0, 0, label)
+              app.onEventAsync proc(
+                  event: Event, app: AsyncApp
+              ): Future[EventResult] {.async.} =
+                label = "waiting"
+                framesBefore = app.getFrameCount()
+                inc calls
+                drawn = app.renderNow()
+                framesAfter = app.getFrameCount()
+                label = "done"
+                app.quit()
+                return erContinue
+              waitFor app.runAsync()
+          )
+
+        withStdinInput("a", runOnce)
+        check calls == 1
+        check drawn
+        check framesAfter == framesBefore + 1
+        # Only `renderNow` can have drawn it: the loop draws after the handler.
+        check "waiting" in output
+
+      test "outside a run it draws nothing":
+        let app = newAsyncApp(AppConfig(alternateScreen: false, rawMode: false))
+        var renders = 0
+        app.onRenderAsync proc(buffer: var Buffer) =
+          inc renders
+        var drawn = true
+        let output = captureStdout(
+          proc() =
+            drawn = app.renderNow()
+        )
+        check not drawn
+        check renders == 0
+        check output == ""
+
+      test "it draws nothing while another writer holds stdout":
+        var calls = 0
+        var drawn = true
+        var rendersInside = -1
+        var renders = 0
+        proc runOnce() =
+          discard captureStdout(
+            proc() =
+              let app = newAsyncApp(
+                AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+              )
+              app.onRenderAsync proc(buffer: var Buffer) =
+                inc renders
+              app.onEventAsync proc(
+                  event: Event, app: AsyncApp
+              ): Future[EventResult] {.async.} =
+                let before = renders
+                withStdoutLock:
+                  inc calls
+                  drawn = app.renderNow()
+                rendersInside = renders - before
+                app.quit()
+                return erContinue
+              waitFor app.runAsync()
+          )
+
+        withStdinInput("a", runOnce)
+        check calls == 1
+        check not drawn
+        check rendersInside == 0
+
+      test "a change after quit and renderNow still gets a last inline frame":
+        var output: string
+        var drawn = false
+        let ran = withRawPty(
+          30,
+          10,
+          output,
+          proc(master: cint) =
+            let app = newAsyncApp(
+              DefaultAppConfig.withRawMode(false).withViewport(
+                Viewport(kind: vkInline, height: 2)
+              )
+            )
+            var label = "start"
+            app.onRenderAsync proc(buffer: var Buffer) =
+              buffer.setString(0, 0, label)
+            app.onEventAsync proc(
+                event: Event, app: AsyncApp
+            ): Future[EventResult] {.async.} =
+              if event.kind == EventKind.Key and event.key.char == "x":
+                app.quit()
+                label = "formatting"
+                drawn = app.renderNow()
+                label = "saved"
+              return erContinue
+            typeInto(master, "\e[1;1R" & "x")
+            waitFor(app.runAsync()),
+        )
+        if not ran:
+          skip()
+        else:
+          check drawn
+          check "formatting" in output
+          check "saved" in output
+
   {.pop.}
 else:
   echo "Skipping AsyncApp tests - no async backend available"

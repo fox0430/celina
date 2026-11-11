@@ -22,10 +22,10 @@ import ../core/[geometry, colors, buffer, terminal_common, errors, screen_state]
 from async_io import
   AsyncInputReader, clearPendingByteAsync, tryWriteAsync, writeOrRaiseAsync,
   writeStdoutAsync, tryWriteBlocking, writeOrRaiseBlocking, withStdoutLock,
-  queryCursorPositionAsync, writeStdoutBlocking
+  withStdoutLockNow, queryCursorPositionAsync, writeStdoutBlocking
 from ../core/output_stream import
   swAll, swPartial, srAbort, srOsc8, srSgr, srSyncEnd, outcomeOf, setPendingReset,
-  writeStreamLocked
+  writeStream, writeStreamLocked
 
 type
   AsyncTerminal* = ref object ## Async terminal interface for screen management
@@ -958,7 +958,9 @@ proc resumeAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.asy
 # picks the options (cursor handling, force, the DEC 2026 wrap, copy vs adopt)
 # and maps the outcome. A failed write is ignored here, so a transient terminal
 # hiccup never crashes the async render loop; the screen state records it, so
-# the next frame is a full render.
+# the next frame is a full render. The blocking `drawWithCursorAdopt` is the
+# exception: it repeats the protocol with a blocking write, unstaged as in the
+# sync `presentFrame`.
 
 proc drawAsync*(
     terminal: AsyncTerminal, buffer: Buffer, force: bool = false
@@ -1077,6 +1079,48 @@ proc drawWithCursorAdoptAsync*(
     if presented.outcome != swAll:
       stderr.writeLine("Warning: drawWithCursorAdoptAsync() left the screen unknown")
   presented.style
+
+proc drawWithCursorAdopt*(
+    terminal: AsyncTerminal,
+    asyncBuffer: async_buffer.AsyncBuffer,
+    cursorX, cursorY: int,
+    cursorVisible: bool,
+    cursorStyle: CursorStyle = CursorStyle.Default,
+    lastCursorStyle: CursorStyle,
+    force: bool = false,
+): Option[CursorStyle] =
+  ## Blocking `drawWithCursorAdoptAsync`, for code that cannot await. Returns
+  ## `none`, writing nothing, while another writer holds the stdout lock;
+  ## otherwise the cursor style as `drawWithCursorAdoptAsync` does. The write
+  ## blocks, so the frame is adopted after it rather than staged.
+  var style = lastCursorStyle
+  let drawn = withStdoutLockNow:
+    asyncBuffer.withBuffer:
+      if force:
+        terminal.screen.invalidate()
+      let plan = terminal.screen.planFrame(
+        buffer,
+        CursorRequest(
+          enabled: true,
+          x: cursorX,
+          y: cursorY,
+          visible: cursorVisible,
+          style: cursorStyle,
+          lastStyle: lastCursorStyle,
+        ),
+        not terminal.syncOutputEnabled,
+      )
+      terminal.screen.markSent(plan)
+      let outcome = outcomeOf(writeStream(plan.bytes, plan.onPartial), plan.bytes.len)
+      terminal.screen.finishAdopt(plan, buffer, outcome)
+      style = plan.appliedStyle(outcome)
+      when defined(celinaDebug):
+        if outcome != swAll:
+          stderr.writeLine("Warning: drawWithCursorAdopt() left the screen unknown")
+  if drawn:
+    some(style)
+  else:
+    none(CursorStyle)
 
 # Terminal state queries
 # Note: getSize and getArea need explicit proc definitions to avoid conflicts

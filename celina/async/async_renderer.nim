@@ -5,6 +5,8 @@
 ## differential rendering, and terminal output coordination.
 ## This mirrors the sync Renderer but uses AsyncTerminal and AsyncBuffer.
 
+import std/options
+
 import async_backend, async_terminal, async_buffer
 import ../core/[buffer, cursor, terminal_common, geometry, colors]
 
@@ -84,6 +86,24 @@ proc renderAsync*(renderer: AsyncRenderer, force: bool = false) {.async.} =
 
   # Update cursor manager with the new last style from render
   renderer.cursorManager.setLastStyle(newLastStyle)
+
+proc render*(renderer: AsyncRenderer, force: bool = false): bool =
+  ## Blocking `renderAsync`, for code that cannot await. Returns false, writing
+  ## nothing, while another writer holds the stdout lock.
+  let cursorState = renderer.cursorManager.getState()
+  let newLastStyle = renderer.terminal.drawWithCursorAdopt(
+    renderer.asyncBuffer,
+    cursorState.x,
+    cursorState.y,
+    cursorState.visible,
+    cursorState.style,
+    renderer.terminal.shownCursorStyle,
+    force = force,
+  )
+  if newLastStyle.isNone:
+    return false
+  renderer.cursorManager.setLastStyle(newLastStyle.get)
+  true
 
 proc renderDiffAsync*(renderer: AsyncRenderer) {.async.} =
   ## Render only the differences from last frame

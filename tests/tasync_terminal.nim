@@ -1,6 +1,6 @@
 # Tests for async_terminal module
 
-import std/[unittest, strutils, posix, importutils, oserrors]
+import std/[unittest, strutils, posix, importutils, oserrors, options]
 
 import ../celina/async/[async_backend, async_buffer]
 import ../celina/core/[geometry, colors, buffer, errors]
@@ -1216,6 +1216,53 @@ suite "Async Adopt Rendering":
   else:
     test "drawWithCursorAdoptAsync adopts a resized grid as it was planned":
       skip()
+
+suite "Blocking Adopt Rendering":
+  teardown:
+    stdoutWriteLocked = false
+
+  test "drawWithCursorAdopt writes the frame and adopts it":
+    let terminal = createTestTerminal()
+    terminal.lastBuffer = newBuffer(10, 5)
+    terminal.lastBuffer[0, 0] = cell("OLD")
+    let asyncBuffer = newAsyncBuffer(10, 5)
+    asyncBuffer.withBuffer:
+      buffer[0, 0] = cell("NEW")
+
+    var style: Option[CursorStyle]
+    let output = captureStdout(
+      proc() =
+        style = terminal.drawWithCursorAdopt(
+          asyncBuffer, 0, 0, true, CursorStyle.BlinkingBar, CursorStyle.Default
+        )
+    )
+    check style == some(CursorStyle.BlinkingBar)
+    check "NEW" in output
+    check terminal.lastBuffer[0, 0].symbol == "NEW"
+    check not stdoutWriteLocked
+
+  test "drawWithCursorAdopt writes nothing while the stdout lock is held":
+    let terminal = createTestTerminal()
+    terminal.lastBuffer = newBuffer(10, 5)
+    terminal.lastBuffer[0, 0] = cell("OLD")
+    let asyncBuffer = newAsyncBuffer(10, 5)
+    asyncBuffer.withBuffer:
+      buffer[0, 0] = cell("NEW")
+
+    check tryAcquireStdoutLockImmediate()
+    var style: Option[CursorStyle]
+    let output = captureStdout(
+      proc() =
+        style = terminal.drawWithCursorAdopt(
+          asyncBuffer, 0, 0, true, CursorStyle.BlinkingBar, CursorStyle.Default
+        )
+    )
+    check style.isNone
+    check output == ""
+    check stdoutWriteLocked
+    check terminal.lastBuffer[0, 0].symbol == "OLD"
+    asyncBuffer.withBuffer:
+      check buffer[0, 0].symbol == "NEW"
 
 suite "AsyncTerminal Performance Considerations":
   test "Large buffer handling":
