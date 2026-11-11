@@ -320,6 +320,25 @@ template withStdoutLock*(body: untyped) =
       if stdoutLockHeld:
         releaseStdoutLock()
 
+proc isStdoutLocked*(): bool =
+  ## Whether a writer holds the stdout lock.
+  {.gcsafe.}:
+    stdoutWriteLocked
+
+template withStdoutLockNow*(body: untyped): bool =
+  ## `withStdoutLock` for code that cannot await: runs `body` holding the lock
+  ## and returns true, or returns false without running it while another
+  ## writer holds the lock. `body` must not await.
+  block:
+    if tryAcquireStdoutLockImmediate():
+      try:
+        body
+      finally:
+        releaseStdoutLock()
+      true
+    else:
+      false
+
 proc writeStdoutAsync*(data: string): Future[int] {.async.} =
   ## Async stdout write, serialized through the stdout lock. Loop is
   ## `writeStreamLocked`; this proc only adds the lock. Yields between

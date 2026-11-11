@@ -7,7 +7,7 @@ import std/[options, monotimes, times, strformat]
 
 import async_backend, async_terminal, async_events, async_renderer
 from async_io import
-  AsyncInputReader, newAsyncInputReader, closeAsyncInputReader, isLive
+  AsyncInputReader, newAsyncInputReader, closeAsyncInputReader, isLive, isStdoutLocked
 import
   ../core/[
     geometry, buffer, events, fps, config, tick_common, cursor, terminal,
@@ -260,8 +260,8 @@ proc dispatchTimeoutAsync*(app: AsyncApp): Future[TickResult] {.async.} =
 proc hasTimeoutHandler(app: AsyncApp): bool {.inline.} =
   app.handlers.timeout != nil
 
-proc renderAsync(app: AsyncApp) {.async.} =
-  ## Render the current frame asynchronously
+proc fillFrame(app: AsyncApp) =
+  ## Fill the renderer's buffer with the next frame.
   # Clear the buffer
   app.renderer.clear()
 
@@ -271,10 +271,13 @@ proc renderAsync(app: AsyncApp) {.async.} =
   # If window mode is enabled, render windows on top
   if app.state.windowMode and not app.windowManager.isNil:
     app.windowManager.render(app.renderer.getBuffer())
-  # Before the write: another task may call `quit()` while it waits.
-  app.state.quitDrawn = app.state.shouldQuit
 
-  # Render to terminal
+proc renderAsync(app: AsyncApp) {.async.} =
+  ## Render the current frame asynchronously
+  app.fillFrame()
+  # Before the write: another task may call `quit()` while it waits. Not in
+  # `renderNow`, whose handler may change the state after it.
+  app.state.quitDrawn = app.state.shouldQuit
   await app.renderer.renderAsync()
 
 proc renderFrameAsync(app: AsyncApp) {.async.} =
@@ -283,6 +286,27 @@ proc renderFrameAsync(app: AsyncApp) {.async.} =
   app.fpsMonitor.endFrame()
   app.timings.frameCounter.inc()
   app.timings.lastFrameTime = getMonoTime()
+
+proc renderNow*(app: AsyncApp): bool =
+  ## Draw a frame now, blocking on the write. For a handler that cannot await
+  ## and keeps the loop waiting, such as one that waits for a child process:
+  ## the loop draws only between handlers. Call it from that handler, not from
+  ## the render handler (which it calls) or another task.
+  ##
+  ## Returns false, drawing nothing, outside `runAsync`, while suspended, or
+  ## while another writer holds stdout. A failed write is ignored as in the
+  ## loop, so true means the frame was tried, not that it reached the screen.
+  ## A resize is left for the loop to report, so the frame keeps the size the
+  ## app last saw.
+  if not app.state.running or app.terminal.isSuspended or isStdoutLocked():
+    return false
+  app.fpsMonitor.startFrame()
+  app.fillFrame()
+  result = app.renderer.render()
+  app.fpsMonitor.endFrame()
+  if result:
+    app.timings.frameCounter.inc()
+    app.timings.lastFrameTime = getMonoTime()
 
 proc drawLastFrameAsync(app: AsyncApp) {.async.} =
   ## Async `App.drawLastFrame`.
