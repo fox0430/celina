@@ -4,7 +4,7 @@
 ## that works with both Chronos and std/asyncdispatch.
 
 import std/[options, posix, selectors, deques, monotimes]
-from std/times import initDuration, inMilliseconds
+from std/times import initDuration, inMilliseconds, inNanoseconds
 
 import async_backend
 # The write loops live in core/output_stream.nim (which owns the shared
@@ -165,6 +165,34 @@ proc readCharNonBlocking*(reader: AsyncInputReader): Option[char] =
     result = some(reader.buffer[0])
     reader.buffer = reader.buffer[1 ..^ 1]
 
+proc hasPendingInput*(reader: AsyncInputReader): bool =
+  ## Whether input already taken from stdin is waiting: a stashed UTF-8 resync
+  ## byte (Unicode §3.9), buffered bytes or the close notice. None of them
+  ## reaches the fd, so a poller must check this before it polls.
+  not reader.isNil and (
+    reader.pendingByte.isSome or reader.buffer.len > 0 or
+    (reader.closed and not reader.closeReported)
+  )
+
+proc ceilMs*(d: times.Duration): int =
+  ## `d` in whole milliseconds, rounded up so a wait of that many reaches its
+  ## end; 0 when it is not positive.
+  let ns = d.inNanoseconds
+  if ns <= 0:
+    0
+  else:
+    int((ns + 999_999) div 1_000_000)
+
+proc hasInput*(reader: AsyncInputReader, timeoutMs: int = 0): bool =
+  ## Blocking `hasInputAsync`, for code that cannot await: waits up to
+  ## `timeoutMs` for input.
+  if reader.isNil:
+    return false
+  if reader.hasPendingInput():
+    return true
+  # A closed reader waits out the timeout here too.
+  reader.hasDataAvailable(timeoutMs)
+
 # Async Wrapper Functions
 
 proc hasInputAsync*(
@@ -177,20 +205,10 @@ proc hasInputAsync*(
   # Yield to other async tasks first
   await sleepMs(0)
 
-  if reader.pendingByte.isSome:
-    # A stashed UTF-8 resync byte (Unicode §3.9) is a real keystroke that the
-    # next readCharNonBlocking will emit; it lives only in pendingByte and never
-    # reaches the fd, so hasDataAvailable can't see it. Report it as available so
-    # it isn't stranded until fresh fd input arrives.
-    return true
-
-  if reader.buffer.len > 0:
+  if reader.hasPendingInput():
     return true
 
   if reader.closed:
-    if not reader.closeReported:
-      # The close itself is pending; `readKeyAsync` turns it into an event.
-      return true
     # Wait out the timeout rather than return at once, or a poll loop such as
     # `tickAsync` would spin.
     await sleepMs(timeoutMs)
@@ -478,13 +496,7 @@ proc bufferStats*(reader: AsyncInputReader): tuple[size: int, available: bool] =
   if reader.isNil:
     return (0, false)
 
-  # `available` mirrors hasInputAsync exactly: a stashed pendingByte and buffered
-  # data are both readable input even though they never reached the fd, so gating
-  # reads on `available` must see them or the byte/buffer is stranded (the bug
-  # this fixes).
-  let available =
-    reader.pendingByte.isSome or reader.buffer.len > 0 or
-    (reader.closed and not reader.closeReported) or reader.hasDataAvailable(0)
+  let available = reader.hasPendingInput() or reader.hasDataAvailable(0)
   return (reader.buffer.len, available)
 
 # Cursor position query
