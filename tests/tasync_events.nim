@@ -1043,3 +1043,101 @@ suite "Performance and Resource Management":
           reader.closeAsyncInputReader()
           discard dup2(saved, STDIN_FILENO)
           discard close(saved)
+
+proc eventsBothWays(input: string): tuple[async, blocking: seq[string]] =
+  ## The events `input` reads as, through `readKeyAsync` and through `readKey`.
+  var events: tuple[async, blocking: seq[string]]
+  proc read() =
+    let reader = newAsyncInputReader()
+    try:
+      while waitFor reader.hasInputAsync(0):
+        events.async.add($(waitFor reader.readKeyAsync()))
+    finally:
+      reader.closeAsyncInputReader()
+
+  proc readBlocking() =
+    let reader = newAsyncInputReader()
+    try:
+      while reader.hasInput(0):
+        events.blocking.add($reader.readKey())
+    finally:
+      reader.closeAsyncInputReader()
+
+  withStdinInput(input, read)
+  withStdinInput(input, readBlocking)
+  events
+
+suite "Blocking key reading":
+  test "readKey reads what readKeyAsync reads":
+    for input in [
+      "a", "\x03", "\x00a", "\x1b", "\x1b[A", "\x1b[1;5A", "\x1bOA", "\x1b[[A",
+      "\x1b\x1b[A", "\x1b[99;5u", "\x1b[<0;11;6M", "\x1b[<0;11;6m", "\x1b[M +&",
+      "\x1b[200~hi\x1b[201~", "\xC3\xA9", "\xC3(", "\xE3\x81\x82", "\x1b[12;40Rx",
+      "\x1b[[q", "\x1b[", "\xE0\x80a", "\xE3\x81",
+    ]:
+      let events = eventsBothWays(input)
+      check events.async.len > 0
+      check events.blocking == events.async
+
+  test "readKey joins a sequence split before its last byte":
+    proc assembles(input: string, want: proc(e: Event): bool): bool =
+      for _ in 0 ..< 5:
+        let p = redirectStdinFromPipe()
+        if p.saved == -1:
+          return true
+        let reader = newAsyncInputReader()
+        var writer: Thread[tuple[wfd: cint, data: string]]
+        try:
+          feedPipe(p, input[0 ..^ 2])
+          createThread(writer, delayedWriter, (p.wfd, input[^1 ..^ 1] & "x"))
+          let first = reader.readKey()
+          joinThread(writer)
+          let next = reader.readKey()
+          if want(first) and next.kind == EventKind.Key and next.key.char == "x":
+            return true
+        finally:
+          reader.closeAsyncInputReader()
+          restoreStdin(p)
+      false
+
+    proc isArrow(e: Event): bool =
+      e.kind == EventKind.Key and e.key.code == ArrowUp
+
+    proc isMousePress(e: Event): bool =
+      e.kind == EventKind.Mouse and e.mouse.x == 10 and e.mouse.y == 5
+
+    proc isChar(e: Event): bool =
+      e.kind == EventKind.Key and e.key.char == "\xE3\x81\x82"
+
+    check assembles("\x1b[A", isArrow)
+    check assembles("\x1b[<0;11;6M", isMousePress)
+    check assembles("\x1b[M +&", isMousePress)
+    check assembles("\xE3\x81\x82", isChar)
+
+  test "hasInput waits for input up to its timeout":
+    let p = redirectStdinFromPipe()
+    if p.saved != -1:
+      let reader = newAsyncInputReader()
+      var writer: Thread[tuple[wfd: cint, data: string]]
+      try:
+        check not reader.hasInput(0)
+        createThread(writer, delayedWriter, (p.wfd, "a"))
+        let ready = reader.hasInput(2000)
+        joinThread(writer)
+        check ready
+        check reader.readKey().key.char == "a"
+      finally:
+        reader.closeAsyncInputReader()
+        restoreStdin(p)
+
+  test "readKey reports a closed stdin once":
+    proc read() =
+      let reader = newAsyncInputReader()
+      try:
+        check reader.readKey().key.char == "a"
+        check reader.readKey().kind == InputClosed
+        check not reader.hasInput(0)
+      finally:
+        reader.closeAsyncInputReader()
+
+    withEndedStdin("a", read)

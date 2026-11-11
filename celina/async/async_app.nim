@@ -3,11 +3,12 @@
 ## This module provides the main AsyncApp type and async event loop
 ## implementation using either Chronos or std/asyncdispatch.
 
-import std/[options, monotimes, times, strformat]
+import std/[options, monotimes, times, strformat, deques]
 
 import async_backend, async_terminal, async_events, async_renderer
 from async_io import
-  AsyncInputReader, newAsyncInputReader, closeAsyncInputReader, isLive, isStdoutLocked
+  AsyncInputReader, newAsyncInputReader, closeAsyncInputReader, isLive, isStdoutLocked,
+  hasInput, hasPendingInput, ceilMs
 import
   ../core/[
     geometry, buffer, events, fps, config, tick_common, cursor, terminal,
@@ -43,6 +44,9 @@ type
       ## does not leak a selector fd) and closed in `runAsyncInner`'s
       ## cleanup so the selector/fd resources do not outlive the app
       ## instance.
+    typeahead: Deque[Event]
+      ## Events given back by `unreadEvents`; the loop dispatches them before
+      ## reading `inputReader`. Dropped when the run ends.
     config: AppConfig
     handlers: AsyncAppHandlers
     timings: AsyncAppTimings
@@ -367,7 +371,9 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
     let timeout = clampTimeout(rawTimeout, 1)
 
     # Poll for events with timeout - blocks until event arrives OR timeout expires
-    let eventsAvailable = await app.inputReader.pollEventsAsync(timeout)
+    var eventsAvailable = app.typeahead.len > 0
+    if not eventsAvailable:
+      eventsAvailable = await app.inputReader.pollEventsAsync(timeout)
 
     if not eventsAvailable and hasTimeout:
       # Check if enough idle time has passed to fire timeout handler
@@ -384,7 +390,11 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
       var eventCount = 0
 
       while eventCount < maxEventsPerTick:
-        let eventOpt = await app.inputReader.pollKeyAsync()
+        var eventOpt: Option[Event]
+        if app.typeahead.len > 0:
+          eventOpt = some(app.typeahead.popFirst())
+        else:
+          eventOpt = await app.inputReader.pollKeyAsync()
         if eventOpt.isSome():
           let event = eventOpt.get()
           eventCount.inc()
@@ -508,6 +518,7 @@ proc runAsyncInner(app: AsyncApp) {.async.} =
       app.terminalActive = false
       app.inputReader.closeAsyncInputReader()
       app.inputReader = nil
+      app.typeahead.clear()
       when hasChronos and defined(posix):
         removeSignalHandlers(app)
 
@@ -563,6 +574,50 @@ proc runAsync*(app: AsyncApp) {.async.} =
       app.runFuture = nil
   else:
     await runAsyncInner(app)
+
+proc readAvailableEvents*(app: AsyncApp, timeoutMs: int = 0): seq[Event] =
+  ## Take the input events that have arrived, without awaiting. For a handler
+  ## that keeps the loop waiting and must still watch input, such as one that
+  ## waits for a child process and stops it on Ctrl+C (a `Quit` event).
+  ##
+  ## Events given back by `unreadEvents` come first. When there are none,
+  ## waits up to `timeoutMs` for input. A sequence split by the link is waited
+  ## for as the loop does. The loop never sees the events taken: give back the
+  ## ones the handler does not act on with `unreadEvents`, once, after it stops
+  ## waiting. Events given back come back at once without the wait, so giving
+  ## them back on each turn of a polling loop spins it. Unrecognized sequences
+  ## are skipped. Empty outside `runAsync`.
+  ##
+  ## Call it only from a handler: from another task it can take bytes while the
+  ## loop is in the middle of reading a sequence.
+  if app.inputReader.isNil:
+    return
+  while app.typeahead.len > 0:
+    result.add app.typeahead.popFirst()
+  let deadline = getMonoTime() + initDuration(milliseconds = timeoutMs)
+  while true:
+    let left =
+      if result.len > 0:
+        0
+      else:
+        ceilMs(deadline - getMonoTime())
+    if not app.inputReader.hasInput(left):
+      break
+    let event = app.inputReader.readKey()
+    if event.kind != Unknown:
+      result.add event
+    elif left == 0 and not app.inputReader.hasPendingInput():
+      # A hung-up terminal can poll readable with no byte to read.
+      break
+
+proc unreadEvents*(app: AsyncApp, events: openArray[Event]) =
+  ## Give back events for the loop to dispatch next, in order: ahead of input
+  ## not yet read and of events given back before. Dropped when `runAsync`
+  ## returns; ignored outside it.
+  if app.inputReader.isNil:
+    return
+  for i in countdown(events.high, 0):
+    app.typeahead.addFirst(events[i])
 
 proc quit*(app: AsyncApp) =
   ## Signal the async application to quit gracefully

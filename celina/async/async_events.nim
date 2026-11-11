@@ -12,7 +12,9 @@ import
     geometry,
   ]
 
-const ByteWaitSliceMs = 2
+const
+  ByteWaitSliceMs = 2
+  EscapeWaitMs = 20 ## How long a lone ESC waits to be a sequence start.
 
 type
   AsyncEventError* = object of CatchableError
@@ -50,105 +52,146 @@ proc readNextByteAsync(reader: AsyncInputReader): Future[Option[char]] {.async.}
       return
     await sleepMs(ByteWaitSliceMs)
 
-proc parseMouseEventX10(reader: AsyncInputReader): Future[Event] {.async.} =
-  ## Parse X10 mouse format: ESC[Mbxy
-  ## where b is button byte, x,y are coordinate bytes
-  ##
-  ## This async function handles I/O and delegates parsing to shared mouse_logic module
-  var data: array[3, char]
+proc readNextByte(
+    reader: AsyncInputReader, waitMs: int = SequenceByteWaitMs
+): Option[char] =
+  ## Blocking `readNextByteAsync`, waiting up to `waitMs`.
+  let deadline = getMonoTime() + initDuration(milliseconds = waitMs)
+  while true:
+    result = reader.readCharNonBlocking()
+    if result.isSome or reader.isClosed:
+      return
+    let left = ceilMs(deadline - getMonoTime())
+    if left <= 0:
+      return
+    discard reader.hasDataAvailable(left)
 
-  # Read 3 bytes for X10 format (async I/O)
-  for i in 0 .. 2:
-    let next = await reader.readNextByteAsync()
-    if next.isNone:
-      return Event(kind: Unknown)
-    data[i] = next.get
+# The mouse and paste readers are templates over `nextByte`, an `Option[char]`
+# expression evaluated once per byte, so the async and the blocking reader share
+# them: the async one passes an `await` expression.
 
-  # Use shared parsing logic - no duplication with sync version!
-  return parseMouseDataX10(data).toEvent()
+template mouseX10From(nextByte: untyped): Event =
+  ## X10 mouse format after `ESC [ M`: button byte, then x and y bytes.
+  block:
+    var data: array[3, char]
+    var complete = true
+    for i in 0 .. 2:
+      let next = nextByte
+      if next.isNone:
+        complete = false
+        break
+      data[i] = next.get
+    if complete:
+      parseMouseDataX10(data).toEvent()
+    else:
+      Event(kind: Unknown)
 
-proc parseMouseEventSGR(reader: AsyncInputReader): Future[Event] {.async.} =
-  ## Parse SGR mouse format: ESC[<button;x;y;M/m
-  ## M for press, m for release
-  ##
-  ## This async function handles I/O and delegates parsing to shared mouse_logic module
-  var buffer: string
-  var ch: char
-  var readCount = 0
-
-  # Read until we get M or m, with safety limits (async I/O)
-  while readCount < MaxSGRMouseReadBytes:
-    let next = await reader.readNextByteAsync()
-    if next.isNone:
-      return Event(kind: Unknown)
-    ch = next.get
-    readCount.inc()
-    if ch == 'M' or ch == 'm':
-      break
-    buffer.add(ch)
-
-  if ch != 'M' and ch != 'm':
-    # If we didn't find a terminator, return unknown event. A terminator found on
-    # the MaxSGRMouseReadBytes-th byte is still valid, so guard on the terminator
-    # alone: if the loop instead exited at the byte limit, `ch` holds a
-    # non-terminator byte and this check rejects it anyway.
-    return Event(kind: Unknown)
-
-  # Parse the SGR format: button;x;y
-  let parts = buffer.split(';')
+proc sgrMouseEvent(params: string, isRelease: bool): Event =
+  ## The event of SGR mouse parameters `button;x;y`.
+  let parts = params.split(';')
   if parts.len >= 3:
     try:
       let buttonCode = parseInt(parts[0])
       let x = parseInt(parts[1]) - 1 # SGR uses 1-based coordinates
       let y = parseInt(parts[2]) - 1
-      let isRelease = (ch == 'm')
-
-      # Use shared parsing logic - no duplication with sync version!
       return parseMouseDataSGR(buttonCode, x, y, isRelease).toEvent()
     except ValueError:
       return Event(kind: Unknown)
+  Event(kind: Unknown)
 
-  return Event(kind: Unknown)
+template mouseSGRFrom(nextByte: untyped): Event =
+  ## SGR mouse format after `ESC [ <`: `button;x;y` then M (press) or m
+  ## (release).
+  block:
+    var params: string
+    var ch: char
+    var readCount = 0
+    var complete = true
+    while readCount < MaxSGRMouseReadBytes:
+      let next = nextByte
+      if next.isNone:
+        complete = false
+        break
+      ch = next.get
+      readCount.inc()
+      if ch == 'M' or ch == 'm':
+        break
+      params.add(ch)
+    # A terminator found on the MaxSGRMouseReadBytes-th byte is still valid; a
+    # loop that ran out leaves a non-terminator byte in `ch`.
+    if complete and (ch == 'M' or ch == 'm'):
+      sgrMouseEvent(params, ch == 'm')
+    else:
+      Event(kind: Unknown)
 
-# UTF-8 helper functions (using shared logic from utf8_utils module)
-#
-# This async version mirrors `assembleUtf8Char`'s logic but cannot reuse the
-# pure helper directly because each continuation-byte read must `await`. The
-# semantics — including the Unicode §3.9 leftover byte for invalid
-# continuations — are kept identical; see `assembleUtf8Char` for the contract.
+template pasteFrom(nextByte: untyped): string =
+  ## Bracketed paste content up to the end sequence ESC[201~, without it.
+  block:
+    var text = ""
+    var state = PesNone
+    var pending = ""
+    while true:
+      let next = nextByte
+      if next.isNone:
+        text.add(pending)
+        break
+      if stepPasteEnd(state, pending, next.get, text):
+        break
+    text
+
+proc parseMouseEventX10(reader: AsyncInputReader): Future[Event] {.async.} =
+  ## Parse X10 mouse format: ESC[Mbxy
+  return mouseX10From(await reader.readNextByteAsync())
+
+proc parseMouseEventSGR(reader: AsyncInputReader): Future[Event] {.async.} =
+  ## Parse SGR mouse format: ESC[<button;x;y;M/m
+  return mouseSGRFrom(await reader.readNextByteAsync())
+
+proc readMouseX10(reader: AsyncInputReader): Event =
+  ## Blocking `parseMouseEventX10`.
+  mouseX10From(reader.readNextByte())
+
+proc readMouseSGR(reader: AsyncInputReader): Event =
+  ## Blocking `parseMouseEventSGR`.
+  mouseSGRFrom(reader.readNextByte())
+
+template utf8From(firstByte: byte, nextByte: untyped): Utf8AssemblyResult =
+  ## `assembleUtf8Char` over `nextByte`, without its closure: a closure would
+  ## make every caller of the blocking reader raise `Exception`.
+  block:
+    let lead = firstByte
+    let byteLen = utf8ByteLength(lead)
+    var assembly = Utf8AssemblyResult(text: "", leftover: none(byte))
+    if byteLen == 1:
+      assembly.text = $char(lead)
+    elif byteLen > 1:
+      let (secondLo, secondHi) = utf8SecondByteRange(lead)
+      var continuationBytes: seq[byte]
+      for i in 1 ..< byteLen:
+        let next = nextByte
+        if next.isNone:
+          # Truncated: nothing to push back.
+          assembly.text = Utf8ReplacementChar
+          break
+        let b = next.get.byte
+        # The second byte must also stay inside the lead-byte range (no
+        # overlongs or surrogates); a rejected byte starts the next event.
+        if not isUtf8ContinuationByte(b) or (i == 1 and (b < secondLo or b > secondHi)):
+          assembly = Utf8AssemblyResult(text: Utf8ReplacementChar, leftover: some(b))
+          break
+        continuationBytes.add(b)
+      if assembly.text.len == 0:
+        assembly.text = buildUtf8String(lead, continuationBytes)
+    assembly
+
 proc readUtf8CharAsync(
     reader: AsyncInputReader, firstByte: byte
 ): Future[Utf8AssemblyResult] {.async.} =
-  let byteLen = utf8ByteLength(firstByte)
-  if byteLen == 0:
-    return Utf8AssemblyResult(text: "", leftover: none(byte))
+  return utf8From(firstByte, await reader.readNextByteAsync())
 
-  if byteLen == 1:
-    return Utf8AssemblyResult(text: $char(firstByte), leftover: none(byte))
-
-  var continuationBytes: seq[byte] = @[]
-  let (secondLo, secondHi) = utf8SecondByteRange(firstByte)
-  for i in 1 ..< byteLen:
-    let nextByte = await reader.readNextByteAsync()
-
-    if nextByte.isNone:
-      # Truncated: nothing to push back.
-      return Utf8AssemblyResult(text: Utf8ReplacementChar, leftover: none(byte))
-
-    let b = nextByte.get.byte
-    # As in `assembleUtf8Char`, the second byte must also stay inside the
-    # lead-byte-specific range so overlong encodings and surrogates are
-    # rejected; an out-of-range byte is surfaced as leftover for re-injection.
-    if not isUtf8ContinuationByte(b) or (i == 1 and (b < secondLo or b > secondHi)):
-      # Invalid continuation: surface the byte so readKeyAsync can re-inject
-      # it as the first byte of the next event.
-      return Utf8AssemblyResult(text: Utf8ReplacementChar, leftover: some(b))
-
-    continuationBytes.add(b)
-
-  return Utf8AssemblyResult(
-    text: buildUtf8String(firstByte, continuationBytes), leftover: none(byte)
-  )
+proc readUtf8Char(reader: AsyncInputReader, firstByte: byte): Utf8AssemblyResult =
+  ## Blocking `readUtf8CharAsync`.
+  utf8From(firstByte, reader.readNextByte())
 
 # Async escape sequence parsing
 # Uses the shared `parseEscapeSequenceUnified` template from core/events.
@@ -170,28 +213,53 @@ proc readDrainByteAsync(
   let next = await reader.readCharAsync()
   return (success: next.isSome, ch: next.get('\0'))
 
+proc readByteTuple(reader: AsyncInputReader): tuple[success: bool, ch: char] =
+  ## Blocking `readByteTupleAsync`.
+  let next = reader.readNextByte()
+  (success: next.isSome, ch: next.get('\0'))
+
+proc readDrainByte(reader: AsyncInputReader): tuple[success: bool, ch: char] =
+  ## Blocking `readDrainByteAsync`.
+  let next = reader.readCharNonBlocking()
+  (success: next.isSome, ch: next.get('\0'))
+
+proc readPasteByteAsync(reader: AsyncInputReader): Future[Option[char]] {.async.} =
+  ## The next byte of paste content, waiting up to `PasteByteWaitMs`.
+  if not (await reader.hasInputAsync(PasteByteWaitMs)):
+    return none(char)
+  return await reader.readCharAsync()
+
 proc readPasteContentAsync(reader: AsyncInputReader): Future[string] {.async.} =
   ## Read all content until paste end sequence ESC[201~ (async mode).
-  ## Uses the shared paste-end state machine from escape_sequence_logic;
-  ## differs from the sync versions only in how each byte is awaited.
-  var resultStr = ""
-  var state = PesNone
-  var pending = ""
+  return pasteFrom(await reader.readPasteByteAsync())
 
-  while true:
-    # Check for data with reasonable timeout
-    let hasData = await reader.hasInputAsync(PasteByteWaitMs)
-    if not hasData:
-      resultStr.add(pending)
-      return resultStr
+proc readPasteContent(reader: AsyncInputReader): string =
+  ## Blocking `readPasteContentAsync`.
+  pasteFrom(reader.readNextByte(PasteByteWaitMs))
 
-    let next = await reader.readCharAsync()
-    if next.isNone:
-      resultStr.add(pending)
-      return resultStr
+proc leadByteEvent(ch: char): Option[Event] =
+  ## The event the first byte of an event makes on its own: Ctrl+C (`Quit`), a
+  ## Ctrl combination, or Enter, Tab, Space or Backspace.
+  if ch == '\x03':
+    return some(Event(kind: Quit))
+  let ctrlLetterResult = mapCtrlLetterKey(ch)
+  if ctrlLetterResult.isCtrlKey:
+    return some(Event(kind: Key, key: ctrlLetterResult.keyEvent))
+  let ctrlNumberResult = mapCtrlNumberKey(ch)
+  if ctrlNumberResult.isCtrlKey:
+    return some(Event(kind: Key, key: ctrlNumberResult.keyEvent))
+  let basicKey = mapBasicKey(ch)
+  if basicKey.code in {Enter, Tab, Space, Backspace}:
+    return some(Event(kind: Key, key: basicKey))
 
-    if stepPasteEnd(state, pending, next.get, resultStr):
-      return resultStr
+proc charEvent(reader: AsyncInputReader, assembly: Utf8AssemblyResult): Event =
+  ## The key of an assembled UTF-8 character. A resync byte (Unicode §3.9) is
+  ## stashed as the first byte of the next event; an invalid start byte reads
+  ## as U+FFFD (KeyEvent.char invariant).
+  if assembly.leftover.isSome:
+    reader.setPendingByteAsync(assembly.leftover.get)
+  let text = if assembly.text.len > 0: assembly.text else: Utf8ReplacementChar
+  Event(kind: Key, key: KeyEvent(code: Char, char: text))
 
 # Async key reading with escape sequence support
 proc readKeyAsync*(reader: AsyncInputReader): Future[Event] {.async.} =
@@ -208,31 +276,15 @@ proc readKeyAsync*(reader: AsyncInputReader): Future[Event] {.async.} =
       return Event(kind: Unknown)
 
     let ch = next.get
-
-    # Handle Ctrl+C (quit signal)
-    if ch == '\x03':
-      return Event(kind: Quit)
-
-    # Handle Ctrl-letter combinations
-    let ctrlLetterResult = mapCtrlLetterKey(ch)
-    if ctrlLetterResult.isCtrlKey:
-      return Event(kind: Key, key: ctrlLetterResult.keyEvent)
-
-    # Handle Ctrl-number combinations
-    let ctrlNumberResult = mapCtrlNumberKey(ch)
-    if ctrlNumberResult.isCtrlKey:
-      return Event(kind: Key, key: ctrlNumberResult.keyEvent)
-
-    # Handle basic keys (Enter, Tab, Space, Backspace)
-    let basicKey = mapBasicKey(ch)
-    if basicKey.code in {Enter, Tab, Space, Backspace}:
-      return Event(kind: Key, key: basicKey)
+    let lead = leadByteEvent(ch)
+    if lead.isSome:
+      return lead.get
 
     # Handle escape sequences via the unified routing template.
-    # The 20ms post-ESC timeout check distinguishes standalone ESC from a
-    # sequence start; if no follow-up byte arrives, return a bare ESC.
+    # The post-ESC wait distinguishes standalone ESC from a sequence start; if
+    # no follow-up byte arrives, return a bare ESC.
     if ch == '\x1b':
-      let hasMoreData = await reader.hasInputAsync(20)
+      let hasMoreData = await reader.hasInputAsync(EscapeWaitMs)
       if not hasMoreData:
         return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
       return parseEscapeSequenceUnified(
@@ -245,16 +297,7 @@ proc readKeyAsync*(reader: AsyncInputReader): Future[Event] {.async.} =
       )
 
     # Handle regular UTF-8 characters
-    let assembly = await reader.readUtf8CharAsync(ch.byte)
-    if assembly.leftover.isSome:
-      # Resync byte: stash for the next readCharAsync to pick up as the
-      # first byte of the next event (Unicode §3.9 best practice).
-      reader.setPendingByteAsync(assembly.leftover.get)
-    if assembly.text.len > 0:
-      return Event(kind: Key, key: KeyEvent(code: Char, char: assembly.text))
-    else:
-      # Invalid UTF-8 start byte — emit U+FFFD (KeyEvent.char invariant).
-      return Event(kind: Key, key: KeyEvent(code: Char, char: Utf8ReplacementChar))
+    return reader.charEvent(await reader.readUtf8CharAsync(ch.byte))
   except CancelledError as e:
     # Must precede `except CatchableError` so chronos cancellation propagates
     # to the caller instead of being wrapped into AsyncEventError.
@@ -285,6 +328,35 @@ proc pollKeyAsync*(reader: AsyncInputReader): Future[Option[Event]] {.async.} =
     raise e
   except CatchableError as e:
     raise newException(AsyncEventError, "Async key polling failed: " & e.msg)
+
+proc readKey*(reader: AsyncInputReader): Event =
+  ## Blocking `readKeyAsync`, for code that cannot await. Like `readKeyAsync`,
+  ## it waits for the rest of a sequence split by the link, but not for the
+  ## first byte: without input it returns `Unknown` at once (see `hasInput`).
+  let next = reader.readCharNonBlocking()
+  if next.isNone:
+    if reader.takeCloseNotice():
+      return Event(kind: InputClosed)
+    return Event(kind: Unknown)
+
+  let ch = next.get
+  let lead = leadByteEvent(ch)
+  if lead.isSome:
+    return lead.get
+
+  if ch == '\x1b':
+    if not reader.hasInput(EscapeWaitMs):
+      return Event(kind: Key, key: KeyEvent(code: Escape, char: "\x1b"))
+    return parseEscapeSequenceUnified(
+      reader.readByteTuple(),
+      reader.readPasteContent(),
+      reader.readMouseX10(),
+      reader.readMouseSGR(),
+      reader.unreadInput,
+      reader.readDrainByte(),
+    )
+
+  reader.charEvent(reader.readUtf8Char(ch.byte))
 
 # Event polling with timeout
 proc pollEventsAsync*(

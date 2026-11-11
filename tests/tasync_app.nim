@@ -5,7 +5,7 @@ import std/[unittest, options]
 import ../celina/async/async_backend
 
 when hasAsyncSupport:
-  import std/[strutils, importutils, monotimes]
+  import std/[strutils, importutils, monotimes, deques]
   from std/times import initDuration, inMilliseconds, `<`
   from ../celina/async/async_io import
     newAsyncInputReader, closeAsyncInputReader, withStdoutLock
@@ -2070,6 +2070,135 @@ when hasAsyncSupport:
           check drawn
           check "formatting" in output
           check "saved" in output
+
+    suite "AsyncApp readAvailableEvents":
+      privateAccess(AsyncApp)
+
+      proc keys(events: openArray[Event]): string =
+        for event in events:
+          result.add(
+            if event.kind == EventKind.Key:
+              event.key.char
+            else:
+              "<" & $event.kind & ">"
+          )
+
+      proc runWithInput(
+          input: string, handler: proc(event: Event, app: AsyncApp): EventResult
+      ) =
+        proc runOnce() =
+          discard captureStdout(
+            proc() =
+              let app = newAsyncApp(
+                AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+              )
+              app.onEventAsync proc(
+                  event: Event, app: AsyncApp
+              ): Future[EventResult] {.async.} =
+                {.cast(gcsafe).}:
+                  {.cast(raises: []).}:
+                    return handler(event, app)
+              waitFor app.runAsync()
+          )
+
+        withStdinInput(input, runOnce)
+
+      test "a handler takes the input that came after its event":
+        var dispatched, taken: string
+        runWithInput(
+          "abc\x03",
+          proc(event: Event, app: AsyncApp): EventResult =
+            dispatched.add keys([event])
+            taken.add keys(app.readAvailableEvents())
+            erQuit,
+        )
+        check dispatched == "a"
+        check taken == "bc<Quit>"
+
+      test "an unrecognized sequence does not end the take":
+        var taken: string
+        runWithInput(
+          "a\x1b[999~\x03",
+          proc(event: Event, app: AsyncApp): EventResult =
+            taken.add keys(app.readAvailableEvents())
+            erQuit,
+        )
+        check taken == "<Quit>"
+
+      test "an async handler calls it without a raises cast":
+        var dispatched: string
+        proc runOnce() =
+          discard captureStdout(
+            proc() =
+              var seen: string
+              let app = newAsyncApp(
+                AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+              )
+              app.onEventAsync proc(
+                  event: Event, app: AsyncApp
+              ): Future[EventResult] {.async.} =
+                seen.add keys([event])
+                app.unreadEvents(app.readAvailableEvents(10))
+                seen.add keys(app.readAvailableEvents())
+                return erQuit
+              waitFor app.runAsync()
+              dispatched = seen
+          )
+
+        withStdinInput("ab", runOnce)
+        check dispatched == "ab"
+
+      test "events given back go ahead of those given back before and of input":
+        proc key(c: string): Event =
+          Event(kind: Key, key: KeyEvent(code: Char, char: c))
+
+        var dispatched: string
+        runWithInput(
+          "abc",
+          proc(event: Event, app: AsyncApp): EventResult =
+            dispatched.add keys([event])
+            if event.key.char == "a":
+              app.unreadEvents([key("z")])
+              app.unreadEvents([key("x"), key("y")])
+            if event.key.char == "c": erQuit else: erContinue,
+        )
+        check dispatched == "axyzbc"
+
+      test "events given back come first from readAvailableEvents":
+        var taken: string
+        runWithInput(
+          "ab",
+          proc(event: Event, app: AsyncApp): EventResult =
+            app.unreadEvents([Event(kind: Key, key: KeyEvent(code: Char, char: "z"))])
+            taken.add keys(app.readAvailableEvents())
+            erQuit,
+        )
+        check taken == "zb"
+
+      test "events given back are dropped when the run ends":
+        var app: AsyncApp
+        proc runOnce() =
+          discard captureStdout(
+            proc() =
+              app = newAsyncApp(
+                AppConfig(alternateScreen: false, rawMode: false, targetFps: 60)
+              )
+              app.onEventAsync proc(
+                  event: Event, app: AsyncApp
+              ): Future[EventResult] {.async.} =
+                app.unreadEvents([event])
+                return erQuit
+              waitFor app.runAsync()
+          )
+
+        withStdinInput("a", runOnce)
+        check app.typeahead.len == 0
+
+      test "outside a run it takes and gives back nothing":
+        let app = newAsyncApp(AppConfig(alternateScreen: false, rawMode: false))
+        app.unreadEvents([Event(kind: Key, key: KeyEvent(code: Char, char: "z"))])
+        check app.typeahead.len == 0
+        check app.readAvailableEvents(10).len == 0
 
   {.pop.}
 else:

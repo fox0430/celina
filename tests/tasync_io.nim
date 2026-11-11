@@ -1,7 +1,7 @@
 # Test suite for async_io module
 #
 import std/[unittest, posix, deques, importutils, options, termios]
-from std/times import epochTime
+from std/times import epochTime, initDuration
 
 import ../celina/async/async_backend
 import ../celina/async/async_io {.all.}
@@ -547,6 +547,17 @@ suite "AsyncInputReader Non-Blocking Operations":
     check reader2 != nil
     reader1.closeAsyncInputReader()
     reader2.closeAsyncInputReader()
+
+suite "ceilMs":
+  test "rounds a partial millisecond up":
+    check ceilMs(initDuration(nanoseconds = 1)) == 1
+    check ceilMs(initDuration(microseconds = 999)) == 1
+    check ceilMs(initDuration(milliseconds = 2)) == 2
+    check ceilMs(initDuration(nanoseconds = 2_000_001)) == 3
+
+  test "is 0 once the time has passed":
+    check ceilMs(initDuration()) == 0
+    check ceilMs(initDuration(milliseconds = -3)) == 0
 
 suite "AsyncInputReader end of input":
   test "a polling-mode reader reads to the end of a pipe that only hangs up":
