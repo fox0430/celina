@@ -535,6 +535,96 @@ suite "Screen state: cursor style reset":
     check state.cursorStyle == SteadyBar
     check state.takeCursorReset() == CursorStyleDefault
 
+  test "after a cut frame with a style, the default is sent again":
+    var state = knownScreen(4, 2)
+    state.present(barRequest(), swPartial)
+    let back = state.planFrame(newBuffer(4, 2), cursorAt(0, 0), false)
+    check CursorStyleDefault in back.bytes
+
+  test "after a cut frame back to the default, the style is sent again":
+    var state = knownScreen(4, 2)
+    state.present(barRequest(), swAll)
+    state.present(cursorAt(0, 0), swPartial)
+    check state.cursorStyle == SteadyBar
+    let again = state.planFrame(newBuffer(4, 2), barRequest(), false)
+    check getCursorStyleSeq(SteadyBar) in again.bytes
+
+  test "a resent style that went out in full is known again":
+    var state = knownScreen(4, 2)
+    state.present(barRequest(), swAll)
+    state.present(cursorAt(0, 0), swPartial)
+    state.present(barRequest(), swAll)
+    check state.cursorStyle == SteadyBar
+    let next = state.planFrame(newBuffer(4, 2), barRequest(), false)
+    check getCursorStyleSeq(SteadyBar) notin next.bytes
+
+  test "a resend that did not go out leaves the style unknown":
+    var state = knownScreen(4, 2)
+    state.present(barRequest(), swAll)
+    state.invalidate(cursorStyle = true)
+    state.present(barRequest(), swNone)
+    let next = state.planFrame(newBuffer(4, 2), barRequest(), false)
+    check getCursorStyleSeq(SteadyBar) in next.bytes
+
+  test "an invalidate during the write keeps the style unknown":
+    var state = knownScreen(4, 2)
+    let frame = newBuffer(4, 2)
+    let plan = state.planFrame(frame, barRequest(), false)
+    state.markSent(plan)
+    state.invalidate(cursorStyle = true)
+    state.finish(plan, frame, swAll)
+    let next = state.planFrame(newBuffer(4, 2), barRequest(), false)
+    check getCursorStyleSeq(SteadyBar) in next.bytes
+
+  test "a reset during the write does not hide the frame's style":
+    var state = knownScreen(4, 2)
+    let frame = newBuffer(4, 2)
+    let plan = state.planFrame(frame, barRequest(), false)
+    state.markSent(plan)
+    discard state.takeCursorReset()
+    state.finish(plan, frame, swAll)
+    check state.cursorReset() == CursorStyleDefault
+
+  test "a cut frame without a style keeps the style known":
+    var state = knownScreen(4, 2)
+    state.present(barRequest(), swAll)
+    state.present(barRequest(), swPartial)
+    let next = state.planFrame(newBuffer(4, 2), barRequest(), false)
+    check getCursorStyleSeq(SteadyBar) notin next.bytes
+
+  test "an unknown style sends the style again":
+    var state = knownScreen(4, 2)
+    state.present(barRequest(), swAll)
+    state.invalidate(cursorStyle = true)
+    let plan = state.planFrame(newBuffer(4, 2), barRequest(), false)
+    check getCursorStyleSeq(SteadyBar) in plan.bytes
+    check plan.appliedStyle(swAll) == SteadyBar
+
+  test "an unknown style sends the default only while a reset is owed":
+    var state = knownScreen(4, 2)
+    state.invalidate(cursorStyle = true)
+    let plan = state.planFrame(newBuffer(4, 2), cursorAt(0, 0), false)
+    check CursorStyleDefault notin plan.bytes
+
+  test "a hidden cursor sends no style while it is unknown":
+    var state = knownScreen(4, 2)
+    state.present(barRequest(), swAll)
+    state.invalidate(cursorStyle = true)
+    var hidden = barRequest()
+    hidden.visible = false
+    let plan = state.planFrame(newBuffer(4, 2), hidden, false)
+    check getCursorStyleSeq(SteadyBar) notin plan.bytes
+    state.present(hidden, swAll)
+    let next = state.planFrame(newBuffer(4, 2), barRequest(), false)
+    check getCursorStyleSeq(SteadyBar) in next.bytes
+
+  test "a cut reset leaves the style unknown":
+    var state = knownScreen(4, 2)
+    state.present(barRequest(), swAll)
+    state.recordCursorReset(swPartial)
+    let back = state.planFrame(newBuffer(4, 2), cursorAt(0, 0), false)
+    check CursorStyleDefault in back.bytes
+
 suite "Screen state: inline viewport":
   test "a viewport change marks the screen unknown":
     var state = knownScreen(4, 2)

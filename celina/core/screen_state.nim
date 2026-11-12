@@ -50,6 +50,7 @@ type
     exitArmed: bool ## inline: `takeExitMove` still has to move below the viewport
     cursorStyle: CursorStyle ## the style the last cursor frame applied in full
     styleSent: bool ## a non-default DECSCUSR may have gone out since the last reset
+    styleUnknown: bool ## a cut write or an off-model one: `cursorStyle` may be wrong
 
   CursorRequest* = object
     enabled*: bool ## false for the paths that leave the cursor alone
@@ -75,6 +76,7 @@ type
     kind*: PlanKind
     epoch: int ## `ScreenState.epoch` when the plan was made
     newStyle, lastStyle: CursorStyle
+    setsStyle: bool ## the bytes carry a DECSCUSR
     clearedSize: Size ## pkClear: the size of the blank `lastBuffer`
     staging: Staging ## pkFrame: how `stage` adopted the frame before the write
     cursorRow: int ## inline: the cursor's row after the write; -1 = not tracked
@@ -120,11 +122,15 @@ proc known*(s: ScreenState): bool {.inline.} =
   ## Whether `lastBuffer` is what the screen shows.
   s.known
 
-proc invalidate*(s: var ScreenState) =
+proc invalidate*(s: var ScreenState, cursorStyle = false) =
   ## Mark unknown so the next frame is a full render. For off-model writes
   ## (free `clearScreen`, `renderCell`, another program) and forced frames.
+  ## `cursorStyle`, for off-model writes, also makes the next cursor frame send
+  ## its style again, `CursorStyle.Default` only while a reset is owed.
   s.known = false
   inc s.epoch
+  if cursorStyle:
+    s.styleUnknown = true
 
 proc isInline*(s: ScreenState): bool {.inline.} =
   ## Whether the viewport is inline.
@@ -231,15 +237,17 @@ proc cursorResetOwed*(s: ScreenState): bool {.inline.} =
 proc markSent*(s: var ScreenState, plan: FramePlan) =
   ## Call before writing `plan`: a restore from a signal that cuts the frame
   ## still knows a non-default DECSCUSR may be out.
-  if plan.newStyle != plan.lastStyle and plan.newStyle != CursorStyle.Default:
+  if plan.setsStyle and plan.newStyle != CursorStyle.Default:
     s.styleSent = true
 
 proc recordCursorReset*(s: var ScreenState, outcome: StreamWrite) =
   ## Record the hand back: the next run or resume sends the app's style again.
-  ## A reset that did not go out in full stays owed, for a later cleanup.
+  ## A reset that did not go out in full stays owed, for a later cleanup, and
+  ## leaves the style unknown.
   if outcome == swAll:
     s.styleSent = false
   s.cursorStyle = CursorStyle.Default
+  s.styleUnknown = outcome != swAll
 
 template writeCursorReset*(s: var ScreenState, write: untyped) =
   ## Write `cursorReset` with `write`, an expression over the injected `bytes`
@@ -278,10 +286,15 @@ proc planFrame*(
     # equal to the style can be stale after a hand back, so it is not used.
     if cursor.lastStyle.isSome and cursor.lastStyle.get != cursor.style:
       result.lastStyle = cursor.lastStyle.get
-    result.newStyle = appendCursorCommands(
-      result.bytes, cursor.x, cursor.y, shown, cursor.style, result.lastStyle,
-      s.originRow,
+    # `\e[0 q` prints a stray `q` on the Linux console: resend the default
+    # only while a reset is owed.
+    let send =
+      cursor.style != result.lastStyle or
+      (s.styleUnknown and (cursor.style != CursorStyle.Default or s.styleSent))
+    result.setsStyle = appendCursorCommands(
+      result.bytes, cursor.x, cursor.y, shown, cursor.style, send, s.originRow
     )
+    result.newStyle = if result.setsStyle: cursor.style else: result.lastStyle
   else:
     result.newStyle = result.lastStyle
   if s.inline and result.bytes.len > 0:
@@ -330,10 +343,20 @@ proc stage*(s: var ScreenState, plan: var FramePlan, buffer: var Buffer) =
 proc applyOutcome(s: var ScreenState, plan: FramePlan, outcome: StreamWrite) =
   ## The `known`, `epoch`, cursor row and cursor style half of `finish`,
   ## shared by every variant.
-  if plan.newStyle != plan.lastStyle and outcome == swAll:
-    s.cursorStyle = plan.newStyle
-    if plan.newStyle == CursorStyle.Default:
-      s.styleSent = false
+  if plan.setsStyle:
+    case outcome
+    of swAll:
+      s.cursorStyle = plan.newStyle
+      # An `invalidate` during the write may have been an off-model style.
+      if s.epoch == plan.epoch:
+        s.styleUnknown = false
+      # Set again: a reset during the write may have cleared it.
+      s.styleSent = plan.newStyle != CursorStyle.Default
+    of swPartial:
+      # The DECSCUSR may or may not have gone out.
+      s.styleUnknown = true
+    of swNone:
+      discard
   if plan.cursorRow >= 0 and outcome != swNone:
     s.cursorRow = if outcome == swAll: plan.cursorRow else: 0
   if outcome == swPartial:

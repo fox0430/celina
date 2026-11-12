@@ -928,24 +928,22 @@ proc appendCursorCommands*(
     cursorX, cursorY: int,
     cursorVisible: bool,
     cursorStyle: CursorStyle,
-    lastCursorStyle: CursorStyle,
+    sendStyle: bool,
     originRow: int = 0,
-): CursorStyle =
-  ## Append the cursor commands to `output` and return the cursor style the
-  ## terminal now shows: `lastCursorStyle`, unless a new DECSCUSR went out (so
-  ## it is sent again after a frame that did not go out in full).
+): bool =
+  ## Append the cursor commands to `output`, with the DECSCUSR for
+  ## `cursorStyle` if `sendStyle` and the cursor is shown, and return whether
+  ## that DECSCUSR was appended.
   ## `cursorY` is a buffer row; `originRow` is the screen row of row 0.
   ##
   ## Shared by `buildOutputWithCursor` and the screen state's `planFrame`, so
   ## the cursor bytes are built in one place. Call this before the caller wraps
   ## `output`: appending after the wrap leaves the cursor bytes outside the
   ## synchronized output block. `planFrame` is the reference order.
-  result = lastCursorStyle
   if showsCursor(cursorX, cursorY, cursorVisible):
-    # Only apply cursor style if it has changed to avoid interrupting blinking
-    if cursorStyle != lastCursorStyle:
+    if sendStyle:
       output.add(getCursorStyleSeq(cursorStyle))
-      result = cursorStyle
+      result = true
     output.add(ShowCursorSeq)
     output.add(makeCursorPositionSeq(cursorX, originRow + cursorY))
   else:
@@ -976,10 +974,13 @@ proc buildOutputWithCursor*(
     # Use differential rendering
     result.output = buildDifferentialOutput(oldBuffer, newBuffer)
 
-  # Then append cursor commands to the same output string
-  result.newLastCursorStyle = appendCursorCommands(
-    result.output, cursorX, cursorY, cursorVisible, cursorStyle, lastCursorStyle
+  # Then append cursor commands to the same output string. Only a changed
+  # style is sent, so blinking is not interrupted.
+  let changed = cursorStyle != lastCursorStyle
+  let sent = appendCursorCommands(
+    result.output, cursorX, cursorY, cursorVisible, cursorStyle, changed
   )
+  result.newLastCursorStyle = if sent: cursorStyle else: lastCursorStyle
 
 proc supportsAnsi*(): bool =
   ## Check if terminal supports ANSI escape sequences

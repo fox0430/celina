@@ -66,8 +66,10 @@ proc invalidate*(terminal: AsyncTerminal) =
   ## Mark the screen unknown, so the next frame is a full render. Call it
   ## after writing to the screen behind celina's back: the free
   ## `clearScreenAsync()`, `clearLineAsync` and `renderCellAsync`, or another
-  ## program taking the terminal (`suspendAsync` does it for you).
-  terminal.screen.invalidate()
+  ## program taking the terminal (`suspendAsync` does it for you). The next
+  ## `drawWithCursorAsync` also sends its cursor style again,
+  ## `CursorStyle.Default` only if a frame may have left another style.
+  terminal.screen.invalidate(cursorStyle = true)
 
 proc getTerminalSizeAsync*(): Size {.inline.} =
   ## Get current terminal size
@@ -410,7 +412,8 @@ proc moveCursorAsync*(dx, dy: int) {.async.} =
 
 proc setCursorStyleAsync*(style: CursorStyle) {.async.} =
   ## Set cursor appearance style asynchronously. Not tracked, like the sync
-  ## `setCursorStyle`.
+  ## `setCursorStyle`: when drawing through celina, pass the style to
+  ## `drawWithCursorAsync` or `app.setCursorStyle` instead.
   await tryWriteAsync(getCursorStyleSeq(style))
   await sleepMs(0)
 
@@ -929,9 +932,9 @@ proc resumeAsync*(terminal: AsyncTerminal, reader: AsyncInputReader = nil) {.asy
   # Another program had the terminal, so whatever it showed is not
   # `lastBuffer`. Marked again rather than only in `suspendAsync`: a frame
   # drawn while the terminal was handed over would otherwise put the screen
-  # back to known, and the epoch bump also stops a frame in flight across this
-  # point from claiming the screen.
-  terminal.screen.invalidate()
+  # and the cursor style back to known, and the epoch bump also stops a frame
+  # in flight across this point from claiming the screen.
+  terminal.screen.invalidate(cursorStyle = true)
 
   # Another program had the terminal and may have left a sequence or an OSC 8
   # link open, may have left attributes set, or may have left a synchronized
@@ -1000,9 +1003,9 @@ proc drawWithCursorAsync*(
   ## Output is automatically wrapped with synchronized output sequences (DEC mode 2026)
   ## to prevent flickering on supported terminals.
   ##
-  ## The style is sent only when the terminal does not show it
-  ## (`shownCursorStyle`, checked under the stdout lock), as in the sync
-  ## `Terminal.drawWithCursor`.
+  ## The style is sent when the terminal does not show it
+  ## (`shownCursorStyle`, checked under the stdout lock), and again after the
+  ## events the sync `Terminal.drawWithCursor` lists.
   ##
   ## The buffer's contents are preserved across the call (copy semantics). For a
   ## zero-copy renderer-owned hot path, use `drawWithCursorAdoptAsync`.
