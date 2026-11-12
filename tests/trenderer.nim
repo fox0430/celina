@@ -357,3 +357,15 @@ suite "Renderer Module Tests":
           rend.render()
       )
       check getCursorStyleSeq(SteadyBar) in output
+
+    test "a render keeps the deprecated lastStyle up to date":
+      let term = newTerminal()
+      let rend = newRenderer(term)
+      rend.resize(4, 2)
+      rend.setCursorStyle(SteadyBar)
+      rend.showCursorAt(0, 0)
+      discard captureStdout(
+        proc() =
+          rend.render()
+      )
+      check rend.getCursorManager().getState().lastStyle == SteadyBar

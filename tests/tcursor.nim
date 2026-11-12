@@ -72,6 +72,7 @@ suite "Cursor Module Tests":
       manager.setStyle(CursorStyle.SteadyBlock)
       check manager.getStyle() == CursorStyle.SteadyBlock
 
+    {.push warning[Deprecated]: off.}
     test "Style change detection":
       let manager = newCursorManager()
       check manager.styleChanged() == false
@@ -116,6 +117,8 @@ suite "Cursor Module Tests":
       manager.setStyle(CursorStyle.SteadyBar)
       manager.setStyle(CursorStyle.SteadyBlock)
       check manager.styleChanged() == false
+
+    {.pop.}
 
   suite "State Management":
     test "Get full cursor state":

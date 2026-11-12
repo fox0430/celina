@@ -55,7 +55,10 @@ type
     enabled*: bool ## false for the paths that leave the cursor alone
     x*, y*: int
     visible*: bool
-    style*, lastStyle*: CursorStyle
+    style*: CursorStyle
+    lastStyle*: Option[CursorStyle]
+      ## The caller's own record, for the deprecated `lastCursorStyle`
+      ## overloads; `none` compares with the style the terminal shows.
 
   PlanKind* = enum
     pkFrame ## a frame: a full render or a diff against `lastBuffer`
@@ -93,6 +96,14 @@ const noCursor* = CursorRequest()
   ## The request of a path that leaves the cursor alone (`draw`, the low-level
   ## `render`): no cursor commands, and the tracked style does not change. In
   ## an inline viewport a frame still ends with the cursor at the origin.
+
+proc cursorRequest*(
+    x, y: int, visible: bool, style: CursorStyle, lastStyle = none(CursorStyle)
+): CursorRequest {.inline.} =
+  ## The request of a `drawWithCursor` path.
+  CursorRequest(
+    enabled: true, x: x, y: y, visible: visible, style: style, lastStyle: lastStyle
+  )
 
 proc lastBuffer*(s: var ScreenState): var Buffer {.inline.} =
   ## The frame the terminal shows while the screen is known. Writable, as in
@@ -252,7 +263,7 @@ proc planFrame*(
   ## `wrap` adds DEC 2026 sync output (and `srSyncEnd` to `onPartial`); pass
   ## false when unwrapped or app-managed. Cursor commands go inside the wrap.
   result.epoch = s.epoch
-  result.lastStyle = cursor.lastStyle
+  result.lastStyle = s.cursorStyle
   result.cursorRow = -1
   if not s.known or needsFullRender(s.lastBuffer, buffer, false):
     result.bytes = buildFullRenderOutput(buffer, s.originRow, s.inline)
@@ -263,16 +274,16 @@ proc planFrame*(
     cursor.enabled and showsCursor(cursor.x, cursor.y, cursor.visible) and
     (not s.inline or cursor.y < buffer.area.height)
   if cursor.enabled:
-    # A caller's `lastStyle` can be stale after a hand back reset the style, so
-    # the style is also sent when the terminal does not show it.
-    if cursor.style == cursor.lastStyle:
-      result.lastStyle = s.cursorStyle
+    # A deprecated caller's `lastStyle` that differs also sends the style. One
+    # equal to the style can be stale after a hand back, so it is not used.
+    if cursor.lastStyle.isSome and cursor.lastStyle.get != cursor.style:
+      result.lastStyle = cursor.lastStyle.get
     result.newStyle = appendCursorCommands(
       result.bytes, cursor.x, cursor.y, shown, cursor.style, result.lastStyle,
       s.originRow,
     )
   else:
-    result.newStyle = cursor.lastStyle
+    result.newStyle = result.lastStyle
   if s.inline and result.bytes.len > 0:
     if shown:
       result.cursorRow = cursor.y

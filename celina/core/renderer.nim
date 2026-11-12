@@ -42,6 +42,13 @@ proc clear*(renderer: Renderer) =
   ## Clear the buffer
   renderer.buffer.clear()
 
+{.push warning[Deprecated]: off.}
+proc keepLastStyle(renderer: Renderer) =
+  ## Keep the deprecated `CursorManager.lastStyle` up to date until its removal.
+  renderer.cursorManager.setLastStyle(renderer.terminal.shownCursorStyle)
+
+{.pop.}
+
 proc render*(renderer: Renderer, force: bool = false) =
   ## Render the buffer to terminal with cursor support
   let cursorState = renderer.cursorManager.getState()
@@ -49,18 +56,15 @@ proc render*(renderer: Renderer, force: bool = false) =
   # Zero-copy: the renderer owns `buffer` and re-fills it every frame (App.render
   # calls renderer.clear() first), so we use the adopt variant which swaps the
   # rendered content into the terminal's lastBuffer instead of deep-copying.
-  let newLastStyle = renderer.terminal.drawWithCursorAdopt(
+  renderer.terminal.drawWithCursorAdopt(
     renderer.buffer,
     cursorState.x,
     cursorState.y,
     cursorState.visible,
     cursorState.style,
-    renderer.terminal.shownCursorStyle,
     force = force,
   )
-
-  # Update cursor manager with the new last style from render
-  renderer.cursorManager.setLastStyle(newLastStyle)
+  renderer.keepLastStyle()
 
 proc renderDiff*(renderer: Renderer) =
   ## Render only the differences from last frame

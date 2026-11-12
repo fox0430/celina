@@ -429,3 +429,23 @@ when hasAsyncSupport:
             waitFor rend.renderAsync()
         )
         check getCursorStyleSeq(SteadyBar) in output
+
+      test "a render keeps the deprecated lastStyle up to date":
+        let term = newAsyncTerminal()
+        let rend = newAsyncRenderer(term)
+        rend.resize(4, 2)
+        rend.setCursorStyle(SteadyBar)
+        rend.showCursorAt(0, 0)
+        discard captureStdout(
+          proc() =
+            waitFor rend.renderAsync()
+        )
+        check rend.getCursorManager().getState().lastStyle == SteadyBar
+        rend.setCursorStyle(BlinkingBar)
+        var drawn = false
+        discard captureStdout(
+          proc() =
+            drawn = rend.render()
+        )
+        check drawn
+        check rend.getCursorManager().getState().lastStyle == BlinkingBar
