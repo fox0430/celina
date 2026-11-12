@@ -106,7 +106,7 @@ suite "Terminal Common Module Tests":
 
     test "appendCursorCommands offsets the cursor row by the origin":
       var output = ""
-      discard appendCursorCommands(output, 3, 2, true, Default, Default, originRow = 10)
+      discard appendCursorCommands(output, 3, 2, true, Default, false, originRow = 10)
       check output == ShowCursorSeq & makeCursorPositionSeq(3, 12)
 
     test "buildOutputWithCursor with hidden cursor":

@@ -59,15 +59,19 @@ proc shownCursorStyle*(terminal: Terminal): CursorStyle {.inline.} =
   ## applied it. `CursorStyle.Default` again after `cleanup` and `suspend`,
   ## which put a changed style back, so a non-default style is sent again
   ## after a resume or a rerun. A style another program left while suspended
-  ## is not undone for an app that uses `CursorStyle.Default`.
+  ## is not undone for an app that uses `CursorStyle.Default`. After
+  ## `invalidate`, `resume` or a frame that did not go out in full it may be
+  ## stale: the next frame sends its style even when it equals this one.
   terminal.screen.cursorStyle
 
 proc invalidate*(terminal: Terminal) =
   ## Mark the screen unknown, so the next frame is a full render. Call it
   ## after writing to the screen behind celina's back: the free
   ## `clearScreen()`, `clearLine` and `renderCell`, or another program taking
-  ## the terminal (`suspend` does it for you).
-  terminal.screen.invalidate()
+  ## the terminal (`suspend` does it for you). The next `drawWithCursor` also
+  ## sends its cursor style again, `CursorStyle.Default` only if a frame may
+  ## have left another style.
+  terminal.screen.invalidate(cursorStyle = true)
 
 proc getTerminalSize*(): Size =
   ## Get current terminal size with error handling
@@ -387,7 +391,9 @@ proc moveCursor*(dx, dy: int) =
 
 proc setCursorStyle*(style: CursorStyle) =
   ## Set cursor appearance style. Not tracked: `cleanup` and `suspend` put
-  ## back only a style set through `drawWithCursor` or a `Renderer`.
+  ## back only a style set through `drawWithCursor` or a `Renderer`, and a
+  ## later frame may leave this style in place. When drawing through celina,
+  ## pass the style to `drawWithCursor` or `app.setCursorStyle` instead.
   tryWrite(getCursorStyleSeq(style))
 
 # Screen control
@@ -724,10 +730,10 @@ proc resume*(terminal: Terminal) =
 
   # Another program had the terminal, so whatever it showed is not
   # `lastBuffer`. Marked again rather than only in `suspend`: a frame drawn
-  # while the terminal was handed over would otherwise put the screen back to
-  # known, and the epoch bump also stops a frame in flight across this point
-  # from claiming the screen.
-  terminal.screen.invalidate()
+  # while the terminal was handed over would otherwise put the screen and the
+  # cursor style back to known, and the epoch bump also stops a frame in flight
+  # across this point from claiming the screen.
+  terminal.screen.invalidate(cursorStyle = true)
 
   # Another program had the terminal and may have left a sequence or an OSC 8
   # link open, may have left attributes set, or may have left a synchronized
@@ -814,8 +820,9 @@ proc drawWithCursor*(
   ##
   ## The style is sent only when the terminal does not show it
   ## (`shownCursorStyle`), so an unchanged style does not interrupt blinking.
-  ## After a frame that did not go out in full, `suspend` or `cleanup`, the
-  ## next frame sends it again.
+  ## After a frame that did not go out in full, `suspend`, `cleanup` or
+  ## `invalidate`, the next frame sends it again; `CursorStyle.Default` only if
+  ## a frame may have left another style.
   ##
   ## The buffer's contents are preserved across the call (copy semantics). For a
   ## zero-copy renderer-owned hot path, use `drawWithCursorAdopt` instead.

@@ -944,6 +944,39 @@ suite "Terminal Module Tests":
       )
       check CursorStyleDefault notin output
 
+    test "a style drawn while suspended is sent again after resume":
+      let terminal = knownScreenTerminal(4, 2)
+      discard captureStdout(
+        proc() =
+          terminal.suspend()
+          terminal.drawBar()
+          terminal.resume()
+      )
+      let output = captureStdout(
+        proc() =
+          terminal.drawBar()
+      )
+      check getCursorStyleSeq(SteadyBar) in output
+
+    test "invalidate makes the next frame send the style again":
+      let terminal = knownScreenTerminal(4, 2)
+      let output = captureStdout(
+        proc() =
+          terminal.drawBar()
+          terminal.invalidate()
+          terminal.drawBar()
+      )
+      check output.count(getCursorStyleSeq(SteadyBar)) == 2
+
+    test "invalidate sends no default reset that is not owed":
+      let terminal = knownScreenTerminal(4, 2)
+      let output = captureStdout(
+        proc() =
+          terminal.invalidate()
+          terminal.drawWithCursor(newBuffer(4, 2), 0, 0, true, CursorStyle.Default)
+      )
+      check CursorStyleDefault notin output
+
     {.push warning[Deprecated]: off.}
     test "a caller's own lastStyle still sends the style after resume":
       let terminal = knownScreenTerminal(4, 2)
