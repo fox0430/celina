@@ -518,7 +518,7 @@ proc presentFrame(
   ## cancel raises.
   var
     outcome = swPartial # a cancel mid-write counts as a partial write
-    style = cursor.lastStyle
+    style: CursorStyle # set under the lock
   withStdoutLock:
     if force:
       terminal.screen.invalidate()
@@ -548,7 +548,7 @@ proc presentFrameAdopt(
   ## out.
   var
     outcome = swPartial # a cancel mid-write counts as a partial write
-    style = cursor.lastStyle
+    style: CursorStyle # set under the lock
   withStdoutLock:
     asyncBuffer.withBuffer:
       if force:
@@ -992,14 +992,17 @@ proc drawWithCursorAsync*(
     cursorX, cursorY: int,
     cursorVisible: bool,
     cursorStyle: CursorStyle = CursorStyle.Default,
-    lastCursorStyle: CursorStyle,
     force: bool = false,
-): Future[CursorStyle] {.async.} =
+) {.async.} =
   ## Draw a buffer with cursor positioning in a single write operation.
   ## This prevents cursor flickering by including cursor commands in the same output
   ##
   ## Output is automatically wrapped with synchronized output sequences (DEC mode 2026)
   ## to prevent flickering on supported terminals.
+  ##
+  ## The style is sent only when the terminal does not show it
+  ## (`shownCursorStyle`, checked under the stdout lock), as in the sync
+  ## `Terminal.drawWithCursor`.
   ##
   ## The buffer's contents are preserved across the call (copy semantics). For a
   ## zero-copy renderer-owned hot path, use `drawWithCursorAdoptAsync`.
@@ -1012,21 +1015,70 @@ proc drawWithCursorAsync*(
   ##
   ## A chronos cancel is not a hiccup: it propagates, so a `cancelAndWait`
   ## shutdown sees it, and the screen state records the partial write.
-  ##
-  ## Returns the updated lastCursorStyle value on success, or the style the
-  ## terminal showed before on failure. Caller is responsible for tracking this state
-  ## (e.g., via CursorManager.updateLastStyle()); passing
-  ## `terminal.shownCursorStyle` also covers a suspend or a rerun.
   let presented = await terminal.presentFrame(
     buffer,
-    CursorRequest(
-      enabled: true,
-      x: cursorX,
-      y: cursorY,
-      visible: cursorVisible,
-      style: cursorStyle,
-      lastStyle: lastCursorStyle,
-    ),
+    cursorRequest(cursorX, cursorY, cursorVisible, cursorStyle),
+    force,
+    not terminal.syncOutputEnabled,
+  )
+  when defined(celinaDebug):
+    if presented.outcome == swPartial:
+      stderr.writeLine("Warning: drawWithCursorAsync() left the screen unknown")
+  else:
+    discard presented # Avoid "declared but not used" warning
+
+proc drawWithCursorAdoptAsync*(
+    terminal: AsyncTerminal,
+    asyncBuffer: async_buffer.AsyncBuffer,
+    cursorX, cursorY: int,
+    cursorVisible: bool,
+    cursorStyle: CursorStyle = CursorStyle.Default,
+    force: bool = false,
+) {.async.} =
+  ## Zero-copy variant of `drawWithCursorAsync` for renderer-owned AsyncBuffers.
+  ##
+  ## The freshly rendered grid is swapped into the terminal's `lastBuffer` and
+  ## the previous frame's storage is recycled back into `asyncBuffer` (no
+  ## per-frame snapshot copy). The caller must therefore fully re-fill
+  ## `asyncBuffer` each frame — `AsyncApp.renderAsync` does this via
+  ## `renderer.clear()`. The buffer is passed as a `ref` (an `AsyncBuffer`)
+  ## rather than `var Buffer` because `{.async.}` procs cannot capture `var`
+  ## parameters.
+  ##
+  ## The frame is adopted before the write (copied on the first frame and after
+  ## a resize), so a concurrent task that mutates `asyncBuffer` during a
+  ## flow-controlled write cannot desync `lastBuffer` from the bytes actually
+  ## emitted. A write that did not go out in full hands a swap back (unless
+  ## `asyncBuffer` was resized meanwhile) and makes the next frame a full render.
+  let presented = await terminal.presentFrameAdopt(
+    asyncBuffer,
+    cursorRequest(cursorX, cursorY, cursorVisible, cursorStyle),
+    force,
+    not terminal.syncOutputEnabled,
+  )
+  when defined(celinaDebug):
+    if presented.outcome != swAll:
+      stderr.writeLine("Warning: drawWithCursorAdoptAsync() left the screen unknown")
+  else:
+    discard presented # Avoid "declared but not used" warning
+
+proc drawWithCursorAsync*(
+    terminal: AsyncTerminal,
+    buffer: Buffer,
+    cursorX, cursorY: int,
+    cursorVisible: bool,
+    cursorStyle: CursorStyle = CursorStyle.Default,
+    lastCursorStyle: CursorStyle,
+    force: bool = false,
+): Future[CursorStyle] {.
+    async, deprecated: "Drop `lastCursorStyle`: the terminal tracks the cursor style"
+.} =
+  ## `drawWithCursorAsync` that also sends the style when it differs from
+  ## `lastCursorStyle`. Returns the updated lastCursorStyle value on success,
+  ## or the style the terminal showed before on failure.
+  let presented = await terminal.presentFrame(
+    buffer,
+    cursorRequest(cursorX, cursorY, cursorVisible, cursorStyle, some(lastCursorStyle)),
     force,
     not terminal.syncOutputEnabled,
   )
@@ -1043,35 +1095,14 @@ proc drawWithCursorAdoptAsync*(
     cursorStyle: CursorStyle = CursorStyle.Default,
     lastCursorStyle: CursorStyle,
     force: bool = false,
-): Future[CursorStyle] {.async.} =
-  ## Zero-copy variant of `drawWithCursorAsync` for renderer-owned AsyncBuffers.
-  ##
-  ## The freshly rendered grid is swapped into the terminal's `lastBuffer` and
-  ## the previous frame's storage is recycled back into `asyncBuffer` (no
-  ## per-frame snapshot copy). The caller must therefore fully re-fill
-  ## `asyncBuffer` each frame — `AsyncApp.renderAsync` does this via
-  ## `renderer.clear()`. The buffer is passed as a `ref` (an `AsyncBuffer`)
-  ## rather than `var Buffer` because `{.async.}` procs cannot capture `var`
-  ## parameters.
-  ##
-  ## The frame is adopted before the write (copied on the first frame and after
-  ## a resize), so a concurrent task that mutates `asyncBuffer` during a
-  ## flow-controlled write cannot desync `lastBuffer` from the bytes actually
-  ## emitted. A write that did not go out in full hands a swap back (unless
-  ## `asyncBuffer` was resized meanwhile) and makes the next frame a full render.
-  ##
-  ## Returns the updated lastCursorStyle value on success, or the style the
-  ## terminal showed before on failure.
+): Future[CursorStyle] {.
+    async, deprecated: "Drop `lastCursorStyle`: the terminal tracks the cursor style"
+.} =
+  ## `drawWithCursorAdoptAsync` with the deprecated `drawWithCursorAsync`'s
+  ## `lastCursorStyle` and return value.
   let presented = await terminal.presentFrameAdopt(
     asyncBuffer,
-    CursorRequest(
-      enabled: true,
-      x: cursorX,
-      y: cursorY,
-      visible: cursorVisible,
-      style: cursorStyle,
-      lastStyle: lastCursorStyle,
-    ),
+    cursorRequest(cursorX, cursorY, cursorVisible, cursorStyle, some(lastCursorStyle)),
     force,
     not terminal.syncOutputEnabled,
   )
@@ -1086,41 +1117,26 @@ proc drawWithCursorAdopt*(
     cursorX, cursorY: int,
     cursorVisible: bool,
     cursorStyle: CursorStyle = CursorStyle.Default,
-    lastCursorStyle: CursorStyle,
     force: bool = false,
-): Option[CursorStyle] =
+): bool =
   ## Blocking `drawWithCursorAdoptAsync`, for code that cannot await. Returns
-  ## `none`, writing nothing, while another writer holds the stdout lock;
-  ## otherwise the cursor style as `drawWithCursorAdoptAsync` does. The write
-  ## blocks, so the frame is adopted after it rather than staged.
-  var style = lastCursorStyle
-  let drawn = withStdoutLockNow:
+  ## false, writing nothing, while another writer holds the stdout lock. The
+  ## write blocks, so the frame is adopted after it rather than staged.
+  withStdoutLockNow:
     asyncBuffer.withBuffer:
       if force:
         terminal.screen.invalidate()
       let plan = terminal.screen.planFrame(
         buffer,
-        CursorRequest(
-          enabled: true,
-          x: cursorX,
-          y: cursorY,
-          visible: cursorVisible,
-          style: cursorStyle,
-          lastStyle: lastCursorStyle,
-        ),
+        cursorRequest(cursorX, cursorY, cursorVisible, cursorStyle),
         not terminal.syncOutputEnabled,
       )
       terminal.screen.markSent(plan)
       let outcome = outcomeOf(writeStream(plan.bytes, plan.onPartial), plan.bytes.len)
       terminal.screen.finishAdopt(plan, buffer, outcome)
-      style = plan.appliedStyle(outcome)
       when defined(celinaDebug):
         if outcome != swAll:
           stderr.writeLine("Warning: drawWithCursorAdopt() left the screen unknown")
-  if drawn:
-    some(style)
-  else:
-    none(CursorStyle)
 
 # Terminal state queries
 # Note: getSize and getArea need explicit proc definitions to avoid conflicts

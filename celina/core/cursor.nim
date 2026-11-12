@@ -11,7 +11,9 @@ type
     y*: int ## Cursor Y position (-1 means not set)
     visible*: bool ## Whether cursor is visible
     style*: CursorStyle ## Current cursor style
-    lastStyle*: CursorStyle ## Previous cursor style (for tracking changes)
+    lastStyle*: CursorStyle
+      ## Deprecated: the style the last render applied. Use the terminal's
+      ## `shownCursorStyle`.
 
   CursorManager* = ref object ## Manages cursor operations and state
     state: CursorState
@@ -54,13 +56,8 @@ proc hide*(manager: CursorManager) =
   manager.state.visible = false
 
 proc setStyle*(manager: CursorManager, style: CursorStyle) =
-  ## Set the desired cursor style.
-  ##
-  ## Does not touch `lastStyle`: that field tracks the style actually applied to
-  ## the terminal and is only updated after a render (via `setLastStyle` /
-  ## `updateLastStyle`). Mutating it here would corrupt `styleChanged()` when
-  ## `setStyle` is called more than once before a render, silently dropping the
-  ## pending DECSCUSR update.
+  ## Set the desired cursor style. Does not touch the deprecated `lastStyle`,
+  ## which only a render updates.
   manager.state.style = style
 
 proc getPosition*(manager: CursorManager): (int, int) =
@@ -91,14 +88,20 @@ proc hasPosition*(manager: CursorManager): bool =
   ## Check if cursor has a valid position set
   manager.state.x >= 0 and manager.state.y >= 0
 
-proc styleChanged*(manager: CursorManager): bool =
+proc styleChanged*(
+    manager: CursorManager
+): bool {.deprecated: "Compare `getStyle()` with the terminal's `shownCursorStyle`".} =
   ## Check if cursor style has changed since last update
   manager.state.style != manager.state.lastStyle
 
-proc updateLastStyle*(manager: CursorManager) =
+proc updateLastStyle*(
+    manager: CursorManager
+) {.deprecated: "Not needed: the terminal tracks the cursor style".} =
   ## Update the last style to current style (after applying changes)
   manager.state.lastStyle = manager.state.style
 
-proc setLastStyle*(manager: CursorManager, style: CursorStyle) =
-  ## Set the last style directly (used after drawWithCursor returns the new style)
+proc setLastStyle*(
+    manager: CursorManager, style: CursorStyle
+) {.deprecated: "Not needed: the terminal tracks the cursor style".} =
+  ## Set the last style directly
   manager.state.lastStyle = style

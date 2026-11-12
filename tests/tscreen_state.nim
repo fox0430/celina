@@ -21,7 +21,7 @@ proc inlineScreen(width, height, origin: int): ScreenState =
   result.finish(result.planFrame(blank, noCursor, false), blank, swAll)
 
 proc cursorAt(x, y: int, visible = true): CursorRequest =
-  CursorRequest(enabled: true, x: x, y: y, visible: visible, lastStyle: Default)
+  cursorRequest(x, y, visible, CursorStyle.Default)
 
 suite "Screen state: planning":
   test "a known screen of the same size plans a diff":
@@ -78,15 +78,8 @@ suite "Screen state: planning":
 
   test "a cursor request appends its commands inside the wrap":
     var state = knownScreen(4, 2)
-    let request = CursorRequest(
-      enabled: true,
-      x: 2,
-      y: 1,
-      visible: true,
-      style: SteadyBar,
-      lastStyle: CursorStyle.Default,
-    )
-    let plan = state.planFrame(newBuffer(4, 2), request, true)
+    let plan =
+      state.planFrame(newBuffer(4, 2), cursorRequest(2, 1, true, SteadyBar), true)
 
     let (expected, style) = buildOutputWithCursor(
       state.lastBuffer, newBuffer(4, 2), 2, 1, true, SteadyBar, CursorStyle.Default
@@ -99,11 +92,8 @@ suite "Screen state: planning":
 
   test "a hidden or out-of-range cursor hides the cursor instead":
     var state = knownScreen(4, 2)
-    let hidden = state.planFrame(
-      newBuffer(4, 2),
-      CursorRequest(enabled: true, x: 2, y: 1, visible: false, lastStyle: Default),
-      false,
-    )
+    let hidden =
+      state.planFrame(newBuffer(4, 2), cursorAt(2, 1, visible = false), false)
     check hidden.bytes.endsWith(HideCursorSeq)
 
   test "a clear plans a bare reset-and-clear at the cleared size":
@@ -426,51 +416,23 @@ suite "Screen state: epoch":
 suite "Screen state: cursor style":
   test "a frame that went out in full applies the new cursor style":
     var state = knownScreen(4, 2)
-    let plan = state.planFrame(
-      newBuffer(4, 2),
-      CursorRequest(
-        enabled: true,
-        x: 0,
-        y: 0,
-        visible: true,
-        style: SteadyBar,
-        lastStyle: CursorStyle.Default,
-      ),
-      false,
-    )
+    let plan =
+      state.planFrame(newBuffer(4, 2), cursorRequest(0, 0, true, SteadyBar), false)
     check plan.appliedStyle(swAll) == SteadyBar
 
   test "any other outcome keeps the previous style, so it is sent again":
     var state = knownScreen(4, 2)
-    let plan = state.planFrame(
-      newBuffer(4, 2),
-      CursorRequest(
-        enabled: true,
-        x: 0,
-        y: 0,
-        visible: true,
-        style: SteadyBar,
-        lastStyle: CursorStyle.Default,
-      ),
-      false,
-    )
+    let plan =
+      state.planFrame(newBuffer(4, 2), cursorRequest(0, 0, true, SteadyBar), false)
     check plan.appliedStyle(swPartial) == CursorStyle.Default
     check plan.appliedStyle(swNone) == CursorStyle.Default
 
   test "an unchanged style is not sent":
     var state = knownScreen(4, 2)
     let first = newBuffer(4, 2)
-    let bar = CursorRequest(
-      enabled: true, x: 0, y: 0, visible: true, style: SteadyBar, lastStyle: Default
-    )
+    let bar = cursorRequest(0, 0, true, SteadyBar)
     state.finish(state.planFrame(first, bar, false), first, swAll)
-    let plan = state.planFrame(
-      newBuffer(4, 2),
-      CursorRequest(
-        enabled: true, x: 0, y: 0, visible: true, style: SteadyBar, lastStyle: SteadyBar
-      ),
-      false,
-    )
+    let plan = state.planFrame(newBuffer(4, 2), bar, false)
     check getCursorStyleSeq(SteadyBar) notin plan.bytes
     check plan.appliedStyle(swAll) == SteadyBar
 
@@ -482,10 +444,8 @@ suite "Screen state: cursor style":
     check HideCursorSeq notin plan.bytes
 
 suite "Screen state: cursor style reset":
-  proc barRequest(lastStyle = CursorStyle.Default): CursorRequest =
-    CursorRequest(
-      enabled: true, x: 0, y: 0, visible: true, style: SteadyBar, lastStyle: lastStyle
-    )
+  proc barRequest(lastStyle = none(CursorStyle)): CursorRequest =
+    cursorRequest(0, 0, true, SteadyBar, lastStyle)
 
   proc present(state: var ScreenState, cursor: CursorRequest, outcome: StreamWrite) =
     let frame = newBuffer(4, 2)
@@ -510,15 +470,31 @@ suite "Screen state: cursor style reset":
     state.present(cursorAt(0, 0), swAll)
     check state.takeCursorReset() == ""
 
+  test "without a caller's lastStyle, the shown style decides":
+    var state = knownScreen(4, 2)
+    state.present(barRequest(), swAll)
+    let back = state.planFrame(newBuffer(4, 2), cursorAt(0, 0), false)
+    check CursorStyleDefault in back.bytes
+    discard state.takeCursorReset()
+    let handedBack = state.planFrame(newBuffer(4, 2), cursorAt(0, 0), false)
+    check CursorStyleDefault notin handedBack.bytes
+
+  test "a caller's lastStyle that differs still sends the style":
+    var state = knownScreen(4, 2)
+    var request = cursorAt(0, 0)
+    request.lastStyle = some(SteadyBar)
+    let plan = state.planFrame(newBuffer(4, 2), request, false)
+    check CursorStyleDefault in plan.bytes
+
   test "a stale lastStyle does not hide a style the terminal lacks":
     var state = knownScreen(4, 2)
-    let plan = state.planFrame(newBuffer(4, 2), barRequest(SteadyBar), false)
+    let plan = state.planFrame(newBuffer(4, 2), barRequest(some(SteadyBar)), false)
     check getCursorStyleSeq(SteadyBar) in plan.bytes
     check plan.appliedStyle(swNone) == CursorStyle.Default
 
   test "a hidden cursor with a stale lastStyle keeps the tracked style":
     var state = knownScreen(4, 2)
-    var request = barRequest(SteadyBlock)
+    var request = barRequest(some(SteadyBlock))
     request.visible = false
     state.present(request, swAll)
     check state.cursorStyle == CursorStyle.Default

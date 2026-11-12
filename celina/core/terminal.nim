@@ -804,19 +804,18 @@ proc drawWithCursor*(
     cursorX, cursorY: int,
     cursorVisible: bool,
     cursorStyle: CursorStyle = CursorStyle.Default,
-    lastCursorStyle: CursorStyle,
     force: bool = false,
-): CursorStyle =
+) =
   ## Draw buffer with cursor positioning in single write operation
   ## This prevents cursor flickering by including cursor commands in the same output
   ##
   ## Output is automatically wrapped with synchronized output sequences (DEC mode 2026)
   ## to prevent flickering on supported terminals.
   ##
-  ## Returns the updated lastCursorStyle value on success, or the style the
-  ## terminal showed before on failure (the frame may have stopped before its
-  ## DECSCUSR, so the next frame sends it again). Caller is responsible for tracking this state;
-  ## passing `terminal.shownCursorStyle` also covers a suspend or a rerun.
+  ## The style is sent only when the terminal does not show it
+  ## (`shownCursorStyle`), so an unchanged style does not interrupt blinking.
+  ## After a frame that did not go out in full, `suspend` or `cleanup`, the
+  ## next frame sends it again.
   ##
   ## The buffer's contents are preserved across the call (copy semantics). For a
   ## zero-copy renderer-owned hot path, use `drawWithCursorAdopt` instead.
@@ -827,14 +826,56 @@ proc drawWithCursor*(
   ## is the same diff again.
   let presented = terminal.presentFrame(
     buffer,
-    CursorRequest(
-      enabled: true,
-      x: cursorX,
-      y: cursorY,
-      visible: cursorVisible,
-      style: cursorStyle,
-      lastStyle: lastCursorStyle,
-    ),
+    cursorRequest(cursorX, cursorY, cursorVisible, cursorStyle),
+    force,
+    not terminal.syncOutputEnabled,
+    false,
+  )
+  when defined(celinaDebug):
+    if presented.outcome == swPartial:
+      stderr.writeLine("Warning: drawWithCursor() left the screen unknown")
+  else:
+    discard presented # Avoid "declared but not used" warning
+
+proc drawWithCursorAdopt*(
+    terminal: Terminal,
+    buffer: var Buffer,
+    cursorX, cursorY: int,
+    cursorVisible: bool,
+    cursorStyle: CursorStyle = CursorStyle.Default,
+    force: bool = false,
+) =
+  ## Zero-copy variant of `drawWithCursor` for renderer-owned buffers.
+  ##
+  ## As with `drawAdopt`, the rendered content is swapped into `lastBuffer` and
+  ## the previous frame's storage is recycled back into `buffer`, so the caller
+  ## MUST fully re-fill `buffer` each frame. Used by `Renderer.render`. A
+  ## write that did not go out in full adopts nothing, as with `drawAdopt`.
+  discard terminal.presentFrame(
+    buffer,
+    cursorRequest(cursorX, cursorY, cursorVisible, cursorStyle),
+    force,
+    not terminal.syncOutputEnabled,
+    true,
+  )
+
+proc drawWithCursor*(
+    terminal: Terminal,
+    buffer: Buffer,
+    cursorX, cursorY: int,
+    cursorVisible: bool,
+    cursorStyle: CursorStyle = CursorStyle.Default,
+    lastCursorStyle: CursorStyle,
+    force: bool = false,
+): CursorStyle {.
+    deprecated: "Drop `lastCursorStyle`: the terminal tracks the cursor style"
+.} =
+  ## `drawWithCursor` that also sends the style when it differs from
+  ## `lastCursorStyle`. Returns the updated lastCursorStyle value on success,
+  ## or the style the terminal showed before on failure.
+  let presented = terminal.presentFrame(
+    buffer,
+    cursorRequest(cursorX, cursorY, cursorVisible, cursorStyle, some(lastCursorStyle)),
     force,
     not terminal.syncOutputEnabled,
     false,
@@ -852,26 +893,14 @@ proc drawWithCursorAdopt*(
     cursorStyle: CursorStyle = CursorStyle.Default,
     lastCursorStyle: CursorStyle,
     force: bool = false,
-): CursorStyle =
-  ## Zero-copy variant of `drawWithCursor` for renderer-owned buffers.
-  ##
-  ## As with `drawAdopt`, the rendered content is swapped into `lastBuffer` and
-  ## the previous frame's storage is recycled back into `buffer`, so the caller
-  ## MUST fully re-fill `buffer` each frame. Used by `Renderer.render`. A
-  ## write that did not go out in full adopts nothing, as with `drawAdopt`.
-  ##
-  ## Returns the updated lastCursorStyle value on success, or the style the
-  ## terminal showed before on failure.
+): CursorStyle {.
+    deprecated: "Drop `lastCursorStyle`: the terminal tracks the cursor style"
+.} =
+  ## `drawWithCursorAdopt` with the deprecated `drawWithCursor`'s
+  ## `lastCursorStyle` and return value.
   terminal.presentFrame(
     buffer,
-    CursorRequest(
-      enabled: true,
-      x: cursorX,
-      y: cursorY,
-      visible: cursorVisible,
-      style: cursorStyle,
-      lastStyle: lastCursorStyle,
-    ),
+    cursorRequest(cursorX, cursorY, cursorVisible, cursorStyle, some(lastCursorStyle)),
     force,
     not terminal.syncOutputEnabled,
     true,

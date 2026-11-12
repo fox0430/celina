@@ -1,6 +1,6 @@
 # Tests for async_terminal module
 
-import std/[unittest, strutils, posix, importutils, oserrors, options]
+import std/[unittest, strutils, posix, importutils, oserrors]
 
 import ../celina/async/[async_backend, async_buffer]
 import ../celina/core/[geometry, colors, buffer, errors]
@@ -394,20 +394,15 @@ suite "AsyncTerminal unknown screen state":
     frame[2, 1] = cell("x")
     let asyncBuffer = newAsyncBuffer(10, 3)
     asyncBuffer.updateFromBuffer(frame)
-    var style = CursorStyle.Default
     withFailingStdout(
       proc() =
-        style = waitFor terminal.drawWithCursorAdoptAsync(
-          asyncBuffer, 1, 1, true, SteadyBar, lastCursorStyle = style
-        )
+        waitFor terminal.drawWithCursorAdoptAsync(asyncBuffer, 1, 1, true, SteadyBar)
     )
-    check style == CursorStyle.Default
+    check terminal.shownCursorStyle == CursorStyle.Default
 
     let output = captureStdout(
       proc() =
-        discard waitFor terminal.drawWithCursorAdoptAsync(
-          asyncBuffer, 1, 1, true, SteadyBar, lastCursorStyle = style
-        )
+        waitFor terminal.drawWithCursorAdoptAsync(asyncBuffer, 1, 1, true, SteadyBar)
     )
     let (expected, _) = buildOutputWithCursor(
       newBuffer(10, 3),
@@ -416,7 +411,7 @@ suite "AsyncTerminal unknown screen state":
       1,
       true,
       SteadyBar,
-      lastCursorStyle = style,
+      lastCursorStyle = CursorStyle.Default,
       force = true,
     )
     # The grid was in the caller's hands while the failed write ran, so the
@@ -428,20 +423,15 @@ suite "AsyncTerminal unknown screen state":
     var frame = newBuffer(10, 3)
     frame[2, 1] = cell("x")
 
-    var style = CursorStyle.Default
     withFailingStdout(
       proc() =
-        style = waitFor terminal.drawWithCursorAsync(
-          frame, 1, 1, true, SteadyBar, lastCursorStyle = style
-        )
+        waitFor terminal.drawWithCursorAsync(frame, 1, 1, true, SteadyBar)
     )
-    check style == CursorStyle.Default
+    check terminal.shownCursorStyle == CursorStyle.Default
 
     let output = captureStdout(
       proc() =
-        discard waitFor terminal.drawWithCursorAsync(
-          frame, 1, 1, true, SteadyBar, lastCursorStyle = style
-        )
+        waitFor terminal.drawWithCursorAsync(frame, 1, 1, true, SteadyBar)
     )
     let (expected, _) = buildOutputWithCursor(
       newBuffer(10, 3),
@@ -711,13 +701,10 @@ suite "AsyncTerminal unknown screen state":
 
       var
         cancelled = false
-        style = CursorStyle.Default
         note = ""
       try:
         discard dup2(fds[1], STDOUT_FILENO)
-        let fut = terminal.drawWithCursorAsync(
-          frame, 0, 0, true, CursorStyle.Default, lastCursorStyle = style
-        )
+        let fut = terminal.drawWithCursorAsync(frame, 0, 0, true, CursorStyle.Default)
         # The pipe holds 4096 bytes and the frame is larger than that (the
         # caller checks the margin), so once bytes are observable on the read
         # end the writer is parked mid-write: wait for that instead of assuming a
@@ -740,8 +727,7 @@ suite "AsyncTerminal unknown screen state":
           try:
             # Awaiting the future itself is what observes the error: `join` and
             # `cancelAndWait` swallow it, which is the bug this test pins down.
-            let applied: CursorStyle = await fut
-            style = applied
+            await fut
             # It returned without raising, so the write finished on its own —
             # went out in full, or gave up on a short count. Either way the
             # cancel was not observed, and saying so keeps a failure from
@@ -762,7 +748,7 @@ suite "AsyncTerminal unknown screen state":
         discard close(saved)
         discard close(fds[0])
         discard close(fds[1])
-      (cancelled: cancelled, style: style, note: note)
+      (cancelled: cancelled, style: terminal.shownCursorStyle, note: note)
 
     test "a cancel during a frame write is not swallowed":
       let terminal = knownScreenTerminal(10, 3)
@@ -802,9 +788,7 @@ suite "AsyncTerminal unknown screen state":
       )
       let output = captureStdout(
         proc() =
-          discard waitFor terminal.drawWithCursorAsync(
-            small, 0, 0, true, CursorStyle.Default, lastCursorStyle = style
-          )
+          waitFor terminal.drawWithCursorAsync(small, 0, 0, true, CursorStyle.Default)
       )
       check (AbortPartialSeq & Osc8Reset & "\e[0m") in output
       check output.endsWith(wrapWithSyncOutput(expected))
@@ -985,8 +969,8 @@ suite "Async Adopt Rendering":
     asyncBuffer.withBuffer:
       buffer[0, 0] = cell("NEW")
 
-    discard waitFor terminal.drawWithCursorAdoptAsync(
-      asyncBuffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default, force = true
+    waitFor terminal.drawWithCursorAdoptAsync(
+      asyncBuffer, 0, 0, false, CursorStyle.Default, force = true
     )
 
     check terminal.lastBuffer[0, 0].symbol == "NEW"
@@ -1002,8 +986,8 @@ suite "Async Adopt Rendering":
     asyncBuffer.withBuffer:
       buffer[0, 0] = cell("NEW")
 
-    discard waitFor terminal.drawWithCursorAdoptAsync(
-      asyncBuffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default, force = true
+    waitFor terminal.drawWithCursorAdoptAsync(
+      asyncBuffer, 0, 0, false, CursorStyle.Default, force = true
     )
 
     check terminal.lastBuffer[0, 0].symbol == "NEW"
@@ -1019,8 +1003,8 @@ suite "Async Adopt Rendering":
       asyncBuffer.withBuffer:
         buffer.clear()
         buffer[0, 0] = cell($i)
-      discard waitFor terminal.drawWithCursorAdoptAsync(
-        asyncBuffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default, force = true
+      waitFor terminal.drawWithCursorAdoptAsync(
+        asyncBuffer, 0, 0, false, CursorStyle.Default, force = true
       )
       check terminal.lastBuffer[0, 0].symbol == $i
 
@@ -1038,14 +1022,8 @@ suite "Async Adopt Rendering":
       asyncBuffer.withBuffer:
         buffer.clear()
         buffer[i, 0] = cell($i)
-      discard waitFor terminal.drawWithCursorAdoptAsync(
-        asyncBuffer,
-        0,
-        0,
-        false,
-        CursorStyle.Default,
-        CursorStyle.Default,
-        force = false,
+      waitFor terminal.drawWithCursorAdoptAsync(
+        asyncBuffer, 0, 0, false, CursorStyle.Default, force = false
       )
       check terminal.lastBuffer[i, 0].symbol == $i
       if i > 0:
@@ -1073,11 +1051,10 @@ suite "Async Adopt Rendering":
     require savedStdout >= 0
     require roFd >= 0
 
-    var rolledBackStyle: CursorStyle
     try:
       discard posix.dup2(roFd, STDOUT_FILENO)
-      rolledBackStyle = waitFor terminal.drawWithCursorAdoptAsync(
-        asyncBuffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default, force = true
+      waitFor terminal.drawWithCursorAdoptAsync(
+        asyncBuffer, 0, 0, false, CursorStyle.Default, force = true
       )
     finally:
       discard posix.dup2(savedStdout, STDOUT_FILENO)
@@ -1087,7 +1064,7 @@ suite "Async Adopt Rendering":
     # lastBuffer must be rolled back to the pre-write state.
     check terminal.lastBuffer[0, 0].symbol == "OLD"
     # The cursor style was never applied either.
-    check rolledBackStyle == CursorStyle.Default
+    check terminal.shownCursorStyle == CursorStyle.Default
     # The AsyncBuffer still owns the freshly rendered grid.
     asyncBuffer.withBuffer:
       check buffer[0, 0].symbol == "NEW"
@@ -1107,8 +1084,8 @@ suite "Async Adopt Rendering":
       ).output
     let output = captureStdout(
       proc() =
-        discard waitFor terminal.drawWithCursorAdoptAsync(
-          asyncBuffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default
+        waitFor terminal.drawWithCursorAdoptAsync(
+          asyncBuffer, 0, 0, false, CursorStyle.Default
         )
     )
     check output == wrapWithSyncOutput(expected)
@@ -1145,7 +1122,7 @@ suite "Async Adopt Rendering":
       try:
         discard dup2(fds[1], STDOUT_FILENO)
         let fut = terminal.drawWithCursorAdoptAsync(
-          asyncBuffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default
+          asyncBuffer, 0, 0, false, CursorStyle.Default
         )
         # The frame is larger than the pipe, so readable bytes mean a parked write.
         var started = false
@@ -1170,7 +1147,7 @@ suite "Async Adopt Rendering":
           while posix.read(fds[0], addr buf[0], buf.len) > 0:
             discard
           await sleepMs(1)
-        discard await fut
+        await fut
       finally:
         discard dup2(saved, STDOUT_FILENO)
         discard close(saved)
@@ -1207,8 +1184,8 @@ suite "Async Adopt Rendering":
         ).output
       let output = captureStdout(
         proc() =
-          discard waitFor terminal.drawWithCursorAdoptAsync(
-            asyncBuffer, 0, 0, false, CursorStyle.Default, CursorStyle.Default
+          waitFor terminal.drawWithCursorAdoptAsync(
+            asyncBuffer, 0, 0, false, CursorStyle.Default
           )
       )
       check "late" in output
@@ -1229,14 +1206,14 @@ suite "Blocking Adopt Rendering":
     asyncBuffer.withBuffer:
       buffer[0, 0] = cell("NEW")
 
-    var style: Option[CursorStyle]
+    var drawn = false
     let output = captureStdout(
       proc() =
-        style = terminal.drawWithCursorAdopt(
-          asyncBuffer, 0, 0, true, CursorStyle.BlinkingBar, CursorStyle.Default
-        )
+        drawn =
+          terminal.drawWithCursorAdopt(asyncBuffer, 0, 0, true, CursorStyle.BlinkingBar)
     )
-    check style == some(CursorStyle.BlinkingBar)
+    check drawn
+    check terminal.shownCursorStyle == CursorStyle.BlinkingBar
     check "NEW" in output
     check terminal.lastBuffer[0, 0].symbol == "NEW"
     check not stdoutWriteLocked
@@ -1250,14 +1227,14 @@ suite "Blocking Adopt Rendering":
       buffer[0, 0] = cell("NEW")
 
     check tryAcquireStdoutLockImmediate()
-    var style: Option[CursorStyle]
+    var drawn = true
     let output = captureStdout(
       proc() =
-        style = terminal.drawWithCursorAdopt(
-          asyncBuffer, 0, 0, true, CursorStyle.BlinkingBar, CursorStyle.Default
-        )
+        drawn =
+          terminal.drawWithCursorAdopt(asyncBuffer, 0, 0, true, CursorStyle.BlinkingBar)
     )
-    check style.isNone
+    check not drawn
+    check terminal.shownCursorStyle == CursorStyle.Default
     check output == ""
     check stdoutWriteLocked
     check terminal.lastBuffer[0, 0].symbol == "OLD"
@@ -1583,9 +1560,7 @@ suite "AsyncTerminal emergencyRestore":
       let terminal = knownScreenTerminal(4, 2)
       discard captureStdout(
         proc() =
-          discard waitFor terminal.drawWithCursorAsync(
-            newBuffer(4, 2), 0, 0, true, SteadyBar, terminal.shownCursorStyle
-          )
+          waitFor terminal.drawWithCursorAsync(newBuffer(4, 2), 0, 0, true, SteadyBar)
       )
       terminal.alternateScreen = true
       let output = captureCutStdout(
@@ -1600,11 +1575,47 @@ suite "AsyncTerminal emergencyRestore":
     else:
       skip()
 
+{.push warning[Deprecated]: off.}
+suite "Deprecated lastCursorStyle":
+  test "drawWithCursorAsync returns the style it applied":
+    let terminal = knownScreenTerminal(4, 2)
+    var style = CursorStyle.Default
+    discard captureStdout(
+      proc() =
+        style = waitFor terminal.drawWithCursorAsync(
+          newBuffer(4, 2), 0, 0, true, SteadyBar, CursorStyle.Default
+        )
+    )
+    check style == SteadyBar
+    check terminal.shownCursorStyle == SteadyBar
+
+  test "a caller's lastStyle that differs still sends the style":
+    let terminal = knownScreenTerminal(4, 2)
+    let output = captureStdout(
+      proc() =
+        discard waitFor terminal.drawWithCursorAsync(
+          newBuffer(4, 2), 0, 0, true, CursorStyle.Default, SteadyBar
+        )
+    )
+    check CursorStyleDefault in output
+
+  test "drawWithCursorAdoptAsync returns the style it applied":
+    let terminal = knownScreenTerminal(4, 2)
+    let asyncBuffer = newAsyncBuffer(4, 2)
+    var style = CursorStyle.Default
+    discard captureStdout(
+      proc() =
+        style = waitFor terminal.drawWithCursorAdoptAsync(
+          asyncBuffer, 0, 0, true, SteadyBar, CursorStyle.Default
+        )
+    )
+    check style == SteadyBar
+
+{.pop.}
+
 suite "AsyncTerminal cursor style reset":
   proc drawBar(terminal: AsyncTerminal) =
-    discard waitFor terminal.drawWithCursorAsync(
-      newBuffer(4, 2), 0, 0, true, SteadyBar, terminal.shownCursorStyle
-    )
+    waitFor terminal.drawWithCursorAsync(newBuffer(4, 2), 0, 0, true, SteadyBar)
 
   test "cleanupAsync puts back a style a frame set":
     let terminal = knownScreenTerminal(4, 2)
@@ -1620,8 +1631,8 @@ suite "AsyncTerminal cursor style reset":
     let terminal = knownScreenTerminal(4, 2)
     let output = captureStdout(
       proc() =
-        discard waitFor terminal.drawWithCursorAsync(
-          newBuffer(4, 2), 0, 0, true, CursorStyle.Default, terminal.shownCursorStyle
+        waitFor terminal.drawWithCursorAsync(
+          newBuffer(4, 2), 0, 0, true, CursorStyle.Default
         )
         terminal.cleanup()
     )
