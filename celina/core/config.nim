@@ -17,6 +17,14 @@ type
     of vkInline:
       height*: int ## Rows, at least 1; capped at the terminal height
 
+type RenderMode* = enum
+  ## When the loop draws a frame. Either way the frame clock keeps ticking at
+  ## `targetFps` and the frame handler runs on every frame.
+  rmContinuous ## Every frame (default)
+  rmOnDemand
+    ## Only requested frames: input, resize, timeout, resume, window or cursor
+    ## changes, `requestRender` and `invalidate`
+
 type AppConfig* = object ## Application configuration options
   title*: string ## Application title (for window managers)
   alternateScreen*: bool ## Use alternate screen buffer; inline viewports ignore it
@@ -26,6 +34,7 @@ type AppConfig* = object ## Application configuration options
   rawMode*: bool ## Enable raw terminal mode (no line buffering)
   windowMode*: bool ## Enable window management
   targetFps*: int ## Target FPS for rendering (default: 60)
+  renderMode*: RenderMode ## Which frames are drawn (default: every frame)
   installSignalHandler*: bool
     ## When true and the chronos backend is active on a POSIX platform,
     ## runAsync installs SIGINT/SIGTERM handlers that trigger
@@ -83,6 +92,8 @@ proc `$`*(config: AppConfig): string =
   if config.installSignalHandler:
     parts.add("installSignalHandler")
   parts.add("targetFps: " & $config.targetFps)
+  if config.renderMode != rmContinuous:
+    parts.add("renderMode: " & $config.renderMode)
   if config.viewport.kind != vkFullscreen:
     parts.add("viewport: " & $config.viewport)
   "AppConfig(" & parts.join(", ") & ")"
@@ -96,6 +107,7 @@ const DefaultAppConfig* = AppConfig(
   rawMode: true,
   windowMode: false,
   targetFps: 60,
+  renderMode: rmContinuous,
   installSignalHandler: false,
   viewport: Viewport(kind: vkFullscreen),
 )
@@ -143,6 +155,11 @@ proc withTargetFps*(config: AppConfig, fps: int): AppConfig {.inline.} =
   ## Return a new config with target FPS setting
   result = config
   result.targetFps = fps
+
+proc withRenderMode*(config: AppConfig, mode: RenderMode): AppConfig {.inline.} =
+  ## Return a new config with the render mode setting
+  result = config
+  result.renderMode = mode
 
 proc withInstallSignalHandler*(config: AppConfig, enabled: bool): AppConfig {.inline.} =
   ## Return a new config with install-signal-handler setting (chronos only)

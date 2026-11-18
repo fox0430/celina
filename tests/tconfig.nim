@@ -209,3 +209,15 @@ suite "Config Module Tests":
       check $Viewport(kind: vkFullscreen) == "fullscreen"
       let config = DefaultAppConfig.withViewport(Viewport(kind: vkInline, height: 5))
       check "viewport: inline(5)" in $config
+
+  suite "Render Mode Tests":
+    test "a config that leaves the render mode out draws every frame":
+      check DefaultAppConfig.renderMode == rmContinuous
+      check AppConfig(title: "x").renderMode == rmContinuous
+      check "renderMode" notin $DefaultAppConfig
+
+    test "withRenderMode sets it and the string representation shows it":
+      let config = DefaultAppConfig.withRenderMode(rmOnDemand)
+      check config.renderMode == rmOnDemand
+      check config != DefaultAppConfig
+      check "renderMode: rmOnDemand" in $config

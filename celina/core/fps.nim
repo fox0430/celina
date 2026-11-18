@@ -34,6 +34,9 @@
 ## * If last render was 20ms ago: `shouldRender()` returns true
 ##
 ## This approach prevents excessive rendering while allowing responsive event processing.
+##
+## The app loops add a separate frame clock (`frameDue`, `beginFrame`,
+## `frameTimeLeft`) that ticks whether or not a frame is drawn.
 
 import std/[times, monotimes]
 
@@ -44,6 +47,7 @@ type
     lastFpsTime: MonoTime ## Last time FPS was calculated
     currentFps: float ## Current calculated FPS
     lastRenderTime: MonoTime ## Last time a frame was rendered
+    nextFrameTime: MonoTime ## Frame clock: when the next frame is due
 
   PerfStats* = object ## Performance statistics
     fps*: float ## Current frames per second
@@ -78,11 +82,17 @@ proc newFpsMonitor*(targetFps: int = DefaultTargetFps): FpsMonitor =
       # Initialize to zero to allow first render immediately
   )
 
+proc frameInterval(monitor: FpsMonitor): Duration =
+  initDuration(nanoseconds = 1_000_000_000 div monitor.targetFps)
+
 proc setTargetFps*(monitor: FpsMonitor, fps: int) =
-  ## Set the target FPS
+  ## Set the target FPS, cutting any longer frame-clock wait to the new interval.
   if fps < 1 or fps > 240:
     raise newException(ValueError, "FPS must be 1-240")
   monitor.targetFps = fps
+  let latest = getMonoTime() + monitor.frameInterval
+  if monitor.nextFrameTime > latest:
+    monitor.nextFrameTime = latest
 
 proc getTargetFps*(monitor: FpsMonitor): int =
   ## Get the current target FPS
@@ -184,6 +194,31 @@ proc getRemainingFrameTime*(monitor: FpsMonitor): int =
     result = int(remaining * 1000)
   else:
     result = 0
+
+proc frameDue*(monitor: FpsMonitor): bool =
+  ## Whether the frame clock's next frame is due. True until the first
+  ## `beginFrame`.
+  getMonoTime() >= monitor.nextFrameTime
+
+proc beginFrame*(monitor: FpsMonitor) =
+  ## Start a frame on the frame clock, drawn or not. The next one is scheduled
+  ## from this one's scheduled time, so rounded-up waits do not accumulate; a
+  ## stall of an interval or more gives one interval from now, with no burst.
+  let now = getMonoTime()
+  let next = monitor.nextFrameTime + monitor.frameInterval
+  monitor.nextFrameTime =
+    if now < next:
+      next
+    else:
+      now + monitor.frameInterval
+
+proc frameTimeLeft*(monitor: FpsMonitor): int =
+  ## Milliseconds until the next frame, rounded up; 0 when it is due.
+  let left = (monitor.nextFrameTime - getMonoTime()).inNanoseconds
+  if left <= 0:
+    0
+  else:
+    int((left + 999_999) div 1_000_000)
 
 proc getStats*(monitor: FpsMonitor): PerfStats =
   ## Get comprehensive performance statistics

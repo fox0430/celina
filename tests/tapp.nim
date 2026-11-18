@@ -1204,7 +1204,7 @@ suite "App run lifecycle":
               newApp(AppConfig(alternateScreen: false, rawMode: false, targetFps: 60))
             app.onRender proc(buffer: var Buffer, app: App) =
               buffer.setString(0, 0, "hello")
-            app.render(),
+            discard app.render(),
         )
         if drawn:
           ranOnPty = withPtyStdout(
@@ -1523,7 +1523,7 @@ suite "App inline viewport":
           app.setup()
           try:
             check app.terminal.screen.originRow == 2
-            app.render()
+            discard app.render()
 
             # Shrunk below the height asked for, with the cursor on the last row.
             resizePty(master, 20, 5)
@@ -1531,7 +1531,7 @@ suite "App inline viewport":
             app.handleResize()
             check app.terminal.screen.originRow == 0
             check app.getBuffer().area == rect(0, 0, 20, 5)
-            app.render()
+            discard app.render()
 
             # Grown back, the viewport takes the height asked for again.
             resizePty(master, 20, 10)
@@ -1595,5 +1595,176 @@ suite "App inline viewport":
         skip()
       else:
         check output.count(makeCursorPositionSeq(0, 4) & "\r\n") == 1
+
+when defined(posix):
+  suite "App on-demand rendering":
+    privateAccess(App)
+
+    proc onDemandApp(): App =
+      newApp(
+        AppConfig(
+          alternateScreen: false, rawMode: false, targetFps: 60, renderMode: rmOnDemand
+        )
+      )
+
+    proc syncSize(app: App) =
+      let size = getTerminalSizeOrDefault()
+      app.state.resizeState = initResizeState(size.width, size.height)
+
+    proc runFrames(app: App, frames: int, each: proc(frame: int)): bool =
+      ## Run `app` on a pty and idle stdin until its `frames`th frame; false if
+      ## the pty cannot be set up.
+      var frame = 0
+      app.onFrame proc(area: Rect, app: App) =
+        inc frame
+        each(frame)
+        if frame == frames:
+          app.quit()
+      var ran = false
+      withStdinInput(
+        "",
+        proc() =
+          ran = withPtyStdout(
+            20,
+            5,
+            proc() =
+              app.syncSize()
+              app.run(),
+          ),
+      )
+      ran
+
+    test "an idle run calls the frame handler on every frame but draws the first only":
+      let app = onDemandApp()
+      var current = 0
+      var drawnAt: seq[int]
+      app.onRender proc(buffer: var Buffer) =
+        drawnAt.add current
+      if not app.runFrames(
+        10,
+        proc(frame: int) =
+          current = frame,
+      ):
+        skip()
+      else:
+        check drawnAt == @[1]
+
+    test "an idle loop wakes once per frame":
+      let app = onDemandApp()
+      var turns = 0
+      app.onTick proc(): TickResult =
+        inc turns
+        trContinue
+      if not app.runFrames(
+        20,
+        proc(frame: int) =
+          discard,
+      ):
+        skip()
+      else:
+        # A wait rounded down spun through the last millisecond of each frame.
+        check turns <= 22
+
+    test "requestRender from the frame handler draws that frame":
+      let app = onDemandApp()
+      var current = 0
+      var drawnAt: seq[int]
+      app.onRender proc(buffer: var Buffer) =
+        drawnAt.add current
+      if not app.runFrames(
+        6,
+        proc(frame: int) =
+          current = frame
+          if frame == 3:
+            app.requestRender()
+        ,
+      ):
+        skip()
+      else:
+        check drawnAt == @[1, 3]
+
+    test "a frame that does not go out in full is drawn again":
+      let app = onDemandApp()
+      var renders = 0
+      app.onRender proc(buffer: var Buffer) =
+        inc renders
+        buffer.setString(0, 0, "hello")
+      var requestedAfterCut = false
+      var output: string
+      withStdinInput(
+        "",
+        proc() =
+          withFailingStdout(
+            proc() =
+              app.syncSize()
+              app.state.renderRequest = true
+              discard app.tick()
+          )
+          requestedAfterCut = app.renderRequested()
+          output = captureStdout(
+            proc() =
+              app.syncSize()
+              discard app.tick()
+              discard app.tick()
+          ),
+      )
+      check requestedAfterCut
+      check renders == 2
+      check "hello" in output
+
+    test "the application timeout draws a frame":
+      let app = onDemandApp()
+      var timeouts, renders = 0
+      app.onTimeout proc(): TickResult =
+        inc timeouts
+        trContinue
+      app.onRender proc(buffer: var Buffer) =
+        inc renders
+      app.setApplicationTimeout(10)
+      app.state.drawnCursor = app.renderer.getCursorManager().getState()
+      app.timings.lastEventTime = getMonoTime() - initDuration(milliseconds = 50)
+      withStdinInput(
+        "",
+        proc() =
+          discard captureStdout(
+            proc() =
+              app.syncSize()
+              discard app.tick()
+          ),
+      )
+      check timeouts == 1
+      check renders == 1
+
+    test "a resume asks for a frame":
+      let app = onDemandApp()
+      discard captureStdout(
+        proc() =
+          app.suspend()
+          app.state.renderRequest = false
+          app.resume()
+      )
+      check app.renderRequested()
+
+    test "the last frame runs the frame handler first":
+      let app = onDemandApp()
+      var frames, renders = 0
+      app.onFrame proc(area: Rect) =
+        inc frames
+      app.onRender proc(buffer: var Buffer) =
+        inc renders
+      if not withPtyStdout(
+        20,
+        5,
+        proc() =
+          app.setup()
+          try:
+            app.drawLastFrame()
+          finally:
+            app.restoreTerminal(),
+      ):
+        skip()
+      else:
+        check frames == 1
+        check renders == 1
 
 {.pop.}

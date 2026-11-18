@@ -8,7 +8,7 @@
 ## Symbols required at the template-expansion site (the call site must
 ## have them in scope; they are not bound from this module):
 ## `Event`, `EventKind`, `EventResult` (with `erContinue` / `erQuit`),
-## `Buffer`, `TickResult` (with `trContinue` / `trQuit`), and — for the
+## `Buffer`, `Rect`, `TickResult` (with `trContinue` / `trQuit`), and — for the
 ## `*Async` variants — `Future` plus the `.async.` pragma from whichever
 ## async backend the app uses.
 
@@ -132,6 +132,22 @@ template defineRenderHandlerSetters*(AppT: untyped) =
     ## terminal size, or window manager information.
     app.handlers.render = handler
 
+template defineFrameHandlerSetters*(AppT: untyped) =
+  ## Generate the sync `onFrame` setter family for `AppT`: 2 overloads.
+
+  proc onFrame*(app: AppT, handler: proc(area: Rect)) =
+    ## Set the frame handler, called every frame of the frame clock
+    ## (`targetFps`) whether or not a frame is drawn (see `RenderMode`).
+    ## In `rmOnDemand`, call `requestRender` for a change that should show.
+    ## `area` is the buffer's area.
+    app.handlers.frame = wrapHandler(handler):
+      proc(area: Rect, app: AppT) =
+        captured(area)
+
+  proc onFrame*(app: AppT, handler: proc(area: Rect, app: AppT)) =
+    ## Set the frame handler with App context.
+    app.handlers.frame = handler
+
 template defineTickHandlerSetters*(AppT: untyped) =
   ## Generate the sync `onTick` setter family for `AppT`.
   ##
@@ -139,8 +155,9 @@ template defineTickHandlerSetters*(AppT: untyped) =
   ## `TickResult` (`trContinue` / `trQuit`).
 
   proc onTick*(app: AppT, handler: proc(): TickResult) =
-    ## Set the tick handler called each frame between event processing
-    ## and rendering.
+    ## Set the tick handler called on each turn of the loop, after event
+    ## processing and before the frame. In `rmOnDemand`, call `requestRender`
+    ## for a change that should show.
     ##
     ## Return `trContinue` to keep running, `trQuit` to exit the loop.
     app.handlers.tick = wrapHandler(handler):
@@ -287,12 +304,29 @@ template defineRenderHandlerSettersAsync*(AppT: untyped) =
     ## Set the render handler with AsyncApp context for the application.
     app.handlers.render = handler
 
+template defineFrameHandlerSettersAsync*(AppT: untyped) =
+  ## Generate the async `onFrameAsync` setter family for `AppT`: 2 overloads.
+  ## Frame handlers are synchronous, like render handlers, so `renderNow` can
+  ## call them.
+
+  proc onFrameAsync*(app: AppT, handler: proc(area: Rect)) =
+    ## Set the frame handler, as `onFrame`, also called by `renderNow` when a
+    ## frame is due. Do not call `renderNow` from it.
+    app.handlers.frame = wrapHandler(handler):
+      proc(area: Rect, app: AppT) =
+        captured(area)
+
+  proc onFrameAsync*(app: AppT, handler: proc(area: Rect, app: AppT)) =
+    ## Set the frame handler with AsyncApp context.
+    app.handlers.frame = handler
+
 template defineTickHandlerSettersAsync*(AppT: untyped) =
   ## Generate the async `onTickAsync` setter family for `AppT`. 4 overloads.
 
   proc onTickAsync*(app: AppT, handler: proc(): Future[TickResult] {.async.}) =
-    ## Set the async tick handler called each frame between event
-    ## processing and rendering.
+    ## Set the async tick handler called on each turn of the loop, after
+    ## event processing and before the frame. In `rmOnDemand`, call
+    ## `requestRender` for a change that should show.
     ##
     ## Return `trContinue` to keep running, `trQuit` to exit the loop.
     app.handlers.tick = wrapHandler(handler):

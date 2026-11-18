@@ -18,19 +18,18 @@
 ##
 ## The key to low CPU usage is the dynamic timeout for event polling.
 ## Instead of polling rapidly, we calculate exactly when the next
-## render should occur and use that as the timeout. This means:
+## frame is due and use that as the timeout, rounded up. This means:
 ##
 ## * The process sleeps (blocked in select()) until an event arrives
-## * OR until it's time to render the next frame
+## * OR until the next frame is due
 ## * At 60 FPS with no input, the loop runs only 60 times/second
-## * CPU usage during idle is minimal (<1%)
 ##
 ## FPS Control
 ## -----------
 ##
-## The `shouldRender()` check ensures rendering occurs at the target
-## FPS rate. Combined with the dynamic timeout, this provides both
-## responsive event handling and efficient CPU usage.
+## The frame clock (`frameDue` / `beginFrame`) ticks at the target FPS
+## whether or not a frame is drawn. `RenderMode` decides which frames are
+## drawn: all, or only those something asked for.
 
 import std/[monotimes, times]
 

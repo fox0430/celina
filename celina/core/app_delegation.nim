@@ -73,6 +73,30 @@ template defineCursorDelegation*(AppT: untyped) =
     ## Reset cursor to default state
     app.renderer.getCursorManager().reset()
 
+template defineRenderRequests*(AppT: untyped) =
+  ## Generate the frame request procs for `AppT`: `requestRender`,
+  ## `renderRequested`, `invalidate`.
+
+  proc requestRender*(app: AppT) =
+    ## Request a frame in `rmOnDemand` for a change the loop does not see
+    ## itself, such as one made on a `Window` directly. Call it from the loop's
+    ## thread.
+    app.state.renderRequest = true
+
+  proc renderRequested*(app: AppT): bool =
+    ## Whether a frame is wanted: `requestRender`, what the loop requests
+    ## itself, or a cursor change since the last full frame.
+    app.state.renderRequest or
+      not showsSameCursor(
+        app.renderer.getCursorManager().getState(), app.state.drawnCursor
+      )
+
+  proc invalidate*(app: AppT) =
+    ## Mark the screen unknown and request a frame, for a screen that something
+    ## else may have written over.
+    app.terminal.invalidate()
+    app.state.renderRequest = true
+
 template defineStateQueries*(AppT: untyped) =
   ## Generate the runtime state query procs for `AppT`:
   ## `isRunning`, `getTerminalSize`, `getConfig`, `getFrameCount`,
@@ -91,11 +115,11 @@ template defineStateQueries*(AppT: untyped) =
     app.config
 
   proc getFrameCount*(app: AppT): int =
-    ## Get total frame count
+    ## Get the number of frames drawn
     app.timings.frameCounter
 
   proc getLastFrameTime*(app: AppT): MonoTime =
-    ## Get timestamp of last frame
+    ## Get the time the last frame was drawn
     app.timings.lastFrameTime
 
 template defineBufferDelegation*(AppT: untyped) =
@@ -140,7 +164,8 @@ template defineFpsDelegation*(AppT: untyped) =
     app.fpsMonitor.getTargetFps()
 
   proc getCurrentFps*(app: AppT): float =
-    ## Get the current actual FPS
+    ## Get the frames drawn per second, updated once a second as frames are
+    ## drawn. In `rmOnDemand` it keeps its last value while nothing is drawn.
     app.fpsMonitor.getCurrentFps()
 
 template defineMouseDelegation*(AppT: untyped) =
@@ -186,10 +211,13 @@ template defineWindowDelegation*(AppT: untyped) =
   ##
   ## `enableWindowMode` lazily creates the WindowManager on first use; the
   ## remaining procs short-circuit to a safe default when window mode is
-  ## disabled or the manager is nil.
+  ## disabled or the manager is nil. These procs request a frame; changes made
+  ## on a `Window` or `WindowManager` directly do not.
 
   proc enableWindowMode*(app: AppT) =
     ## Enable window management mode
+    if not app.state.windowMode:
+      app.state.renderRequest = true
     app.state.windowMode = true
     if app.windowManager.isNil:
       app.windowManager = newWindowManager()
@@ -204,13 +232,16 @@ template defineWindowDelegation*(AppT: untyped) =
     ## full semantics.
     if not app.state.windowMode:
       app.enableWindowMode()
+    app.state.renderRequest = true
     return app.windowManager.addWindow(window, autoFocus)
 
   proc removeWindow*(app: AppT, windowId: WindowId): bool =
     ## Remove a window from the application
     ## Returns true if the window was found and removed, false otherwise
     if app.state.windowMode and not app.windowManager.isNil:
-      return app.windowManager.removeWindow(windowId)
+      result = app.windowManager.removeWindow(windowId)
+      if result:
+        app.state.renderRequest = true
 
   proc getWindow*(app: AppT, windowId: WindowId): Option[Window] =
     ## Get a window by ID
@@ -222,7 +253,9 @@ template defineWindowDelegation*(AppT: untyped) =
     ## Focus a specific window
     ## Returns true if the window was found and focused, false otherwise
     if app.state.windowMode and not app.windowManager.isNil:
-      return app.windowManager.focusWindow(windowId)
+      result = app.windowManager.focusWindow(windowId)
+      if result:
+        app.state.renderRequest = true
 
   proc getFocusedWindow*(app: AppT): Option[Window] =
     ## Get the currently focused window
@@ -260,6 +293,7 @@ template defineWindowDelegation*(AppT: untyped) =
     ## Handle an event through the window manager.
     ## Returns `erContinue` when window mode is disabled or no manager is set.
     if app.state.windowMode and not app.windowManager.isNil:
+      app.state.renderRequest = true
       return app.windowManager.handleEvent(event)
     return erContinue
 
