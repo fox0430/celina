@@ -17,6 +17,7 @@ type
   AppHandlers = object ## User-supplied callbacks invoked during the event loop
     event: proc(event: Event, app: App): EventResult
     render: proc(buffer: var Buffer, app: App)
+    frame: proc(area: Rect, app: App)
     tick: proc(app: App): TickResult
     timeout: proc(app: App): TickResult
 
@@ -46,6 +47,10 @@ type
     running*: bool ## Whether app is currently running
     windowMode*: bool ## Whether to use window management
     resizeState*: ResizeState ## Shared resize detection state (from tick_common)
+    renderRequest*: bool ## A frame was asked for; `rmOnDemand` draws the next one
+    drawnCursor*: cursor.CursorState
+      ## The cursor of the last frame that went out in full
+    inFrame*: bool ## AsyncApp: the frame or render handler runs, so `renderNow` refuses
 
   App* = ref object ## Main application context for CLI applications
     terminal: Terminal
@@ -75,7 +80,7 @@ proc newApp*(config: AppConfig = DefaultAppConfig): App =
     renderer: newRenderer(terminal),
     fpsMonitor: newFpsMonitor(if config.targetFps > 0: config.targetFps else: 60),
     config: config,
-    handlers: AppHandlers(event: nil, render: nil, tick: nil, timeout: nil),
+    handlers: AppHandlers(event: nil, render: nil, frame: nil, tick: nil, timeout: nil),
     timings: AppTimings(
       frameCounter: 0,
       lastFrameTime: getMonoTime(),
@@ -122,11 +127,15 @@ proc newApp*(config: AppConfig = DefaultAppConfig): App =
 # `bool`-returning overloads kept for backward compatibility.
 defineEventHandlerSetters(App)
 defineRenderHandlerSetters(App)
+defineFrameHandlerSetters(App)
 defineTickHandlerSetters(App)
 defineTimeoutHandlerSetters(App)
 
 # Generated: application timeout setter/getter
 defineTimeoutAccessors(App)
+
+# Generated: requestRender / renderRequested / invalidate
+defineRenderRequests(App)
 
 # Lifecycle management
 proc isInline(app: App): bool {.inline.} =
@@ -160,6 +169,8 @@ proc setup(app: App) =
   # Idle time counts from this run's start, not from `new` or a previous run.
   app.timings.lastEventTime = getMonoTime()
   app.state.quitDrawn = false
+  # The screen was just cleared.
+  app.state.renderRequest = true
 
 proc handleResize(app: App) =
   ## Handle terminal resize events
@@ -190,6 +201,11 @@ proc dispatchRender*(app: App) =
   if app.handlers.render != nil:
     app.handlers.render(app.renderer.getBuffer(), app)
 
+proc dispatchFrame*(app: App) =
+  ## Invoke the configured frame handler with the buffer's area, if any.
+  if app.handlers.frame != nil:
+    app.handlers.frame(app.renderer.getBuffer().area, app)
+
 proc dispatchTick*(app: App): TickResult =
   ## Invoke the configured tick handler.
   ##
@@ -215,7 +231,7 @@ proc dispatchTimeout*(app: App): TickResult =
 proc hasTimeoutHandler(app: App): bool {.inline.} =
   app.handlers.timeout != nil
 
-proc render(app: App) =
+proc render(app: App): StreamWrite =
   ## Render the current frame
   # Clear the buffer
   app.renderer.clear()
@@ -229,14 +245,28 @@ proc render(app: App) =
   app.state.quitDrawn = app.state.shouldQuit
 
   # Render to terminal
-  app.renderer.render()
+  let cursor = app.renderer.getCursorManager().getState()
+  result = app.renderer.present()
+  if result == swAll:
+    app.state.drawnCursor = cursor
 
 proc renderFrame(app: App) =
+  ## Draw a frame, requesting another if it was cut short.
+  app.state.renderRequest = false
   app.fpsMonitor.startFrame()
-  app.render()
+  let outcome = app.render()
   app.fpsMonitor.endFrame()
   app.timings.frameCounter.inc()
   app.timings.lastFrameTime = getMonoTime()
+  if outcome != swAll:
+    app.state.renderRequest = true
+
+proc runFrame(app: App) =
+  ## One frame of the frame clock: the frame handler, then the frame if wanted.
+  app.fpsMonitor.beginFrame()
+  app.dispatchFrame()
+  if app.config.renderMode == rmContinuous or app.renderRequested():
+    app.renderFrame()
 
 proc drawLastFrame(app: App) =
   ## Inline, the last frame stays in the scrollback, so it must show the last
@@ -246,7 +276,8 @@ proc drawLastFrame(app: App) =
   let resized = read and app.state.resizeState.checkResize(width, height)
   if resized:
     app.handleResize()
-  if resized or not app.state.quitDrawn:
+  if resized or not app.state.quitDrawn or app.renderRequested():
+    app.dispatchFrame()
     app.renderFrame()
 
 proc tick(app: App): bool =
@@ -254,10 +285,10 @@ proc tick(app: App): bool =
   ##
   ## This method:
   ##   1. Checks for resize events
-  ##   2. Calculates time remaining until next render
+  ##   2. Calculates time remaining until the next frame
   ##   3. Polls for input events with timeout = remaining time
   ##   4. Processes events (max per tick defined in tick_common)
-  ##   5. Renders only if target FPS interval reached
+  ##   5. Runs the frame when it is due, drawing it as the render mode says
   ##
   ## See tick_common module for details on CPU efficiency and FPS control.
   ##
@@ -285,9 +316,11 @@ proc tick(app: App): bool =
 
       # Stamp after dispatch, as for input events.
       app.timings.lastEventTime = getMonoTime()
+      # The screen was cleared.
+      app.state.renderRequest = true
 
-    # Calculate remaining time until next render (used as poll timeout)
-    let remainingTime = app.fpsMonitor.getRemainingFrameTime()
+    # Calculate remaining time until the next frame (used as poll timeout)
+    let remainingTime = app.fpsMonitor.frameTimeLeft()
 
     # Calculate poll timeout, integrating application timeout if set
     let (timeout, hasTimeout) = computePollTimeoutWithState(
@@ -308,6 +341,7 @@ proc tick(app: App): bool =
         let timeoutResult = app.dispatchTimeout()
         # Reset after the handler so a slow one does not fire again at once.
         app.timings.lastEventTime = getMonoTime()
+        app.state.renderRequest = true
         if timeoutResult == trQuit:
           return false
 
@@ -342,14 +376,16 @@ proc tick(app: App): bool =
       # Stamp after dispatch: a handler that runs longer than the timeout
       # must not leave the idle clock already expired.
       app.timings.lastEventTime = getMonoTime()
+      # After the handlers, so the request covers what they changed.
+      if eventCount > 0:
+        app.state.renderRequest = true
 
     # Call tick handler between event processing and rendering
     if app.dispatchTick() == trQuit:
       return false
 
-    # Render only if enough time has passed for target FPS
-    if app.fpsMonitor.shouldRender():
-      app.renderFrame()
+    if app.fpsMonitor.frameDue():
+      app.runFrame()
 
     return not app.state.shouldQuit
   except TerminalError:
@@ -527,8 +563,8 @@ proc resume*(app: App) =
   ## Resume the TUI after a `suspend()` call.
   ##
   ## Restores terminal state. When the app was suspended, the terminal marks
-  ## the screen unknown, so the next frame is a full redraw, and the
-  ## application-timeout idle clock restarts.
+  ## the screen unknown, so the next frame is a full redraw and is drawn in
+  ## `rmOnDemand` too, and the application-timeout idle clock restarts.
   let wasSuspended = app.isSuspended
   # Update the app state even when the terminal resume fails partway.
   try:
@@ -538,6 +574,7 @@ proc resume*(app: App) =
       # Returning from the suspended program counts as activity, like the
       # start of a run.
       app.timings.lastEventTime = getMonoTime()
+      app.state.renderRequest = true
 
 template withSuspend*(app: App, body: untyped) =
   ## Suspend the TUI, execute body, then resume.

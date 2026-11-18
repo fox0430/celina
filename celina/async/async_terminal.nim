@@ -24,8 +24,10 @@ from async_io import
   writeStdoutAsync, tryWriteBlocking, writeOrRaiseBlocking, withStdoutLock,
   withStdoutLockNow, queryCursorPositionAsync, writeStdoutBlocking
 from ../core/output_stream import
-  swAll, swPartial, srAbort, srOsc8, srSgr, srSyncEnd, outcomeOf, setPendingReset,
-  writeStream, writeStreamLocked
+  StreamWrite, swAll, swNone, swPartial, srAbort, srOsc8, srSgr, srSyncEnd, outcomeOf,
+  setPendingReset, writeStream, writeStreamLocked
+
+export StreamWrite
 
 type
   AsyncTerminal* = ref object ## Async terminal interface for screen management
@@ -1030,6 +1032,28 @@ proc drawWithCursorAsync*(
   else:
     discard presented # Avoid "declared but not used" warning
 
+proc presentWithCursorAdoptAsync*(
+    terminal: AsyncTerminal,
+    asyncBuffer: async_buffer.AsyncBuffer,
+    cursorX, cursorY: int,
+    cursorVisible: bool,
+    cursorStyle: CursorStyle = CursorStyle.Default,
+    force: bool = false,
+): Future[StreamWrite] {.async.} =
+  ## `drawWithCursorAdoptAsync` that reports how much of the frame went out,
+  ## for a loop that draws only on request and has to ask again after a cut
+  ## frame.
+  let presented = await terminal.presentFrameAdopt(
+    asyncBuffer,
+    cursorRequest(cursorX, cursorY, cursorVisible, cursorStyle),
+    force,
+    not terminal.syncOutputEnabled,
+  )
+  when defined(celinaDebug):
+    if presented.outcome != swAll:
+      stderr.writeLine("Warning: drawWithCursorAdoptAsync() left the screen unknown")
+  return presented.outcome
+
 proc drawWithCursorAdoptAsync*(
     terminal: AsyncTerminal,
     asyncBuffer: async_buffer.AsyncBuffer,
@@ -1053,17 +1077,9 @@ proc drawWithCursorAdoptAsync*(
   ## flow-controlled write cannot desync `lastBuffer` from the bytes actually
   ## emitted. A write that did not go out in full hands a swap back (unless
   ## `asyncBuffer` was resized meanwhile) and makes the next frame a full render.
-  let presented = await terminal.presentFrameAdopt(
-    asyncBuffer,
-    cursorRequest(cursorX, cursorY, cursorVisible, cursorStyle),
-    force,
-    not terminal.syncOutputEnabled,
+  discard await terminal.presentWithCursorAdoptAsync(
+    asyncBuffer, cursorX, cursorY, cursorVisible, cursorStyle, force
   )
-  when defined(celinaDebug):
-    if presented.outcome != swAll:
-      stderr.writeLine("Warning: drawWithCursorAdoptAsync() left the screen unknown")
-  else:
-    discard presented # Avoid "declared but not used" warning
 
 proc drawWithCursorAsync*(
     terminal: AsyncTerminal,
@@ -1114,6 +1130,38 @@ proc drawWithCursorAdoptAsync*(
       stderr.writeLine("Warning: drawWithCursorAdoptAsync() left the screen unknown")
   presented.style
 
+proc presentWithCursorAdopt*(
+    terminal: AsyncTerminal,
+    asyncBuffer: async_buffer.AsyncBuffer,
+    cursorX, cursorY: int,
+    cursorVisible: bool,
+    cursorStyle: CursorStyle = CursorStyle.Default,
+    force: bool = false,
+): Option[StreamWrite] =
+  ## Blocking `presentWithCursorAdoptAsync`, for code that cannot await. None,
+  ## writing nothing, while another writer holds the stdout lock. The write
+  ## blocks, so the frame is adopted after it rather than staged.
+  var outcome = swNone
+  let locked = withStdoutLockNow:
+    asyncBuffer.withBuffer:
+      if force:
+        terminal.screen.invalidate()
+      let plan = terminal.screen.planFrame(
+        buffer,
+        cursorRequest(cursorX, cursorY, cursorVisible, cursorStyle),
+        not terminal.syncOutputEnabled,
+      )
+      terminal.screen.markSent(plan)
+      outcome = outcomeOf(writeStream(plan.bytes, plan.onPartial), plan.bytes.len)
+      terminal.screen.finishAdopt(plan, buffer, outcome)
+      when defined(celinaDebug):
+        if outcome != swAll:
+          stderr.writeLine("Warning: drawWithCursorAdopt() left the screen unknown")
+  if locked:
+    some(outcome)
+  else:
+    none(StreamWrite)
+
 proc drawWithCursorAdopt*(
     terminal: AsyncTerminal,
     asyncBuffer: async_buffer.AsyncBuffer,
@@ -1125,21 +1173,9 @@ proc drawWithCursorAdopt*(
   ## Blocking `drawWithCursorAdoptAsync`, for code that cannot await. Returns
   ## false, writing nothing, while another writer holds the stdout lock. The
   ## write blocks, so the frame is adopted after it rather than staged.
-  withStdoutLockNow:
-    asyncBuffer.withBuffer:
-      if force:
-        terminal.screen.invalidate()
-      let plan = terminal.screen.planFrame(
-        buffer,
-        cursorRequest(cursorX, cursorY, cursorVisible, cursorStyle),
-        not terminal.syncOutputEnabled,
-      )
-      terminal.screen.markSent(plan)
-      let outcome = outcomeOf(writeStream(plan.bytes, plan.onPartial), plan.bytes.len)
-      terminal.screen.finishAdopt(plan, buffer, outcome)
-      when defined(celinaDebug):
-        if outcome != swAll:
-          stderr.writeLine("Warning: drawWithCursorAdopt() left the screen unknown")
+  terminal.presentWithCursorAdopt(
+    asyncBuffer, cursorX, cursorY, cursorVisible, cursorStyle, force
+  ).isSome
 
 # Terminal state queries
 # Note: getSize and getArea need explicit proc definitions to avoid conflicts

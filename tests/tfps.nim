@@ -1,6 +1,6 @@
-import std/[unittest, os]
+import std/[unittest, os, monotimes, times, importutils]
 
-import ../celina/core/fps
+import ../celina/core/fps {.all.}
 
 # Test suite for FPS module
 suite "FPS Module Tests":
@@ -176,3 +176,59 @@ suite "FPS Module Tests":
 
       let monitor120 = newFpsMonitor(120) # Maximum valid FPS
       check monitor120.getTargetFps() == 120
+
+suite "Frame clock":
+  privateAccess(FpsMonitor)
+  let interval = initDuration(nanoseconds = 1_000_000_000 div 60)
+
+  test "the first frame is due at once":
+    let monitor = newFpsMonitor(60)
+    check monitor.frameDue()
+    check monitor.frameTimeLeft() == 0
+    monitor.beginFrame()
+    check not monitor.frameDue()
+    check monitor.frameTimeLeft() in 1 .. 17
+
+  test "the wait is rounded up":
+    let monitor = newFpsMonitor(60)
+    monitor.nextFrameTime = getMonoTime() + initDuration(microseconds = 10_700)
+    let left = monitor.frameTimeLeft()
+    let actual = (monitor.nextFrameTime - getMonoTime()).inNanoseconds
+    check left.int64 * 1_000_000 >= actual
+
+  test "the next frame is one interval after the last, not after now":
+    let monitor = newFpsMonitor(60)
+    let due = getMonoTime() - initDuration(milliseconds = 5)
+    monitor.nextFrameTime = due
+    monitor.beginFrame()
+    check monitor.nextFrameTime == due + interval
+
+  test "after a stall of a whole frame the clock starts again from now":
+    let monitor = newFpsMonitor(60)
+    monitor.nextFrameTime = getMonoTime() - initDuration(milliseconds = 50)
+    let before = getMonoTime()
+    monitor.beginFrame()
+    check monitor.nextFrameTime >= before + interval
+    check monitor.nextFrameTime <= getMonoTime() + interval
+
+  test "a higher target FPS cuts the wait for the next frame":
+    let monitor = newFpsMonitor(1)
+    monitor.beginFrame()
+    check monitor.frameTimeLeft() > 900
+    monitor.setTargetFps(60)
+    check monitor.frameTimeLeft() <= 17
+
+  test "a lower target FPS keeps the next frame where it was":
+    let monitor = newFpsMonitor(60)
+    monitor.beginFrame()
+    let due = monitor.nextFrameTime
+    monitor.setTargetFps(1)
+    check monitor.nextFrameTime == due
+
+  test "the frame clock leaves the render timing alone":
+    let monitor = newFpsMonitor(60)
+    monitor.startFrame()
+    check not monitor.shouldRender()
+    let renderedAt = monitor.lastRenderTime
+    monitor.beginFrame()
+    check monitor.lastRenderTime == renderedAt

@@ -23,6 +23,7 @@ type
     ## User-supplied callbacks invoked during the async event loop
     event: proc(event: Event, app: AsyncApp): Future[EventResult] {.async.}
     render: proc(buffer: var Buffer, app: AsyncApp)
+    frame: proc(area: Rect, app: AsyncApp)
     tick: proc(app: AsyncApp): Future[TickResult] {.async.}
     timeout: proc(app: AsyncApp): Future[TickResult] {.async.}
 
@@ -101,7 +102,8 @@ proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
     renderer: newAsyncRenderer(terminal),
     fpsMonitor: newFpsMonitor(if config.targetFps > 0: config.targetFps else: 60),
     config: config,
-    handlers: AsyncAppHandlers(event: nil, render: nil, tick: nil, timeout: nil),
+    handlers:
+      AsyncAppHandlers(event: nil, render: nil, frame: nil, tick: nil, timeout: nil),
     timings: AsyncAppTimings(
       frameCounter: 0,
       lastFrameTime: getMonoTime(),
@@ -143,17 +145,21 @@ proc newAsyncApp*(config: AppConfig = DefaultAppConfig): AsyncApp =
 # handlers where `false` signals quit and `true` signals continue. These
 # are wrapped to return `erQuit`/`erContinue` respectively.
 
-# Generated: onEventAsync / onRenderAsync / onTickAsync / onTimeoutAsync
-# setter families. See `app_handlers.nim` for the template bodies,
+# Generated: onEventAsync / onRenderAsync / onFrameAsync / onTickAsync /
+# onTimeoutAsync setter families. See `app_handlers.nim` for the template bodies,
 # including the legacy `Future[bool]`-returning overloads kept for
 # backward compatibility.
 defineEventHandlerSettersAsync(AsyncApp)
 defineRenderHandlerSettersAsync(AsyncApp)
+defineFrameHandlerSettersAsync(AsyncApp)
 defineTickHandlerSettersAsync(AsyncApp)
 defineTimeoutHandlerSettersAsync(AsyncApp)
 
 # Generated: application timeout setter/getter
 defineTimeoutAccessors(AsyncApp)
+
+# Generated: requestRender / renderRequested / invalidate
+defineRenderRequests(AsyncApp)
 
 # AsyncApp Lifecycle Management
 
@@ -198,6 +204,8 @@ proc setupAsync(app: AsyncApp) {.async.} =
   # Idle time counts from this run's start, not from `new` or a previous run.
   app.timings.lastEventTime = getMonoTime()
   app.state.quitDrawn = false
+  # The screen was just cleared.
+  app.state.renderRequest = true
 
 proc cleanupAsync(app: AsyncApp) {.async.} =
   ## Internal async cleanup procedure to restore terminal state.
@@ -239,6 +247,17 @@ proc dispatchRenderAsync*(app: AsyncApp) =
       {.cast(raises: []).}:
         app.handlers.render(app.renderer.getBuffer(), app)
 
+proc dispatchFrameAsync*(app: AsyncApp) =
+  ## Invoke the configured frame handler with the buffer's area, if any.
+  if app.handlers.frame != nil:
+    app.state.inFrame = true
+    try:
+      {.cast(gcsafe).}:
+        {.cast(raises: []).}:
+          app.handlers.frame(app.renderer.getBuffer().area, app)
+    finally:
+      app.state.inFrame = false
+
 proc dispatchTickAsync*(app: AsyncApp): Future[TickResult] {.async.} =
   ## Invoke the configured async tick handler.
   ##
@@ -266,51 +285,85 @@ proc hasTimeoutHandler(app: AsyncApp): bool {.inline.} =
 
 proc fillFrame(app: AsyncApp) =
   ## Fill the renderer's buffer with the next frame.
-  # Clear the buffer
-  app.renderer.clear()
+  app.state.inFrame = true
+  try:
+    # Clear the buffer
+    app.renderer.clear()
 
-  # Call user render handler first (for background content)
-  app.dispatchRenderAsync()
+    # Call user render handler first (for background content)
+    app.dispatchRenderAsync()
 
-  # If window mode is enabled, render windows on top
-  if app.state.windowMode and not app.windowManager.isNil:
-    app.windowManager.render(app.renderer.getBuffer())
+    # If window mode is enabled, render windows on top
+    if app.state.windowMode and not app.windowManager.isNil:
+      app.windowManager.render(app.renderer.getBuffer())
+  finally:
+    app.state.inFrame = false
 
-proc renderAsync(app: AsyncApp) {.async.} =
+proc renderAsync(app: AsyncApp): Future[StreamWrite] {.async.} =
   ## Render the current frame asynchronously
   app.fillFrame()
   # Before the write: another task may call `quit()` while it waits. Not in
   # `renderNow`, whose handler may change the state after it.
   app.state.quitDrawn = app.state.shouldQuit
-  await app.renderer.renderAsync()
+  let cursor = app.renderer.getCursorManager().getState()
+  let outcome = await app.renderer.presentAsync()
+  if outcome == swAll:
+    app.state.drawnCursor = cursor
+  return outcome
 
 proc renderFrameAsync(app: AsyncApp) {.async.} =
+  ## Draw a frame, requesting another if it was cut short.
+  app.state.renderRequest = false
   app.fpsMonitor.startFrame()
-  await app.renderAsync()
+  let outcome = await app.renderAsync()
   app.fpsMonitor.endFrame()
   app.timings.frameCounter.inc()
   app.timings.lastFrameTime = getMonoTime()
+  if outcome != swAll:
+    app.state.renderRequest = true
+
+proc runFrameAsync(app: AsyncApp) {.async.} =
+  ## One frame of the frame clock: the frame handler, then the frame if wanted.
+  app.fpsMonitor.beginFrame()
+  app.dispatchFrameAsync()
+  if app.config.renderMode == rmContinuous or app.renderRequested():
+    await app.renderFrameAsync()
 
 proc renderNow*(app: AsyncApp): bool =
   ## Draw a frame now, blocking on the write. For a handler that cannot await
   ## and keeps the loop waiting, such as one that waits for a child process:
   ## the loop draws only between handlers. Call it from that handler, not from
-  ## the render handler (which it calls) or another task.
+  ## the frame or render handler (which it calls) or another task.
   ##
-  ## Returns false, drawing nothing, outside `runAsync`, while suspended, or
-  ## while another writer holds stdout. A failed write is ignored as in the
-  ## loop, so true means the frame was tried, not that it reached the screen.
-  ## A resize is left for the loop to report, so the frame keeps the size the
-  ## app last saw.
-  if not app.state.running or app.terminal.isSuspended or isStdoutLocked():
+  ## Draws whatever the render mode, takes the frame request, and runs the frame
+  ## handler first when a frame of the frame clock is due. Returns false,
+  ## drawing nothing and keeping the request, outside `runAsync`, while
+  ## suspended, while another writer holds stdout, or in the frame or render
+  ## handler. A failed write is ignored as in the loop; a resize is left for the
+  ## loop to report, so the frame keeps the size the app last saw.
+  if not app.state.running or app.terminal.isSuspended or isStdoutLocked() or
+      app.state.inFrame:
     return false
+  if app.fpsMonitor.frameDue():
+    app.fpsMonitor.beginFrame()
+    app.dispatchFrameAsync()
+  # After the frame handler, so the request it makes is this frame's.
+  app.state.renderRequest = false
   app.fpsMonitor.startFrame()
   app.fillFrame()
-  result = app.renderer.render()
+  let cursor = app.renderer.getCursorManager().getState()
+  let outcome = app.renderer.present()
   app.fpsMonitor.endFrame()
-  if result:
-    app.timings.frameCounter.inc()
-    app.timings.lastFrameTime = getMonoTime()
+  if outcome.isNone:
+    app.state.renderRequest = true
+    return false
+  app.timings.frameCounter.inc()
+  app.timings.lastFrameTime = getMonoTime()
+  if outcome.get == swAll:
+    app.state.drawnCursor = cursor
+  else:
+    app.state.renderRequest = true
+  true
 
 proc drawLastFrameAsync(app: AsyncApp) {.async.} =
   ## Async `App.drawLastFrame`.
@@ -318,7 +371,8 @@ proc drawLastFrameAsync(app: AsyncApp) {.async.} =
   let resized = read and app.state.resizeState.checkResize(width, height)
   if resized:
     await app.handleResizeAsync()
-  if resized or not app.state.quitDrawn:
+  if resized or not app.state.quitDrawn or app.renderRequested():
+    app.dispatchFrameAsync()
     await app.renderFrameAsync()
 
 proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
@@ -326,10 +380,10 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
   ##
   ## This method:
   ##   1. Checks for resize events
-  ##   2. Calculates time remaining until next render
+  ##   2. Calculates time remaining until the next frame
   ##   3. Polls for input events with timeout = remaining time
   ##   4. Processes events (max per tick defined in tick_common)
-  ##   5. Renders only if target FPS interval reached
+  ##   5. Runs the frame when it is due, drawing it as the render mode says
   ##
   ## See tick_common module for details on CPU efficiency and FPS control.
   ##
@@ -357,9 +411,11 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
 
       # Stamp after dispatch, as for input events.
       app.timings.lastEventTime = getMonoTime()
+      # The screen was cleared.
+      app.state.renderRequest = true
 
-    # Calculate remaining time until next render (used as poll timeout)
-    let remainingTime = app.fpsMonitor.getRemainingFrameTime()
+    # Calculate remaining time until the next frame (used as poll timeout)
+    let remainingTime = app.fpsMonitor.frameTimeLeft()
 
     # Calculate poll timeout, integrating application timeout if set
     let (rawTimeout, hasTimeout) = computePollTimeoutWithState(
@@ -383,6 +439,7 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
         let timeoutResult = (await app.dispatchTimeoutAsync())
         # Reset after the handler so a slow one does not fire again at once.
         app.timings.lastEventTime = getMonoTime()
+        app.state.renderRequest = true
         if timeoutResult == trQuit:
           return false
 
@@ -433,14 +490,16 @@ proc tickAsync(app: AsyncApp): Future[bool] {.async.} =
       # Stamp after dispatch: a handler that runs longer than the timeout
       # must not leave the idle clock already expired.
       app.timings.lastEventTime = getMonoTime()
+      # After the handlers, so the request covers what they changed.
+      if eventCount > 0:
+        app.state.renderRequest = true
 
     # Call tick handler between event processing and rendering
     if (await app.dispatchTickAsync()) == trQuit:
       return false
 
-    # Render only if enough time has passed for target FPS
-    if app.fpsMonitor.shouldRender():
-      await app.renderFrameAsync()
+    if app.fpsMonitor.frameDue():
+      await app.runFrameAsync()
 
     return not app.state.shouldQuit
   except CancelledError as e:
@@ -590,8 +649,13 @@ proc readAvailableEvents*(app: AsyncApp, timeoutMs: int = 0): seq[Event] =
   ##
   ## Call it only from a handler: from another task it can take bytes while the
   ## loop is in the middle of reading a sequence.
+  ##
+  ## Taking events requests a frame, as dispatching them would.
   if app.inputReader.isNil:
     return
+  defer:
+    if result.len > 0:
+      app.state.renderRequest = true
   while app.typeahead.len > 0:
     result.add app.typeahead.popFirst()
   let deadline = getMonoTime() + initDuration(milliseconds = timeoutMs)
@@ -883,8 +947,8 @@ proc resumeAsync*(app: AsyncApp) {.async.} =
   ## Resume the TUI after a `suspendAsync()` call.
   ##
   ## Restores terminal state. When the app was suspended, the terminal marks
-  ## the screen unknown, so the next frame is a full redraw, and the
-  ## application-timeout idle clock restarts.
+  ## the screen unknown, so the next frame is a full redraw and is drawn in
+  ## `rmOnDemand` too, and the application-timeout idle clock restarts.
   let wasSuspended = app.isSuspended
   # Update the app state even when the terminal resume fails partway.
   try:
@@ -894,6 +958,7 @@ proc resumeAsync*(app: AsyncApp) {.async.} =
       # Returning from the suspended program counts as activity, like the
       # start of a run.
       app.timings.lastEventTime = getMonoTime()
+      app.state.renderRequest = true
 
 template withSuspendAsync*(app: AsyncApp, body: untyped) =
   ## Suspend the TUI, execute body, then resume.

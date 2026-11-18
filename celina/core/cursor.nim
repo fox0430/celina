@@ -84,6 +84,13 @@ proc reset*(manager: CursorManager) =
   manager.state.style = CursorStyle.Default
   manager.state.lastStyle = CursorStyle.Default
 
+proc showsSameCursor*(a, b: CursorState): bool =
+  ## Whether `a` and `b` show the same cursor: hidden in both, or shown at the
+  ## same place in the same style. `lastStyle` is not compared.
+  let shown = showsCursor(a.x, a.y, a.visible)
+  shown == showsCursor(b.x, b.y, b.visible) and
+    (not shown or (a.x == b.x and a.y == b.y and a.style == b.style))
+
 proc hasPosition*(manager: CursorManager): bool =
   ## Check if cursor has a valid position set
   manager.state.x >= 0 and manager.state.y >= 0

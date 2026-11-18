@@ -15,9 +15,12 @@ when hasAsyncSupport:
     ../celina/core/[geometry, events, windows, buffer, terminal_common, tick_common]
   from ../celina/core/terminal import getTerminalSizeOrDefault
   from ../celina/core/screen_state import originRow
+  from ../celina/core/cursor import getState
+  from ../celina/async/async_renderer import getCursorManager
 
   when defined(posix):
     import std/posix
+    from std/os import sleep
     import ./stdout_capture
 
   # Legacy `bool`-returning handler overloads are exercised below to
@@ -1239,7 +1242,7 @@ when hasAsyncSupport:
               )
               app.onRenderAsync proc(buffer: var Buffer, app: AsyncApp) =
                 buffer.setString(0, 0, "hello")
-              waitFor app.renderAsync()
+              discard waitFor app.renderAsync()
           )
           app.inputReader = newAsyncInputReader()
           try:
@@ -1837,7 +1840,7 @@ when hasAsyncSupport:
               let frame = app.renderAsync()
               app.quit()
               release.complete()
-              waitFor frame
+              discard waitFor frame
               waitFor holder
               waitFor app.drawLastFrameAsync()
               check(renders == 2),
@@ -1886,14 +1889,14 @@ when hasAsyncSupport:
             let app = inlineApp(8)
             app.withInlineSetup:
               check app.terminal.screen.originRow == 2
-              waitFor app.renderAsync()
+              discard waitFor app.renderAsync()
 
               resizePty(master, 20, 5)
               typeInto(master, "\e[5;1R")
               waitFor app.handleResizeAsync()
               check app.terminal.screen.originRow == 0
               check app.getBuffer().area == rect(0, 0, 20, 5)
-              waitFor app.renderAsync()
+              discard waitFor app.renderAsync()
 
               resizePty(master, 20, 10)
               typeInto(master, "\e[1;1R")
@@ -2199,6 +2202,505 @@ when hasAsyncSupport:
         app.unreadEvents([Event(kind: Key, key: KeyEvent(code: Char, char: "z"))])
         check app.typeahead.len == 0
         check app.readAvailableEvents(10).len == 0
+
+    suite "AsyncApp on-demand rendering":
+      privateAccess(AsyncApp)
+
+      proc onDemandApp(): AsyncApp =
+        newAsyncApp(
+          AppConfig(
+            alternateScreen: false,
+            rawMode: false,
+            targetFps: 60,
+            renderMode: rmOnDemand,
+          )
+        )
+
+      proc key(c: string): Event =
+        Event(kind: Key, key: KeyEvent(code: Char, char: c))
+
+      proc syncSize(app: AsyncApp) =
+        # The size seen while stdout is redirected, or the tick reports a
+        # spurious resize.
+        let size = getTerminalSizeOrDefault()
+        app.state.resizeState = initResizeState(size.width, size.height)
+
+      proc runFrames(app: AsyncApp, frames: int, onFrame: proc(frame: int)): string =
+        ## Run `app` on idle stdin until its `frames`th frame, calling `onFrame`
+        ## from the frame handler, and return what it wrote.
+        var frame = 0
+        app.onFrameAsync proc(area: Rect, app: AsyncApp) =
+          inc frame
+          onFrame(frame)
+          if frame == frames:
+            app.quit()
+        var output: string
+        withStdinInput(
+          "",
+          proc() =
+            output = captureStdout(
+              proc() =
+                app.syncSize()
+                waitFor app.runAsync()
+            ),
+        )
+        output
+
+      proc tickCaptured(app: AsyncApp): string =
+        captureStdout(
+          proc() =
+            app.syncSize()
+            discard waitFor app.tickAsync()
+        )
+
+      proc settle(app: AsyncApp) =
+        # As after a frame that went out in full.
+        app.state.renderRequest = false
+        app.state.drawnCursor = app.renderer.getCursorManager().getState()
+
+      test "an idle run calls the frame handler on every frame but draws the first only":
+        let app = onDemandApp()
+        var current = 0
+        var drawnAt: seq[int]
+        app.onRenderAsync proc(buffer: var Buffer) =
+          drawnAt.add current
+        discard app.runFrames(
+          10,
+          proc(frame: int) =
+            current = frame,
+        )
+        check drawnAt == @[1]
+        check app.getFrameCount() == 1
+
+      test "an idle loop wakes once per frame":
+        let app = onDemandApp()
+        var turns = 0
+        app.onTickAsync proc(): Future[TickResult] {.async.} =
+          inc turns
+          return trContinue
+        discard app.runFrames(
+          20,
+          proc(frame: int) =
+            discard,
+        )
+        # A wait rounded down woke the loop twice per frame.
+        check turns <= 22
+
+      test "an input event draws the next frame":
+        let app = onDemandApp()
+        var current = 0
+        var drawnAt: seq[int]
+        var events = 0
+        app.onRenderAsync proc(buffer: var Buffer) =
+          drawnAt.add current
+        app.onEventAsync proc(event: Event): Future[EventResult] {.async.} =
+          inc events
+          return erContinue
+        discard app.runFrames(
+          10,
+          proc(frame: int) =
+            current = frame
+            if frame == 4:
+              app.unreadEvents([key("a")])
+          ,
+        )
+        check events == 1
+        check drawnAt == @[1, 5]
+
+      test "what a handler changes after renderNow is drawn":
+        let app = onDemandApp()
+        var label = "start"
+        var drawn = false
+        app.onRenderAsync proc(buffer: var Buffer) =
+          buffer.setString(0, 0, label)
+        app.onEventAsync proc(
+            event: Event, app: AsyncApp
+        ): Future[EventResult] {.async.} =
+          {.cast(gcsafe).}:
+            label = "waiting"
+            drawn = app.renderNow()
+            label = "done"
+          return erContinue
+        let output = app.runFrames(
+          8,
+          proc(frame: int) =
+            if frame == 3:
+              app.unreadEvents([key("a")])
+          ,
+        )
+        check drawn
+        check "waiting" in output
+        check "done" in output
+
+      test "requestRender from the frame handler draws that frame, from elsewhere the next":
+        let app = onDemandApp()
+        var current = 0
+        var drawnAt: seq[int]
+        var requested: seq[bool]
+        var tickRequested = false
+        app.onRenderAsync proc(buffer: var Buffer) =
+          drawnAt.add current
+        app.onTickAsync proc(app: AsyncApp): Future[TickResult] {.async.} =
+          if current == 6 and not tickRequested:
+            tickRequested = true
+            app.requestRender()
+          return trContinue
+        discard app.runFrames(
+          9,
+          proc(frame: int) =
+            current = frame
+            if frame == 3:
+              app.requestRender()
+            requested.add(app.renderRequested()),
+        )
+        check drawnAt == @[1, 3, 7]
+        check requested == @[true, false, true, false, false, false, true, false, false]
+
+      test "a cursor the render handler sets the same way each time draws nothing more":
+        let app = onDemandApp()
+        var renders = 0
+        var requested: seq[bool]
+        app.onRenderAsync proc(buffer: var Buffer, app: AsyncApp) =
+          inc renders
+          app.setCursorStyle(CursorStyle.SteadyBar)
+          app.showCursorAt(3, 2)
+        discard app.runFrames(
+          6,
+          proc(frame: int) =
+            requested.add(app.renderRequested()),
+        )
+        check renders == 1
+        check requested == @[true, false, false, false, false, false]
+
+      test "a cursor moved, restyled or hidden outside the render handler draws a frame":
+        let app = onDemandApp()
+        var current = 0
+        var drawnAt: seq[int]
+        app.onRenderAsync proc(buffer: var Buffer) =
+          drawnAt.add current
+        app.showCursorAt(1, 1)
+        discard app.runFrames(
+          11,
+          proc(frame: int) =
+            current = frame
+            case frame
+            of 3:
+              app.setCursorPosition(5, 1)
+            of 5:
+              app.setCursorStyle(CursorStyle.BlinkingBar)
+            of 7:
+              app.hideCursor()
+            of 9:
+              # Hidden, so there is nothing to show.
+              app.setCursorPosition(6, 1)
+            else:
+              discard,
+        )
+        check drawnAt == @[1, 3, 5, 7]
+
+      test "a frame that does not go out in full is drawn again":
+        let app = onDemandApp()
+        var renders = 0
+        app.onRenderAsync proc(buffer: var Buffer) =
+          inc renders
+          buffer.setString(0, 0, "hello")
+        var requestedAfterCut = false
+        var output: string
+        app.inputReader = newAsyncInputReader()
+        try:
+          withStdinInput(
+            "",
+            proc() =
+              withFailingStdout(
+                proc() =
+                  app.syncSize()
+                  app.state.renderRequest = true
+                  discard waitFor app.tickAsync()
+              )
+              requestedAfterCut = app.renderRequested()
+              output = captureStdout(
+                proc() =
+                  app.syncSize()
+                  discard waitFor app.tickAsync()
+                  discard waitFor app.tickAsync()
+              ),
+          )
+        finally:
+          app.inputReader.closeAsyncInputReader()
+          app.inputReader = nil
+        check requestedAfterCut
+        check renders == 2
+        check "hello" in output
+
+      test "invalidate redraws the whole screen and the cursor style":
+        let app = onDemandApp()
+        var renders = 0
+        app.onRenderAsync proc(buffer: var Buffer, app: AsyncApp) =
+          inc renders
+          buffer.setString(0, 0, "hello")
+          app.setCursorStyle(CursorStyle.SteadyBar)
+          app.showCursorAt(1, 0)
+        var first, idle, after: string
+        app.inputReader = newAsyncInputReader()
+        try:
+          withStdinInput(
+            "",
+            proc() =
+              app.state.renderRequest = true
+              first = app.tickCaptured()
+              idle = app.tickCaptured()
+              app.invalidate()
+              after = app.tickCaptured(),
+          )
+        finally:
+          app.inputReader.closeAsyncInputReader()
+          app.inputReader = nil
+        check renders == 2
+        check "hello" in first
+        check idle == ""
+        check "hello" in after
+        check getCursorStyleSeq(CursorStyle.SteadyBar) in after
+
+      test "a resize draws a frame":
+        let app = onDemandApp()
+        var renders = 0
+        app.onRenderAsync proc(buffer: var Buffer) =
+          inc renders
+        app.inputReader = newAsyncInputReader()
+        try:
+          withStdinInput(
+            "",
+            proc() =
+              discard captureStdout(
+                proc() =
+                  app.state.resizeState = initResizeState(1, 1)
+                  discard waitFor app.tickAsync()
+              ),
+          )
+        finally:
+          app.inputReader.closeAsyncInputReader()
+          app.inputReader = nil
+        check renders == 1
+
+      test "the application timeout draws a frame":
+        let app = onDemandApp()
+        var timeouts, renders = 0
+        app.onTimeoutAsync proc(): Future[TickResult] {.async.} =
+          inc timeouts
+          return trContinue
+        app.onRenderAsync proc(buffer: var Buffer) =
+          inc renders
+        app.setApplicationTimeout(10)
+        app.settle()
+        app.timings.lastEventTime = getMonoTime() - initDuration(milliseconds = 50)
+        app.inputReader = newAsyncInputReader()
+        try:
+          withStdinInput(
+            "",
+            proc() =
+              discard app.tickCaptured(),
+          )
+        finally:
+          app.inputReader.closeAsyncInputReader()
+          app.inputReader = nil
+        check timeouts == 1
+        check renders == 1
+
+      test "a resume asks for a frame":
+        let app = onDemandApp()
+        discard captureStdout(
+          proc() =
+            app.settle()
+            waitFor app.resumeAsync()
+            check not app.renderRequested()
+            waitFor app.suspendAsync()
+            app.settle()
+            waitFor app.resumeAsync()
+            check app.renderRequested()
+        )
+
+      test "window changes ask for a frame, window queries do not":
+        let app = onDemandApp()
+        app.settle()
+        check app.getWindowCount() == 0
+        check not app.renderRequested()
+        app.enableWindowMode()
+        check app.renderRequested()
+        app.settle()
+        let id = app.addWindow(newWindow(rect(0, 0, 10, 5), "w"))
+        check app.renderRequested()
+        app.settle()
+        app.enableWindowMode()
+        check app.getWindow(id).isSome
+        check app.getFocusedWindowId().isSome
+        check not app.renderRequested()
+        check app.focusWindow(id)
+        check app.renderRequested()
+        app.settle()
+        discard app.handleWindowEvent(key("a"))
+        check app.renderRequested()
+        app.settle()
+        check app.removeWindow(id)
+        check app.renderRequested()
+        app.settle()
+        check not app.removeWindow(id)
+        check not app.renderRequested()
+
+      test "taking events asks for a frame, taking none does not":
+        let app = onDemandApp()
+        app.inputReader = newAsyncInputReader()
+        try:
+          withStdinInput(
+            "",
+            proc() =
+              app.settle()
+              check app.readAvailableEvents().len == 0
+              check not app.renderRequested()
+              app.unreadEvents([key("a")])
+              check app.readAvailableEvents().len == 1
+              check app.renderRequested()
+            ,
+          )
+        finally:
+          app.inputReader.closeAsyncInputReader()
+          app.inputReader = nil
+
+      test "a frame requested inside renderNow is drawn by it, not again by the loop":
+        let app = onDemandApp()
+        var renders = 0
+        var turns = 0
+        var wantRequest = false
+        var drawn = false
+        app.onRenderAsync proc(buffer: var Buffer) =
+          inc renders
+        app.onTickAsync proc(app: AsyncApp): Future[TickResult] {.async.} =
+          inc turns
+          if turns == 3:
+            wantRequest = true
+            drawn = app.renderNow()
+            wantRequest = false
+          return trContinue
+        discard app.runFrames(
+          8,
+          proc(frame: int) =
+            if wantRequest:
+              app.requestRender()
+          ,
+        )
+        check drawn
+        check renders == 2
+
+      test "renderNow that cannot draw keeps the request":
+        let app = onDemandApp()
+        var renders = 0
+        var turns = 0
+        var drawn = true
+        var kept = false
+        app.onRenderAsync proc(buffer: var Buffer) =
+          inc renders
+        app.onTickAsync proc(app: AsyncApp): Future[TickResult] {.async.} =
+          inc turns
+          if turns == 3:
+            app.requestRender()
+            withStdoutLock:
+              drawn = app.renderNow()
+            kept = app.renderRequested()
+          return trContinue
+        discard app.runFrames(
+          8,
+          proc(frame: int) =
+            discard,
+        )
+        check not drawn
+        check kept
+        check renders == 2
+
+      test "renderNow from the frame or render handler draws nothing":
+        let app = onDemandApp()
+        var renders = 0
+        var results: seq[bool]
+        app.onRenderAsync proc(buffer: var Buffer, app: AsyncApp) =
+          inc renders
+          results.add app.renderNow()
+        discard app.runFrames(
+          4,
+          proc(frame: int) =
+            if frame == 2:
+              results.add(app.renderNow())
+          ,
+        )
+        check results == @[false, false]
+        check renders == 1
+
+      test "renderNow from the tick handler takes the frame in rmContinuous":
+        let app =
+          newAsyncApp(AppConfig(alternateScreen: false, rawMode: false, targetFps: 60))
+        var frames, renders, turns = 0
+        var drawn = false
+        var after, next: (int, int)
+        app.onRenderAsync proc(buffer: var Buffer) =
+          inc renders
+        app.onTickAsync proc(app: AsyncApp): Future[TickResult] {.async.} =
+          inc turns
+          if turns == 3:
+            drawn = app.renderNow()
+            after = (frames, renders)
+          elif turns == 4:
+            next = (frames, renders)
+          return trContinue
+        discard app.runFrames(
+          8,
+          proc(frame: int) =
+            frames = frame,
+        )
+        check drawn
+        check next == after
+
+      test "renderNow runs the frame handler only when a frame is due":
+        let app =
+          newAsyncApp(AppConfig(alternateScreen: false, rawMode: false, targetFps: 10))
+        var frames, turns, draws, during, elapsed = 0
+        app.onTickAsync proc(app: AsyncApp): Future[TickResult] {.async.} =
+          inc turns
+          if turns == 2:
+            let before = frames
+            let start = getMonoTime()
+            for _ in 0 ..< 10:
+              if app.renderNow():
+                inc draws
+              sleep(5)
+            during = frames - before
+            elapsed = (getMonoTime() - start).inMilliseconds.int
+            app.quit()
+          return trContinue
+        discard app.runFrames(
+          100,
+          proc(frame: int) =
+            frames = frame,
+        )
+        check draws == 10
+        # A frame falls due every 100 ms; the first call may take an overdue one.
+        check during <= 2 + elapsed div 100
+
+      test "the last frame runs the frame handler first":
+        let app = onDemandApp()
+        var frames, renders = 0
+        app.onFrameAsync proc(area: Rect) =
+          inc frames
+        app.onRenderAsync proc(buffer: var Buffer) =
+          inc renders
+        app.inputReader = newAsyncInputReader()
+        try:
+          discard captureStdout(
+            proc() =
+              waitFor app.setupAsync()
+              waitFor app.drawLastFrameAsync()
+          )
+        finally:
+          app.inputReader.closeAsyncInputReader()
+          app.inputReader = nil
+        check frames == 1
+        check renders == 1
 
   {.pop.}
 else:

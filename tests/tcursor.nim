@@ -168,3 +168,32 @@ suite "Cursor Module Tests":
 
       manager.setPosition(-5, 10)
       check manager.hasPosition() == false
+
+suite "showsSameCursor":
+  proc cursorAt(
+      x, y: int, visible: bool, style = CursorStyle.Default
+  ): cursor.CursorState =
+    cursor.CursorState(x: x, y: y, visible: visible, style: style)
+
+  test "hidden cursors are the same wherever they are and in any style":
+    check showsSameCursor(
+      cursorAt(1, 2, false), cursorAt(5, 6, false, CursorStyle.SteadyBar)
+    )
+    # A visible cursor without a position is not shown.
+    check showsSameCursor(cursorAt(-1, -1, true), cursorAt(3, 3, false))
+
+  test "shown cursors differ by place and style":
+    check showsSameCursor(cursorAt(1, 2, true), cursorAt(1, 2, true))
+    check not showsSameCursor(cursorAt(1, 2, true), cursorAt(2, 2, true))
+    check not showsSameCursor(cursorAt(1, 2, true), cursorAt(1, 3, true))
+    check not showsSameCursor(
+      cursorAt(1, 2, true), cursorAt(1, 2, true, CursorStyle.SteadyBar)
+    )
+
+  test "a shown cursor differs from a hidden one":
+    check not showsSameCursor(cursorAt(1, 2, true), cursorAt(1, 2, false))
+
+  test "the deprecated lastStyle is not compared":
+    var a = cursorAt(1, 2, true)
+    a.lastStyle = CursorStyle.SteadyBar
+    check showsSameCursor(a, cursorAt(1, 2, true))

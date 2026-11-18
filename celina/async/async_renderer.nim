@@ -5,6 +5,8 @@
 ## differential rendering, and terminal output coordination.
 ## This mirrors the sync Renderer but uses AsyncTerminal and AsyncBuffer.
 
+import std/options
+
 import async_backend, async_terminal, async_buffer
 import ../core/[buffer, cursor, terminal_common, geometry, colors]
 
@@ -64,8 +66,10 @@ proc keepLastStyle(renderer: AsyncRenderer) =
 
 {.pop.}
 
-proc renderAsync*(renderer: AsyncRenderer, force: bool = false) {.async.} =
-  ## Render the buffer to terminal with cursor support
+proc presentAsync*(
+    renderer: AsyncRenderer, force: bool = false
+): Future[StreamWrite] {.async.} =
+  ## `renderAsync` that reports how much of the frame went out.
   let cursorState = renderer.cursorManager.getState()
 
   # Zero-copy: hand the live AsyncBuffer straight to the terminal. It swaps the
@@ -73,7 +77,7 @@ proc renderAsync*(renderer: AsyncRenderer, force: bool = false) {.async.} =
   # back into our AsyncBuffer, so there is no per-frame snapshot copy. Safe
   # because the renderer owns the buffer and re-fills it every frame (renderAsync
   # below / AsyncApp.renderAsync call renderer.clear() first).
-  await renderer.terminal.drawWithCursorAdoptAsync(
+  let outcome = await renderer.terminal.presentWithCursorAdoptAsync(
     renderer.asyncBuffer,
     cursorState.x,
     cursorState.y,
@@ -89,22 +93,31 @@ proc renderAsync*(renderer: AsyncRenderer, force: bool = false) {.async.} =
     buffer.clearDirty()
 
   renderer.keepLastStyle()
+  return outcome
 
-proc render*(renderer: AsyncRenderer, force: bool = false): bool =
-  ## Blocking `renderAsync`, for code that cannot await. Returns false, writing
+proc renderAsync*(renderer: AsyncRenderer, force: bool = false) {.async.} =
+  ## Render the buffer to terminal with cursor support
+  discard await renderer.presentAsync(force)
+
+proc present*(renderer: AsyncRenderer, force: bool = false): Option[StreamWrite] =
+  ## Blocking `presentAsync`, for code that cannot await. None, writing
   ## nothing, while another writer holds the stdout lock.
   let cursorState = renderer.cursorManager.getState()
-  if not renderer.terminal.drawWithCursorAdopt(
+  result = renderer.terminal.presentWithCursorAdopt(
     renderer.asyncBuffer,
     cursorState.x,
     cursorState.y,
     cursorState.visible,
     cursorState.style,
     force = force,
-  ):
-    return false
-  renderer.keepLastStyle()
-  true
+  )
+  if result.isSome:
+    renderer.keepLastStyle()
+
+proc render*(renderer: AsyncRenderer, force: bool = false): bool =
+  ## Blocking `renderAsync`, for code that cannot await. Returns false, writing
+  ## nothing, while another writer holds the stdout lock.
+  renderer.present(force).isSome
 
 proc renderDiffAsync*(renderer: AsyncRenderer) {.async.} =
   ## Render only the differences from last frame

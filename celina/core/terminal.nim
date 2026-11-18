@@ -19,12 +19,13 @@ import std/[termios, posix, options, strutils]
 
 import geometry, colors, buffer, errors, terminal_common, screen_state
 from output_stream import
-  StreamReset, swAll, swPartial, srAbort, srOsc8, srSgr, srSyncEnd, outcomeOf,
-  flushStdio, writeStream, setPendingReset
+  StreamReset, StreamWrite, swAll, swPartial, srAbort, srOsc8, srSgr, srSyncEnd,
+  outcomeOf, flushStdio, writeStream, setPendingReset
 from events import
   clearPendingByte, clearInputClosed, setStdinNonBlockingPinned, queryCursorPosition
 
 export errors.TerminalError
+export StreamWrite
 
 type Terminal* = ref object ## Terminal interface for screen management
   size*: Size
@@ -844,6 +845,24 @@ proc drawWithCursor*(
   else:
     discard presented # Avoid "declared but not used" warning
 
+proc presentWithCursorAdopt*(
+    terminal: Terminal,
+    buffer: var Buffer,
+    cursorX, cursorY: int,
+    cursorVisible: bool,
+    cursorStyle: CursorStyle = CursorStyle.Default,
+    force: bool = false,
+): StreamWrite =
+  ## `drawWithCursorAdopt` that reports how much of the frame went out, for a
+  ## loop that draws only on request and has to ask again after a cut frame.
+  terminal.presentFrame(
+    buffer,
+    cursorRequest(cursorX, cursorY, cursorVisible, cursorStyle),
+    force,
+    not terminal.syncOutputEnabled,
+    true,
+  ).outcome
+
 proc drawWithCursorAdopt*(
     terminal: Terminal,
     buffer: var Buffer,
@@ -858,12 +877,8 @@ proc drawWithCursorAdopt*(
   ## the previous frame's storage is recycled back into `buffer`, so the caller
   ## MUST fully re-fill `buffer` each frame. Used by `Renderer.render`. A
   ## write that did not go out in full adopts nothing, as with `drawAdopt`.
-  discard terminal.presentFrame(
-    buffer,
-    cursorRequest(cursorX, cursorY, cursorVisible, cursorStyle),
-    force,
-    not terminal.syncOutputEnabled,
-    true,
+  discard terminal.presentWithCursorAdopt(
+    buffer, cursorX, cursorY, cursorVisible, cursorStyle, force
   )
 
 proc drawWithCursor*(

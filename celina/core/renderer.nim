@@ -49,14 +49,14 @@ proc keepLastStyle(renderer: Renderer) =
 
 {.pop.}
 
-proc render*(renderer: Renderer, force: bool = false) =
-  ## Render the buffer to terminal with cursor support
+proc present*(renderer: Renderer, force: bool = false): StreamWrite =
+  ## `render` that reports how much of the frame went out.
   let cursorState = renderer.cursorManager.getState()
 
   # Zero-copy: the renderer owns `buffer` and re-fills it every frame (App.render
   # calls renderer.clear() first), so we use the adopt variant which swaps the
   # rendered content into the terminal's lastBuffer instead of deep-copying.
-  renderer.terminal.drawWithCursorAdopt(
+  result = renderer.terminal.presentWithCursorAdopt(
     renderer.buffer,
     cursorState.x,
     cursorState.y,
@@ -65,6 +65,10 @@ proc render*(renderer: Renderer, force: bool = false) =
     force = force,
   )
   renderer.keepLastStyle()
+
+proc render*(renderer: Renderer, force: bool = false) =
+  ## Render the buffer to terminal with cursor support
+  discard renderer.present(force)
 
 proc renderDiff*(renderer: Renderer) =
   ## Render only the differences from last frame
