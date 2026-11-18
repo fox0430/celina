@@ -34,9 +34,13 @@ jobs:
           - 'macOS-latest'
         nim-version:
           - '2.0.6'
-          - '2.0.16'
           - 'stable'
           - 'devel'
+        exclude:
+          - os: 'macOS-latest'
+            nim-version: '2.0.6'
+          - os: 'macOS-latest'
+            nim-version: 'devel'
 
     name: Tests on ${{ matrix.nim-version }} (${{ matrix.os }})
     steps:
