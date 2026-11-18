@@ -2253,6 +2253,19 @@ when hasAsyncSupport:
             discard waitFor app.tickAsync()
         )
 
+      proc withIdleStdin(app: AsyncApp, body: proc()) =
+        # A reader made before the swap watches the old stdin.
+        withStdinInput(
+          "",
+          proc() =
+            app.inputReader = newAsyncInputReader()
+            try:
+              body()
+            finally:
+              app.inputReader.closeAsyncInputReader()
+              app.inputReader = nil,
+        )
+
       proc settle(app: AsyncApp) =
         # As after a frame that went out in full.
         app.state.renderRequest = false
@@ -2406,28 +2419,22 @@ when hasAsyncSupport:
           buffer.setString(0, 0, "hello")
         var requestedAfterCut = false
         var output: string
-        app.inputReader = newAsyncInputReader()
-        try:
-          withStdinInput(
-            "",
-            proc() =
-              withFailingStdout(
-                proc() =
-                  app.syncSize()
-                  app.state.renderRequest = true
-                  discard waitFor app.tickAsync()
-              )
-              requestedAfterCut = app.renderRequested()
-              output = captureStdout(
-                proc() =
-                  app.syncSize()
-                  discard waitFor app.tickAsync()
-                  discard waitFor app.tickAsync()
-              ),
-          )
-        finally:
-          app.inputReader.closeAsyncInputReader()
-          app.inputReader = nil
+        app.withIdleStdin(
+          proc() =
+            withFailingStdout(
+              proc() =
+                app.syncSize()
+                app.state.renderRequest = true
+                discard waitFor app.tickAsync()
+            )
+            requestedAfterCut = app.renderRequested()
+            output = captureStdout(
+              proc() =
+                app.syncSize()
+                discard waitFor app.tickAsync()
+                discard waitFor app.tickAsync()
+            )
+        )
         check requestedAfterCut
         check renders == 2
         check "hello" in output
@@ -2441,20 +2448,14 @@ when hasAsyncSupport:
           app.setCursorStyle(CursorStyle.SteadyBar)
           app.showCursorAt(1, 0)
         var first, idle, after: string
-        app.inputReader = newAsyncInputReader()
-        try:
-          withStdinInput(
-            "",
-            proc() =
-              app.state.renderRequest = true
-              first = app.tickCaptured()
-              idle = app.tickCaptured()
-              app.invalidate()
-              after = app.tickCaptured(),
-          )
-        finally:
-          app.inputReader.closeAsyncInputReader()
-          app.inputReader = nil
+        app.withIdleStdin(
+          proc() =
+            app.state.renderRequest = true
+            first = app.tickCaptured()
+            idle = app.tickCaptured()
+            app.invalidate()
+            after = app.tickCaptured()
+        )
         check renders == 2
         check "hello" in first
         check idle == ""
@@ -2466,20 +2467,14 @@ when hasAsyncSupport:
         var renders = 0
         app.onRenderAsync proc(buffer: var Buffer) =
           inc renders
-        app.inputReader = newAsyncInputReader()
-        try:
-          withStdinInput(
-            "",
-            proc() =
-              discard captureStdout(
-                proc() =
-                  app.state.resizeState = initResizeState(1, 1)
-                  discard waitFor app.tickAsync()
-              ),
-          )
-        finally:
-          app.inputReader.closeAsyncInputReader()
-          app.inputReader = nil
+        app.withIdleStdin(
+          proc() =
+            discard captureStdout(
+              proc() =
+                app.state.resizeState = initResizeState(1, 1)
+                discard waitFor app.tickAsync()
+            )
+        )
         check renders == 1
 
       test "the application timeout draws a frame":
@@ -2493,16 +2488,10 @@ when hasAsyncSupport:
         app.setApplicationTimeout(10)
         app.settle()
         app.timings.lastEventTime = getMonoTime() - initDuration(milliseconds = 50)
-        app.inputReader = newAsyncInputReader()
-        try:
-          withStdinInput(
-            "",
-            proc() =
-              discard app.tickCaptured(),
-          )
-        finally:
-          app.inputReader.closeAsyncInputReader()
-          app.inputReader = nil
+        app.withIdleStdin(
+          proc() =
+            discard app.tickCaptured()
+        )
         check timeouts == 1
         check renders == 1
 
@@ -2548,22 +2537,15 @@ when hasAsyncSupport:
 
       test "taking events asks for a frame, taking none does not":
         let app = onDemandApp()
-        app.inputReader = newAsyncInputReader()
-        try:
-          withStdinInput(
-            "",
-            proc() =
-              app.settle()
-              check app.readAvailableEvents().len == 0
-              check not app.renderRequested()
-              app.unreadEvents([key("a")])
-              check app.readAvailableEvents().len == 1
-              check app.renderRequested()
-            ,
-          )
-        finally:
-          app.inputReader.closeAsyncInputReader()
-          app.inputReader = nil
+        app.withIdleStdin(
+          proc() =
+            app.settle()
+            check app.readAvailableEvents().len == 0
+            check not app.renderRequested()
+            app.unreadEvents([key("a")])
+            check app.readAvailableEvents().len == 1
+            check app.renderRequested()
+        )
 
       test "a frame requested inside renderNow is drawn by it, not again by the loop":
         let app = onDemandApp()
