@@ -35,7 +35,9 @@ Check out the [`examples/`](examples/) directory for sample applications demonst
 - **[`input_demo.nim`](examples/input_demo.nim)**: Text input widgets including password fields, borders (also top/bottom only), search, and real-time value display
 - **[`list_demo.nim`](examples/list_demo.nim)**: List widget with single/multiple selection modes, keyboard/mouse navigation, scrolling, and custom styling
 - **[`mouse_demo.nim`](examples/mouse_demo.nim)**: Mouse event handling including clicks, drag, wheel scroll, and movement detection
+- **[`panel_demo.nim`](examples/panel_demo.nim)**: Panel framing widget with borders on chosen sides, border kinds, aligned titles, padding, fill, and a child widget
 - **[`progress_demo.nim`](examples/progress_demo.nim)**: Progress bar widgets with various styles, customizable colors, bracket display options, and animated demonstrations
+- **[`scrollbar_demo.nim`](examples/scrollbar_demo.nim)**: Standalone scrollbar driving a scrollable text view with keyboard, mouse wheel, and clicks on the bar
 - **[`table_demo.nim`](examples/table_demo.nim)**: Table widget with custom column widths, multiple selection modes, border styles, vim-like navigation, and scrolling support for large datasets
 - **[`tabs_demo.nim`](examples/tabs_demo.nim)**: Tab widget demonstration with multiple tabs, keyboard navigation, dynamic tab management, and content switching
 - **[`window_demo.nim`](examples/window_demo.nim)**: Window management system with multiple overlapping windows, focus control, and modal dialogs

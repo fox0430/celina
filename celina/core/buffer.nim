@@ -1327,7 +1327,7 @@ proc clone*(buffer: Buffer): Buffer =
     result.content[y] = buffer.content[y]
 
 proc getCell*(buffer: Buffer, x, y: int): Cell {.inline.} =
-  ## Get cell at coordinates (alias for [] operator)
+  ## Get cell at coordinates (alias for the `[]` operator)
   buffer[x, y]
 
 proc `$`*(buffer: Buffer): string =

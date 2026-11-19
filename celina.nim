@@ -28,8 +28,10 @@
 ## Core
 ## ----
 ## - `app <celina/core/app.html>`_ — Application lifecycle and event loop
+## - `borders <celina/core/borders.html>`_ — Border kinds and characters for widgets and windows
 ## - `buffer <celina/core/buffer.html>`_ — Screen buffer for managing terminal content
 ## - `colors <celina/core/colors.html>`_ — Color and style definitions
+## - `config <celina/core/config.html>`_ — Application configuration (`AppConfig`)
 ## - `cursor <celina/core/cursor.html>`_ — Cursor control and state management
 ## - `errors <celina/core/errors.html>`_ — Error types
 ## - `events <celina/core/events.html>`_ — Keyboard and mouse event handling
@@ -53,10 +55,12 @@
 ## -------
 ## - `base <celina/widgets/base.html>`_ — Base widget traits and types
 ## - `button <celina/widgets/button.html>`_ — Interactive button widget
+## - `container <celina/widgets/container.html>`_ — Base for widgets that hold and dispatch to children
 ## - `input <celina/widgets/input.html>`_ — Text input widget with cursor and selection
 ## - `list <celina/widgets/list.html>`_ — List widget with scrolling and selection
 ## - `panel <celina/widgets/panel.html>`_ — Framing widget with border, title, and padding
 ## - `progress <celina/widgets/progress.html>`_ — Progress bar widget
+## - `scrollbar <celina/widgets/scrollbar.html>`_ — Scroll indicator with a track, thumb, and optional arrows
 ## - `table <celina/widgets/table.html>`_ — Table widget for structured data
 ## - `tabs <celina/widgets/tabs.html>`_ — Tabbed interface widget
 ## - `text <celina/widgets/text.html>`_ — Text rendering widget with alignment and styling
