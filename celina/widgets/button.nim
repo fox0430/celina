@@ -384,7 +384,8 @@ proc getCurrentStyle*(widget: Button): Style =
 
 # Button widget methods
 method render*(widget: Button, area: Rect, buf: var Buffer) =
-  ## Render the button widget
+  ## Render the button widget. Only the button's own columns are drawn; the
+  ## blank columns beside it in a wider `area` keep what `buf` already has.
   if area.isEmpty:
     return
 
@@ -397,20 +398,7 @@ method render*(widget: Button, area: Rect, buf: var Buffer) =
   let buttonStartX = button.x
   let buttonStartY = area.y + max(0, (area.height - 1) div 2)
 
-  # Render the area in one pass - no clearing then redrawing
-  for y in 0 ..< area.height:
-    for x in 0 ..< area.width:
-      let cellX = area.x + x
-      let cellY = area.y + y
-
-      # Determine if this cell is inside the button area
-      let isInsideButton =
-        x >= (buttonStartX - area.x) and x < (buttonStartX - area.x + buttonWidth)
-
-      if isInsideButton:
-        buf.setString(cellX, cellY, " ", currentStyle)
-      else:
-        buf.setString(cellX, cellY, " ", defaultStyle())
+  buf.fill(button, cell(" ", currentStyle))
 
   # Calculate text position (centered within button)
   let textStartX = buttonStartX + max(0, (buttonWidth - textWidth) div 2)

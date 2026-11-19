@@ -492,6 +492,21 @@ suite "Button Widget Tests":
       btn.setState(Hovered)
       check btn.getCurrentStyle() == style(White, Cyan)
 
+    test "Columns beside the button keep the buffer":
+      # (minWidth, first and last drawn column) in an area from x=2, 20 wide.
+      for (minWidth, first, last) in [(0, 10, 13), (10, 7, 16)]:
+        let btn = newButton("OK", minWidth = minWidth)
+        let area = rect(2, 1, 20, 3)
+        var buf = newBuffer(24, 5)
+        buf.fill(buf.area, cell("#", style(White, Magenta)))
+        btn.render(area, buf)
+        for y in 0 ..< 5:
+          for x in 0 ..< 24:
+            if y in area.y ..< area.bottom and x in first .. last:
+              check buf[x, y].style == btn.normalStyle
+            else:
+              check buf[x, y] == cell("#", style(White, Magenta))
+
   suite "Button Size Calculation Tests":
     test "Minimum size calculation":
       let btn = newButton("Test Button", padding = 1)
