@@ -83,6 +83,31 @@ suite "Progress Bar Widget Tests":
       bar.setProgress(10, 0) # Division by zero case
       check bar.getValue() == 0.0
 
+    test "NaN becomes 0.0":
+      var updated = -1.0
+      let bar = newProgressBar(
+        NaN,
+        onUpdate = proc(value: float) =
+          updated = value,
+      )
+      check bar.getValue() == 0.0
+
+      bar.setValue(0.5)
+      bar.setValue(NaN)
+      check bar.getValue() == 0.0
+      check updated == 0.0
+
+      bar.setProgress(NaN, 100)
+      check bar.getValue() == 0.0
+      bar.setValue(0.5)
+      bar.increment(NaN)
+      require bar.getValue() == 0.0
+
+      check bar.getPercentageText() == "0%"
+      var buf = newBuffer(20, 2)
+      bar.render(rect(0, 0, 20, 2), buf)
+      check buf[0, 1].symbol == "░"
+
     test "Increment and decrement":
       var bar = newProgressBar(0.5)
 

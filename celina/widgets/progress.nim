@@ -126,6 +126,13 @@ proc defaultProgressChars*(kind: ProgressKind = pkBlock): ProgressChars =
   of pkCustom:
     ProgressChars()
 
+func clampValue(value: float): float =
+  ## `clamp` keeps NaN, which breaks the drawing loops.
+  if value.isNaN:
+    0.0
+  else:
+    clamp(value, 0.0, 1.0)
+
 # Progress bar constructors
 proc newProgressBar*(
     value: float = 0.0,
@@ -158,7 +165,7 @@ proc newProgressBar*(
     partial: if chars.partial.len > 0: chars.partial else: fallback.partial,
   )
   result = ProgressBar(
-    value: clamp(value, 0.0, 1.0),
+    value: clampValue(value),
     label: label,
     showPercentage: showPercentage,
     showBar: showBar,
@@ -239,8 +246,8 @@ proc progressBar*(
 
 # Progress value management
 proc setValue*(widget: ProgressBar, value: float) =
-  ## Set the progress value (0.0 to 1.0)
-  widget.value = clamp(value, 0.0, 1.0)
+  ## Set the progress value, clamped to 0.0..1.0. NaN becomes 0.0.
+  widget.value = clampValue(value)
   if widget.onUpdate != nil:
     widget.onUpdate(widget.value)
 
