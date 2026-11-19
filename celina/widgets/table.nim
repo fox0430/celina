@@ -459,7 +459,8 @@ proc pageDown*(widget: Table) =
     let scrollAmount = widget.visibleRowCount div 2
     widget.scrollDown(scrollAmount)
     # Try to move highlight down as well
-    let targetIndex = min(widget.rows.len - 1, widget.highlightedIndex + scrollAmount)
+    let targetIndex =
+      max(0, min(widget.rows.len - 1, widget.highlightedIndex + scrollAmount))
     for i in targetIndex ..< widget.rows.len:
       if widget.rows[i].selectable:
         widget.highlightedIndex = i

@@ -382,6 +382,26 @@ suite "Table Widget Tests":
       t.scrollOffset == 0
       buf.toStrings() == expected.toStrings()
 
+  test "pageDown without a highlighted row":
+    var empty = newTable(@[column("A")])
+    var tall = newBuffer(10, 8)
+    empty.render(tall.area, tall)
+    require empty.visibleRowCount == 4
+    empty.pageDown()
+    check:
+      empty.highlightedIndex == -1
+      empty.scrollOffset == 0
+
+    var unselectable = tableRow(@["x"])
+    unselectable.selectable = false
+    var t = newTable(@[column("A")])
+    t.addRow(unselectable)
+    var buf = newBuffer(10, 5)
+    t.render(buf.area, buf)
+    require t.visibleRowCount == 1
+    t.pageDown()
+    check t.highlightedIndex == -1
+
   test "Border alignment correctness":
     # Test that borders align properly with content
     let columns = @[column("A", 5), column("B", 8), column("C", 6)]
