@@ -431,6 +431,52 @@ proc getLabelWithPercentage*(widget: ProgressBar): string =
   else:
     result = ""
 
+proc fitWidth(s: string, width: int): string =
+  if s.displayWidth <= width:
+    s
+  elif width <= 0:
+    ""
+  else:
+    s.truncateToWidth(width - 1) & "…"
+
+proc fitPercentage(pct: string, width: int): string =
+  ## A cut number reads as another value, so show only the marker.
+  if pct.displayWidth <= width:
+    pct
+  elif width <= 0:
+    ""
+  else:
+    "…"
+
+proc renderText(widget: ProgressBar, area: Rect, y: int, buf: var Buffer) =
+  ## Draw the label and percentage centered on row `y` within `area.width`.
+  ## When both do not fit, the label is cut first; the percentage is never cut.
+  let pct =
+    if widget.showPercentage:
+      widget.getPercentageText()
+    else:
+      ""
+  if widget.label.len > 0 and pct.len > 0:
+    let labelRoom = area.width - pct.displayWidth - 1
+    if labelRoom > 0:
+      let label = widget.label.fitWidth(labelRoom)
+      let labelWidth = label.displayWidth
+      let x = area.x + (area.width - labelWidth - 1 - pct.displayWidth) div 2
+      buf.setString(x, y, label, widget.textStyle, tabWidth = 0)
+      buf.setString(x + labelWidth + 1, y, pct, widget.percentageStyle, tabWidth = 0)
+    else:
+      let shown = pct.fitPercentage(area.width)
+      let x = area.x + (area.width - shown.displayWidth) div 2
+      buf.setString(x, y, shown, widget.percentageStyle, tabWidth = 0)
+  else:
+    let shown =
+      if widget.label.len > 0:
+        widget.label.fitWidth(area.width)
+      else:
+        pct.fitPercentage(area.width)
+    let x = area.x + (area.width - shown.displayWidth) div 2
+    buf.setString(x, y, shown, widget.textStyle, tabWidth = 0)
+
 # Widget methods
 method render*(widget: ProgressBar, area: Rect, buf: var Buffer) =
   ## Render the progress bar widget
@@ -456,18 +502,7 @@ method render*(widget: ProgressBar, area: Rect, buf: var Buffer) =
       let textY = area.y
       let barY = area.y + 1
 
-      # Render text centered
-      let textX = area.x + max(0, (area.width - textLen) div 2)
-      if widget.label.len > 0 and widget.showPercentage:
-        # Split label and percentage
-        let labelLen = widget.label.displayWidth
-        let percentText = widget.getPercentageText()
-        buf.setString(textX, textY, widget.label, widget.textStyle, tabWidth = 0)
-        buf.setString(
-          textX + labelLen + 1, textY, percentText, widget.percentageStyle, tabWidth = 0
-        )
-      else:
-        buf.setString(textX, textY, text, widget.textStyle, tabWidth = 0)
+      widget.renderText(area, textY, buf)
 
       # Render bar
       widget.renderProgressBar(area.width, buf, area.x, barY)
@@ -482,18 +517,7 @@ method render*(widget: ProgressBar, area: Rect, buf: var Buffer) =
   else:
     # Text only, no bar
     if textLen > 0:
-      let textX = area.x + max(0, (area.width - textLen) div 2)
-      let textY = area.y + max(0, (area.height - 1) div 2)
-
-      if widget.label.len > 0 and widget.showPercentage:
-        let labelLen = widget.label.displayWidth
-        let percentText = widget.getPercentageText()
-        buf.setString(textX, textY, widget.label, widget.textStyle, tabWidth = 0)
-        buf.setString(
-          textX + labelLen + 1, textY, percentText, widget.percentageStyle, tabWidth = 0
-        )
-      else:
-        buf.setString(textX, textY, text, widget.textStyle, tabWidth = 0)
+      widget.renderText(area, area.y + max(0, (area.height - 1) div 2), buf)
 
 method getMinSize*(widget: ProgressBar): Size =
   ## Get minimum size for progress bar widget
