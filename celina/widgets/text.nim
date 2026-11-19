@@ -99,6 +99,7 @@ proc splitIntoLines(text: string, maxWidth: int, wrap: Wrap): seq[string] =
         # Word wrap this line
         var words = line.split(' ')
         var currentLine = ""
+        let firstLine = result.len
 
         for word in words:
           let testLine =
@@ -125,7 +126,8 @@ proc splitIntoLines(text: string, maxWidth: int, wrap: Wrap): seq[string] =
               if chunks.len > 0:
                 currentLine = chunks[^1]
 
-        if currentLine.len > 0:
+        # A line that produced no rows still takes one, as in NoWrap.
+        if currentLine.len > 0 or result.len == firstLine:
           result.add(currentLine)
   of CharWrap:
     # Character-level wrapping by display width
