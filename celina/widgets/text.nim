@@ -170,26 +170,27 @@ method render*(widget: Text, area: Rect, buf: var Buffer) =
     buf.setString(area.x, area.y + i, alignedLine, widget.style, tabWidth = 0)
 
 method getMinSize*(widget: Text): Size =
-  ## Get minimum size for text widget
+  ## Smallest area that shows the whole content. The width is the longest
+  ## line (NoWrap), the longest word so no word is split (WordWrap) or the
+  ## widest character (CharWrap); the height is the line count at that width.
   if widget.content.len == 0:
     return size(0, 0)
 
+  let lines = widget.content.splitLines()
+  var minWidth = 1
   case widget.wrap
   of NoWrap:
-    let lines = widget.content.splitLines()
-    let maxWidth = lines.mapIt(it.displayWidth).max()
-    size(maxWidth, lines.len)
-  of WordWrap, CharWrap:
-    # Minimum width is the longest word (for word wrap) or 1 (for char wrap)
-    let lines = widget.content.splitLines()
-    var minWidth = 1
+    minWidth = lines.mapIt(it.displayWidth).max()
+  of WordWrap:
+    for line in lines:
+      for word in line.split(' '):
+        minWidth = max(minWidth, word.displayWidth)
+  of CharWrap:
+    for line in lines:
+      for (_, w) in clusterMetrics(line.toRunes):
+        minWidth = max(minWidth, w)
 
-    if widget.wrap == WordWrap:
-      for line in lines:
-        for word in line.split(' '):
-          minWidth = max(minWidth, word.displayWidth)
-
-    size(minWidth, lines.len)
+  size(minWidth, splitIntoLines(widget.content, minWidth, widget.wrap).len)
 
 method getPreferredSize*(widget: Text, available: Size): Size =
   ## Get preferred size for text widget
