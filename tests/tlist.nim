@@ -292,6 +292,22 @@ suite "List Widget Tests":
       listWidget.scrollOffset == 0
       buf.toStrings() == expected.toStrings()
 
+  test "highlightNext before the first render keeps the item visible":
+    var expected = list((1 .. 20).mapIt($it))
+    var expectedBuf = newBuffer(10, 4)
+    expected.render(expectedBuf.area, expectedBuf)
+    expected.highlightNext()
+    expected.render(expectedBuf.area, expectedBuf)
+
+    var listWidget = list((1 .. 20).mapIt($it))
+    listWidget.highlightNext()
+    var buf = newBuffer(10, 4)
+    listWidget.render(buf.area, buf)
+    check:
+      listWidget.highlightedIndex == 1
+      listWidget.scrollOffset == 0
+      buf.toStrings() == expectedBuf.toStrings()
+
   test "Keyboard event handling":
     # Test keyboard input
     var listWidget = selectList(@["A", "B", "C"])
