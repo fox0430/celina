@@ -441,9 +441,9 @@ proc highlightLast*(widget: Table) =
       break
 
 proc pageUp*(widget: Table) =
-  ## Scroll up by one page (vim: Ctrl-U)
+  ## Scroll up by half a page, at least one row (vim: Ctrl-U)
   if widget.visibleRowCount > 0:
-    let scrollAmount = widget.visibleRowCount div 2
+    let scrollAmount = max(1, widget.visibleRowCount div 2)
     widget.scrollUp(scrollAmount)
     # Try to move highlight up as well
     let targetIndex = max(0, widget.highlightedIndex - scrollAmount)
@@ -455,9 +455,9 @@ proc pageUp*(widget: Table) =
         break
 
 proc pageDown*(widget: Table) =
-  ## Scroll down by one page (vim: Ctrl-D)
+  ## Scroll down by half a page, at least one row (vim: Ctrl-D)
   if widget.visibleRowCount > 0:
-    let scrollAmount = widget.visibleRowCount div 2
+    let scrollAmount = max(1, widget.visibleRowCount div 2)
     widget.scrollDown(scrollAmount)
     # Try to move highlight down as well
     let targetIndex =
