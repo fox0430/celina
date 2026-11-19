@@ -484,3 +484,62 @@ suite "Progress Bar Widget Tests":
       check buf[5, 0].symbol == "5"
       for x in 10 ..< 14:
         check buf[x, 0].symbol == "#"
+
+  suite "Clipping to the area":
+    proc renderRow(bar: ProgressBar, width: int, height = 2): string =
+      var buf = newBuffer(20, height)
+      buf.fill(buf.area, cell("#"))
+      bar.render(rect(2, 0, width, height), buf)
+      for x in 0 ..< 20:
+        let s = buf[x, 0].symbol
+        result.add(if s.len == 0: "." else: s)
+
+    test "Label is cut before the percentage":
+      check newProgressBar(0.5, "Downloading files").renderRow(6) ==
+        "##D… 50%############"
+      check newProgressBar(0.5, "Downloading files", showBar = false).renderRow(6, 1) ==
+        "##D… 50%############"
+
+    test "Label is dropped when only the percentage fits":
+      check newProgressBar(0.5, "Downloading").renderRow(5) == "##… 50%#############"
+      check newProgressBar(0.5, "Downloading").renderRow(4) == "##50% ##############"
+      check newProgressBar(0.5, "Downloading").renderRow(1) == "##…#################"
+
+    test "Label alone is cut":
+      check newProgressBar(0.5, "Downloading files", showPercentage = false).renderRow(
+        6
+      ) == "##Downl…############"
+
+    test "Percentage that does not fit becomes the marker":
+      check newProgressBar(1.0).renderRow(2) == "##… ################"
+      check newProgressBar(1.0).renderRow(3) == "## … ###############"
+      check newProgressBar(1.0, "Downloading").renderRow(3) == "## … ###############"
+
+    test "Wide label is cut on a cluster boundary":
+      check newProgressBar(0.5, "日本語").renderRow(8) == "##日.… 50% ##########"
+      check newProgressBar(
+        0.5, "日本語のラベル", showPercentage = false, showBar = false
+      )
+        .renderRow(6, 1) == "##日.本.… ############"
+
+    test "Cut label keeps the percentage style":
+      var buf = newBuffer(20, 2)
+      let colors =
+        ProgressColors(text: style(Red, Reset), percentage: style(Cyan, Reset))
+      newProgressBar(0.5, "Downloading files", style = colors).render(
+        rect(2, 0, 6, 2), buf
+      )
+      check buf[2, 0].style == colors.text
+      check buf[3, 0].style == colors.text
+      for x in 5 .. 7:
+        check buf[x, 0].style == colors.percentage
+
+    test "Fit helpers return nothing for no room":
+      check fitWidth("abc", 0) == ""
+      check fitWidth("abc", 1) == "…"
+      check fitPercentage("100%", 0) == ""
+
+    test "Fitting text stays centered":
+      check newProgressBar(0.5, "ab").renderRow(10) == "##  ab 50%  ########"
+      check newProgressBar(0.5, "ab", showBar = false).renderRow(10, 1) ==
+        "##  ab 50%  ########"
