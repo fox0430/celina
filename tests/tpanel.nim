@@ -324,3 +324,16 @@ suite "Panel Widget Tests":
       let i = newInput()
       check i.withBorders(allBorders).borders == allBorders
       check i.withBorderKind(bkSingle).borderStyle == bkSingle
+
+  suite "Tab characters":
+    test "Tab in the title draws as one cell":
+      var buf = newBuffer(12, 3)
+      buf.fill(buf.area, cell("#"))
+      newPanel(title = "a\tb").render(rect(0, 0, 8, 3), buf)
+      check buf[1, 0].symbol == "a"
+      check buf[2, 0].symbol == " "
+      check buf[3, 0].symbol == "b"
+      check buf[4, 0].symbol == "─"
+      check buf[7, 0].symbol == "┐"
+      for x in 8 ..< 12:
+        check buf[x, 0].symbol == "#"

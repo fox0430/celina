@@ -586,3 +586,13 @@ suite "Tabs Widget":
     # Blurring removes it again.
     widget.setFocus(false)
     check not widget.topRowHasUnderline()
+
+  test "Tab in a title draws as one cell":
+    var buf = newBuffer(12, 1)
+    buf.fill(buf.area, cell("#"))
+    newTabs(@[tab("a\tb", newText(""))]).render(rect(0, 0, 7, 1), buf)
+    check buf[1, 0].symbol == "a"
+    check buf[2, 0].symbol == " "
+    check buf[3, 0].symbol == "b"
+    for x in 7 ..< 12:
+      check buf[x, 0].symbol == "#"

@@ -253,7 +253,7 @@ proc renderTabBar(widget: Tabs, area: Rect, buf: var Buffer): int =
         " "
     if x >= 0 and y >= 0 and x < buf.area.width and y < buf.area.height and
         finalString.len > 0:
-      buf.setString(x, y, finalString, style)
+      buf.setString(x, y, finalString, style, tabWidth = 0)
 
     x += width
 

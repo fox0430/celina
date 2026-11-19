@@ -601,6 +601,23 @@ suite "Table Widget Tests":
     # Specifically test that 5th column (index 4) doesn't get a separator
     check (4 < tableWidget.columns.len - 1) == false
 
+  test "Tab in a cell draws as one cell":
+    let tableWidget = newTable(
+      columns = @[column("x", 5)],
+      rows = @[tableRow(@["a\tb"])],
+      border = bkNone,
+      showHeader = false,
+      showScrollbar = false,
+    )
+    var buf = newBuffer(10, 1)
+    buf.fill(buf.area, cell("#"))
+    tableWidget.render(rect(0, 0, 5, 1), buf)
+    check buf[0, 0].symbol == "a"
+    check buf[1, 0].symbol == " "
+    check buf[2, 0].symbol == "b"
+    for x in 5 ..< 10:
+      check buf[x, 0].symbol == "#"
+
 suite "Table Scrollbar Tests":
   test "Scrollbar visibility conditions":
     # Test when scrollbar should and shouldn't appear

@@ -768,7 +768,9 @@ method render*(widget: Input, area: Rect, buf: var Buffer) =
 
     if widget.placeholder.len > 0:
       let placeholderText = widget.placeholder.truncateToWidth(content.width)
-      buf.setString(content.x, content.y, placeholderText, widget.placeholderStyle)
+      buf.setString(
+        content.x, content.y, placeholderText, widget.placeholderStyle, tabWidth = 0
+      )
   else:
     # Clear the content area with input background for text display
     for x in 0 ..< content.width:
@@ -811,7 +813,7 @@ method render*(widget: Input, area: Rect, buf: var Buffer) =
           passwordMask(clusterWidth)
         else:
           clusterText
-      buf.setString(content.x + x, content.y, drawText, charStyle)
+      buf.setString(content.x + x, content.y, drawText, charStyle, tabWidth = 0)
       x += clusterWidth
 
   # Note: Cursor rendering is handled by the application level

@@ -408,6 +408,16 @@ suite "Window Rendering Tests":
     check wide == "世".repeat(7) & "…"
     check wide.displayWidth <= 16
 
+  test "Tab in the window title draws as one cell":
+    var destBuffer = newBuffer(12, 3)
+    destBuffer.fill(destBuffer.area, cell("#"))
+    newWindow(rect(0, 0, 8, 3), "a\tb").render(destBuffer)
+    check destBuffer[2, 0].symbol == "a"
+    check destBuffer[3, 0].symbol == " "
+    check destBuffer[4, 0].symbol == "b"
+    for x in 8 ..< 12:
+      check destBuffer[x, 0].symbol == "#"
+
   test "Window without border rendering":
     var destBuffer = newBuffer(50, 20)
     let window = newWindow(rect(5, 5, 20, 10), "No Border", border = none(WindowBorder))

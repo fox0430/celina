@@ -789,3 +789,13 @@ suite "List Widget Tests":
     listWidget.setItems(newSeq[string]())
     check not listWidget.isFocused()
     check blurCount == 1
+
+  test "Tab in an item draws as one cell":
+    var buf = newBuffer(10, 1)
+    buf.fill(buf.area, cell("#"))
+    newList(@[newListItem("a\tb")]).render(rect(0, 0, 5, 1), buf)
+    check buf[0, 0].symbol == "a"
+    check buf[1, 0].symbol == " "
+    check buf[2, 0].symbol == "b"
+    for x in 5 ..< 10:
+      check buf[x, 0].symbol == "#"

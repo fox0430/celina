@@ -767,7 +767,7 @@ proc drawClipped(b: var Buffer, x, y: int, area: Rect, text: string, style: Styl
     var visible = ""
     for j in startIdx ..< endIdx:
       visible.add($runes[j])
-    b.setString(drawX, y, visible, style)
+    b.setString(drawX, y, visible, style, tabWidth = 0)
 
 # Table widget methods
 method render*(widget: Table, area: Rect, buf: var Buffer) =

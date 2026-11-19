@@ -601,7 +601,7 @@ method render*(widget: List, area: Rect, buf: var Buffer) =
     else:
       itemText = itemText & " ".repeat(contentWidth - itemText.displayWidth)
 
-    buf.setString(area.x, area.y + i, itemText, itemStyle)
+    buf.setString(area.x, area.y + i, itemText, itemStyle, tabWidth = 0)
 
   # Render scrollbar if needed
   widget.renderScrollbar(area, buf)

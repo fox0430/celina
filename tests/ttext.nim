@@ -386,3 +386,25 @@ suite "Text Widget Tests":
       check buf[0, 1].symbol == "語"
       check buf[2, 1].symbol == "学"
       check buf[0, 2].symbol == "習"
+
+  suite "Tab characters":
+    test "Tab draws as one cell and stays inside the area":
+      var buf = newBuffer(12, 1)
+      buf.fill(buf.area, cell("#"))
+      newText("a\tbcd").render(rect(2, 0, 5, 1), buf)
+      check buf[2, 0].symbol == "a"
+      check buf[3, 0].symbol == " "
+      check buf[4, 0].symbol == "b"
+      check buf[6, 0].symbol == "d"
+      for x in 7 ..< 12:
+        check buf[x, 0].symbol == "#"
+
+    test "Right-aligned text with a tab stays inside the area":
+      var buf = newBuffer(12, 1)
+      buf.fill(buf.area, cell("#"))
+      newText("a\tb", alignment = Right).render(rect(2, 0, 6, 1), buf)
+      check buf[5, 0].symbol == "a"
+      check buf[6, 0].symbol == " "
+      check buf[7, 0].symbol == "b"
+      for x in 8 ..< 12:
+        check buf[x, 0].symbol == "#"

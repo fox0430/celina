@@ -462,10 +462,12 @@ method render*(widget: ProgressBar, area: Rect, buf: var Buffer) =
         # Split label and percentage
         let labelLen = widget.label.displayWidth
         let percentText = widget.getPercentageText()
-        buf.setString(textX, textY, widget.label, widget.textStyle)
-        buf.setString(textX + labelLen + 1, textY, percentText, widget.percentageStyle)
+        buf.setString(textX, textY, widget.label, widget.textStyle, tabWidth = 0)
+        buf.setString(
+          textX + labelLen + 1, textY, percentText, widget.percentageStyle, tabWidth = 0
+        )
       else:
-        buf.setString(textX, textY, text, widget.textStyle)
+        buf.setString(textX, textY, text, widget.textStyle, tabWidth = 0)
 
       # Render bar
       widget.renderProgressBar(area.width, buf, area.x, barY)
@@ -476,7 +478,7 @@ method render*(widget: ProgressBar, area: Rect, buf: var Buffer) =
       if textLen > 0 and textLen < area.width - 2:
         # Overlay text on the bar
         let textX = area.x + max(1, (area.width - textLen) div 2)
-        buf.setString(textX, area.y, text, widget.textStyle)
+        buf.setString(textX, area.y, text, widget.textStyle, tabWidth = 0)
   else:
     # Text only, no bar
     if textLen > 0:
@@ -486,10 +488,12 @@ method render*(widget: ProgressBar, area: Rect, buf: var Buffer) =
       if widget.label.len > 0 and widget.showPercentage:
         let labelLen = widget.label.displayWidth
         let percentText = widget.getPercentageText()
-        buf.setString(textX, textY, widget.label, widget.textStyle)
-        buf.setString(textX + labelLen + 1, textY, percentText, widget.percentageStyle)
+        buf.setString(textX, textY, widget.label, widget.textStyle, tabWidth = 0)
+        buf.setString(
+          textX + labelLen + 1, textY, percentText, widget.percentageStyle, tabWidth = 0
+        )
       else:
-        buf.setString(textX, textY, text, widget.textStyle)
+        buf.setString(textX, textY, text, widget.textStyle, tabWidth = 0)
 
 method getMinSize*(widget: ProgressBar): Size =
   ## Get minimum size for progress bar widget

@@ -424,7 +424,7 @@ method render*(widget: Button, area: Rect, buf: var Buffer) =
       else:
         buttonText
 
-    buf.setString(textStartX, textStartY, visibleText, currentStyle)
+    buf.setString(textStartX, textStartY, visibleText, currentStyle, tabWidth = 0)
 
 method getMinSize*(widget: Button): Size =
   ## Get minimum size for button widget
