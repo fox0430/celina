@@ -195,6 +195,30 @@ suite "Text Widget Tests":
       # Minimum width should be longest word
       check minSize.width >= 5 # "Hello" or "World"
 
+    test "Rendering into the min size shows the whole content":
+      proc drawnAtMinSize(widget: Text): string =
+        let m = widget.getMinSize()
+        var buf = newBuffer(m.width, m.height)
+        widget.render(rect(0, 0, m.width, m.height), buf)
+        for y in 0 ..< m.height:
+          for x in 0 ..< m.width:
+            if not buf[x, y].isShadow():
+              result.add(buf[x, y].symbol)
+
+      for (content, wrap, expected) in [
+        ("one two three four five", WordWrap, size(5, 5)),
+        ("ab\ncd ef", WordWrap, size(2, 3)),
+        ("日本 hi", WordWrap, size(4, 2)),
+        ("abcdef", CharWrap, size(1, 6)),
+        ("あいう", CharWrap, size(2, 3)),
+        ("aあ\nb", CharWrap, size(2, 3)),
+        ("ab\nあいう", NoWrap, size(6, 2)),
+      ]:
+        let widget = newText(content, wrap = wrap)
+        check widget.getMinSize() == expected
+        check widget.drawnAtMinSize().replace(" ", "") ==
+          content.replace(" ", "").replace("\n", "")
+
     test "getPreferredSize with NoWrap":
       let widget = newText("Hello", wrap = NoWrap)
       let available = size(10, 5)
