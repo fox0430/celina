@@ -100,6 +100,15 @@ suite "Text Widget Tests":
       check line1HasContent
       check line2HasContent
 
+    test "WordWrap keeps a row for a line with nothing to draw":
+      for (content, w) in [("a\n   \nb", 1), ("a\n   \nb", 2), ("a\nあ\nb", 1)]:
+        var buf = newBuffer(w, 3)
+        newText(content, wrap = WordWrap).render(rect(0, 0, w, 3), buf)
+        check buf[0, 0].symbol == "a"
+        check buf[0, 1].symbol == " "
+        check buf[0, 2].symbol == "b"
+      check newText("a\n   \nb", wrap = WordWrap).getMinSize() == size(1, 3)
+
     test "wrapByWidth keeps a ZWJ emoji cluster whole and measures it by cluster":
       # Regression: the family "👨‍👩‍👧" is one 2-column grapheme cluster. The old
       # per-code-point width summed it to 6 and split at rune boundaries, so it
