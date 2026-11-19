@@ -418,6 +418,26 @@ suite "Table Widget Tests":
     t.pageDown()
     check t.highlightedIndex == -1
 
+  test "d and u move one row when one row is visible":
+    var rows: seq[TableRow]
+    for i in 0 ..< 10:
+      rows.add tableRow(@[$i])
+    var t = newTable(@[column("A")], rows)
+    t.setFocus(true)
+    var buf = newBuffer(10, 5)
+    t.render(buf.area, buf)
+    require t.visibleRowCount == 1
+
+    check t.handleKeyEvent(KeyEvent(code: Char, char: "d")) == erConsume
+    check:
+      t.scrollOffset == 1
+      t.highlightedIndex == 1
+
+    check t.handleKeyEvent(KeyEvent(code: Char, char: "u")) == erConsume
+    check:
+      t.scrollOffset == 0
+      t.highlightedIndex == 0
+
   test "Border alignment correctness":
     # Test that borders align properly with content
     let columns = @[column("A", 5), column("B", 8), column("C", 6)]
