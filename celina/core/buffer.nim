@@ -51,7 +51,9 @@ const
     ## Default tab-stop spacing for `\t` expansion in `setString` / `setRunes`.
     ## Override per call with the `tabWidth` parameter. Values <= 0 disable
     ## expansion — `\t` is then substituted with a single space, matching
-    ## the fallback behavior for other C0 control characters.
+    ## the fallback behavior for other C0 control characters. The built-in
+    ## widgets pass 0 for the text they lay out, so `\t` there takes the one
+    ## column `displayWidth` counts.
 
   ZeroWidthCategories = ctgMn + ctgMe + ctgCf
     ## Unicode general categories whose code points advance the terminal

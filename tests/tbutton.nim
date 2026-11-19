@@ -626,3 +626,14 @@ suite "Button Widget Tests":
       # Only "日本" fits in 4 columns
       check buf[0, 0].symbol == "日"
       check buf[2, 0].symbol == "本"
+
+  suite "Tab characters":
+    test "Tab in the label draws as one cell":
+      var buf = newBuffer(10, 1)
+      buf.fill(buf.area, cell("#"))
+      newButton("a\tb").render(rect(0, 0, 5, 1), buf)
+      check buf[1, 0].symbol == "a"
+      check buf[2, 0].symbol == " "
+      check buf[3, 0].symbol == "b"
+      for x in 5 ..< 10:
+        check buf[x, 0].symbol == "#"

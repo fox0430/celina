@@ -1154,3 +1154,24 @@ suite "Input Widget Tests":
       check base.borderStyle == bkSingle
       check sides != base
       check kind != base
+
+  suite "Tab characters":
+    test "Tab in the text draws as one cell":
+      var input = newInput()
+      input.setText("a\tb")
+      var buf = newBuffer(10, 1)
+      buf.fill(buf.area, cell("#"))
+      input.render(rect(0, 0, 5, 1), buf)
+      check buf[0, 0].symbol == "a"
+      check buf[1, 0].symbol == " "
+      check buf[2, 0].symbol == "b"
+      for x in 5 ..< 10:
+        check buf[x, 0].symbol == "#"
+
+    test "Tab in the placeholder draws as one cell":
+      var buf = newBuffer(10, 1)
+      buf.fill(buf.area, cell("#"))
+      newInput(placeholder = "a\tb").render(rect(0, 0, 5, 1), buf)
+      check buf[2, 0].symbol == "b"
+      for x in 5 ..< 10:
+        check buf[x, 0].symbol == "#"

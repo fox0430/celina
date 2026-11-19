@@ -461,3 +461,26 @@ suite "Progress Bar Widget Tests":
       check minSize.width >= 9
       # Two-line layout because label is present
       check minSize.height == 2
+
+  suite "Tab characters":
+    test "Tab in the label draws as one cell":
+      var buf = newBuffer(10, 1)
+      buf.fill(buf.area, cell("#"))
+      newProgressBar(0.5, label = "a\tb", showPercentage = false, showBar = false)
+        .render(rect(0, 0, 6, 1), buf)
+      check buf[1, 0].symbol == "a"
+      check buf[2, 0].symbol == " "
+      check buf[3, 0].symbol == "b"
+      for x in 6 ..< 10:
+        check buf[x, 0].symbol == "#"
+
+    test "Tab in the label next to the percentage draws as one cell":
+      var buf = newBuffer(14, 2)
+      buf.fill(buf.area, cell("#"))
+      newProgressBar(0.5, label = "a\tb").render(rect(0, 0, 10, 2), buf)
+      # "a b 50%" centered in 10 columns
+      check buf[1, 0].symbol == "a"
+      check buf[3, 0].symbol == "b"
+      check buf[5, 0].symbol == "5"
+      for x in 10 ..< 14:
+        check buf[x, 0].symbol == "#"

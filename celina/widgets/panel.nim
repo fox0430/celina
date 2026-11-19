@@ -219,7 +219,7 @@ proc drawTitle(p: Panel, area: Rect, buf: var Buffer) =
     of taRight:
       rightBound - titleWidth
 
-  buf.setString(startX, area.y, displayTitle, p.titleStyle)
+  buf.setString(startX, area.y, displayTitle, p.titleStyle, tabWidth = 0)
 
 proc drawBorder(p: Panel, area: Rect, buf: var Buffer) =
   ## Draw the selected border edges and corners into `area` via the shared

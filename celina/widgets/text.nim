@@ -167,7 +167,7 @@ method render*(widget: Text, area: Rect, buf: var Buffer) =
       break # Not enough vertical space
 
     let alignedLine = alignLine(line, area.width, widget.alignment)
-    buf.setString(area.x, area.y + i, alignedLine, widget.style)
+    buf.setString(area.x, area.y + i, alignedLine, widget.style, tabWidth = 0)
 
 method getMinSize*(widget: Text): Size =
   ## Get minimum size for text widget

@@ -489,7 +489,7 @@ proc drawBorder(window: Window, destBuffer: var Buffer) =
           # Reserve one column for the ellipsis (width 1) and truncate the
           # rest on rune boundaries.
           window.title.truncateToWidth(maxTitleLen - 1) & "…"
-      destBuffer.setString(titleStart, area.y, displayTitle, style)
+      destBuffer.setString(titleStart, area.y, displayTitle, style, tabWidth = 0)
 
 proc render*(window: Window, destBuffer: var Buffer) =
   ## Render window to destination buffer
