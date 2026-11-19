@@ -360,6 +360,28 @@ suite "Table Widget Tests":
     tableWidget.scrollUp(20)
     check tableWidget.scrollOffset == 0
 
+  test "Negative scroll offsets clamp to the first row":
+    var t = newTable(@[column("A")], (0 .. 19).mapIt(tableRow(@[$it])))
+    var expected = newBuffer(10, 8)
+    t.render(expected.area, expected)
+
+    t.scrollDown(3)
+    t.scrollDown(-1)
+    check t.scrollOffset == 2
+    t.scrollDown(-5)
+    check t.scrollOffset == 0
+    t.scrollDown(100)
+    check t.scrollOffset == 16
+    t.scrollUp(-10)
+    check t.scrollOffset == 16
+
+    t.scrollOffset = -3
+    var buf = newBuffer(10, 8)
+    t.render(buf.area, buf)
+    check:
+      t.scrollOffset == 0
+      buf.toStrings() == expected.toStrings()
+
   test "Border alignment correctness":
     # Test that borders align properly with content
     let columns = @[column("A", 5), column("B", 8), column("C", 6)]

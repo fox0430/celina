@@ -410,12 +410,13 @@ proc highlightPrevious*(widget: Table) =
 
 proc scrollUp*(widget: Table, lines: int = 1) =
   ## Scroll the table up
-  widget.scrollOffset = max(0, widget.scrollOffset - lines)
+  let maxScroll = max(0, widget.rows.len - widget.visibleRowCount)
+  widget.scrollOffset = clamp(widget.scrollOffset - lines, 0, maxScroll)
 
 proc scrollDown*(widget: Table, lines: int = 1) =
   ## Scroll the table down
   let maxScroll = max(0, widget.rows.len - widget.visibleRowCount)
-  widget.scrollOffset = min(maxScroll, widget.scrollOffset + lines)
+  widget.scrollOffset = clamp(widget.scrollOffset + lines, 0, maxScroll)
 
 proc highlightFirst*(widget: Table) =
   ## Move highlight to first selectable row (vim: gg)
@@ -877,7 +878,7 @@ method render*(widget: Table, area: Rect, buf: var Buffer) =
 
   # Ensure scroll offset is valid
   let maxScroll = max(0, widget.rows.len - widget.visibleRowCount)
-  widget.scrollOffset = min(widget.scrollOffset, maxScroll)
+  widget.scrollOffset = clamp(widget.scrollOffset, 0, maxScroll)
 
   # Position the scrollbar on its reserved column inside the right border
   let scrollbarX =
