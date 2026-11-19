@@ -3,8 +3,8 @@
 ## Demonstrates the Panel framing widget: borders on different sides, border
 ## kinds, titles with alignment, padding, fill, and hosting a child widget.
 
-import ../celina
-import ../celina/widgets/[panel, text]
+import pkg/celina
+import pkg/celina/widgets/[panel, text]
 
 proc main() =
   let config = AppConfig(

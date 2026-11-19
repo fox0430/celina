@@ -32,14 +32,9 @@ jobs:
       run: |
         nim doc --project --index:on --outdir:./htmldocs -d:asyncBackend=asyncdispatch ./celina.nim
 
-        nim doc --project --index:on --outdir:./htmldocs/celina/widgets ./celina/widgets/base.nim
-        nim doc --project --index:on --outdir:./htmldocs/celina/widgets ./celina/widgets/button.nim
-        nim doc --project --index:on --outdir:./htmldocs/celina/widgets ./celina/widgets/input.nim
-        nim doc --project --index:on --outdir:./htmldocs/celina/widgets ./celina/widgets/list.nim
-        nim doc --project --index:on --outdir:./htmldocs/celina/widgets ./celina/widgets/progress.nim
-        nim doc --project --index:on --outdir:./htmldocs/celina/widgets ./celina/widgets/table.nim
-        nim doc --project --index:on --outdir:./htmldocs/celina/widgets ./celina/widgets/tabs.nim
-        nim doc --project --index:on --outdir:./htmldocs/celina/widgets ./celina/widgets/text.nim
+        for f in ./celina/widgets/*.nim; do
+          nim doc --project --index:on --outdir:./htmldocs/celina/widgets "$f"
+        done
 
     - uses: actions/upload-pages-artifact@v5
       with:
