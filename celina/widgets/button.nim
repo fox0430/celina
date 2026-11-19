@@ -273,19 +273,29 @@ proc handleKeyEvent*(widget: Button, event: KeyEvent): EventResult =
   else:
     return erContinue
 
+proc getButtonText*(widget: Button): string =
+  ## Get the formatted button text with padding
+  if widget.padding > 0:
+    " ".repeat(widget.padding) & widget.text & " ".repeat(widget.padding)
+  else:
+    widget.text
+
+proc buttonRect(widget: Button, area: Rect): Rect =
+  ## The cells `render` draws as the button: its columns, centered in `area`,
+  ## over the full height of `area`.
+  let width = min(area.width, max(widget.getButtonText().displayWidth, widget.minWidth))
+  rect(area.x + max(0, (area.width - width) div 2), area.y, width, area.height)
+
 proc handleMouseEvent*(widget: Button, event: MouseEvent, area: Rect): EventResult =
   ## Handle mouse input for the button.
+  ## `area` is the rect passed to `render`. Only the cells drawn as the button
+  ## react, not the blank columns beside it when `area` is wider.
   ## Returns `erConsume` when the event affected the button, `erContinue`
   ## otherwise.
   if not widget.enabled:
     return erContinue
 
-  # Check if mouse is within button bounds
-  let mouseInBounds =
-    event.x >= area.x and event.x < area.x + area.width and event.y >= area.y and
-    event.y < area.y + area.height
-
-  if mouseInBounds:
+  if widget.buttonRect(area).contains(event.x, event.y):
     case event.kind
     of Press:
       if event.button == Left:
@@ -312,7 +322,7 @@ proc handleMouseEvent*(widget: Button, event: MouseEvent, area: Rect): EventResu
     else:
       discard
   else:
-    # Mouse is outside the button area.
+    # Mouse is outside the button.
     case event.kind
     of Release:
       # A press that ends outside the button cancels the click: reset the
@@ -372,13 +382,6 @@ proc getCurrentStyle*(widget: Button): Style =
   of Focused: widget.focusedStyle
   of Disabled: widget.disabledStyle
 
-proc getButtonText*(widget: Button): string =
-  ## Get the formatted button text with padding
-  if widget.padding > 0:
-    " ".repeat(widget.padding) & widget.text & " ".repeat(widget.padding)
-  else:
-    widget.text
-
 # Button widget methods
 method render*(widget: Button, area: Rect, buf: var Buffer) =
   ## Render the button widget
@@ -389,12 +392,9 @@ method render*(widget: Button, area: Rect, buf: var Buffer) =
   let currentStyle = widget.getCurrentStyle()
   let textWidth = buttonText.displayWidth
 
-  # Calculate actual button dimensions
-  let actualButtonWidth = max(textWidth, widget.minWidth)
-  let buttonWidth = min(area.width, actualButtonWidth)
-
-  # Calculate button position (centered within the area)
-  let buttonStartX = area.x + max(0, (area.width - buttonWidth) div 2)
+  let button = widget.buttonRect(area)
+  let buttonWidth = button.width
+  let buttonStartX = button.x
   let buttonStartY = area.y + max(0, (area.height - 1) div 2)
 
   # Render the area in one pass - no clearing then redrawing

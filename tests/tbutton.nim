@@ -200,7 +200,7 @@ suite "Button Widget Tests":
 
       # Mouse press
       let pressEvent =
-        MouseEvent(kind: Press, button: Left, x: 15, y: 11, modifiers: {})
+        MouseEvent(kind: Press, button: Left, x: 20, y: 11, modifiers: {})
 
       let pressHandled = btn.handleMouseEvent(pressEvent, area)
       check pressHandled == erConsume
@@ -208,7 +208,7 @@ suite "Button Widget Tests":
 
       # Mouse release
       let releaseEvent =
-        MouseEvent(kind: Release, button: Left, x: 15, y: 11, modifiers: {})
+        MouseEvent(kind: Release, button: Left, x: 20, y: 11, modifiers: {})
 
       let releaseHandled = btn.handleMouseEvent(releaseEvent, area)
       check releaseHandled == erConsume
@@ -244,7 +244,7 @@ suite "Button Widget Tests":
       let area = rect(10, 10, 20, 3)
 
       # Hovering shows the hover visual but keeps keyboard focus.
-      let moveIn = MouseEvent(kind: Move, button: Left, x: 15, y: 11, modifiers: {})
+      let moveIn = MouseEvent(kind: Move, button: Left, x: 20, y: 11, modifiers: {})
       check btn.handleMouseEvent(moveIn, area) == erConsume
       check btn.state == Hovered
       check btn.isFocused()
@@ -270,7 +270,7 @@ suite "Button Widget Tests":
       check focusCalled == 1
 
       let area = rect(10, 10, 20, 3)
-      let moveIn = MouseEvent(kind: Move, button: Left, x: 15, y: 11, modifiers: {})
+      let moveIn = MouseEvent(kind: Move, button: Left, x: 20, y: 11, modifiers: {})
       discard btn.handleMouseEvent(moveIn, area)
       let moveOut = MouseEvent(kind: Move, button: Left, x: 1, y: 1, modifiers: {})
       discard btn.handleMouseEvent(moveOut, area)
@@ -287,9 +287,9 @@ suite "Button Widget Tests":
       let area = rect(10, 10, 20, 3)
 
       let pressEvent =
-        MouseEvent(kind: Press, button: Left, x: 15, y: 11, modifiers: {})
+        MouseEvent(kind: Press, button: Left, x: 20, y: 11, modifiers: {})
       let releaseEvent =
-        MouseEvent(kind: Release, button: Left, x: 15, y: 11, modifiers: {})
+        MouseEvent(kind: Release, button: Left, x: 20, y: 11, modifiers: {})
       discard btn.handleMouseEvent(pressEvent, area)
       discard btn.handleMouseEvent(releaseEvent, area)
       check btn.isFocused()
@@ -313,7 +313,7 @@ suite "Button Widget Tests":
 
       # Press inside, then release after the pointer has left the button.
       discard btn.handleMouseEvent(
-        MouseEvent(kind: Press, button: Left, x: 15, y: 11, modifiers: {}), area
+        MouseEvent(kind: Press, button: Left, x: 20, y: 11, modifiers: {}), area
       )
       check btn.state == Pressed
       discard btn.handleMouseEvent(
@@ -335,13 +335,13 @@ suite "Button Widget Tests":
 
       # Hover, press, release -- the Release must not re-fire onMouseEnter.
       discard btn.handleMouseEvent(
-        MouseEvent(kind: Move, button: Left, x: 15, y: 11, modifiers: {}), area
+        MouseEvent(kind: Move, button: Left, x: 20, y: 11, modifiers: {}), area
       )
       discard btn.handleMouseEvent(
-        MouseEvent(kind: Press, button: Left, x: 15, y: 11, modifiers: {}), area
+        MouseEvent(kind: Press, button: Left, x: 20, y: 11, modifiers: {}), area
       )
       discard btn.handleMouseEvent(
-        MouseEvent(kind: Release, button: Left, x: 15, y: 11, modifiers: {}), area
+        MouseEvent(kind: Release, button: Left, x: 20, y: 11, modifiers: {}), area
       )
       check btn.state == Hovered
       check enterCount == 1
@@ -359,10 +359,10 @@ suite "Button Widget Tests":
       # Terminals in press/release-only mode never send Move: the press must
       # still surface a single onMouseEnter.
       discard btn.handleMouseEvent(
-        MouseEvent(kind: Press, button: Left, x: 15, y: 11, modifiers: {}), area
+        MouseEvent(kind: Press, button: Left, x: 20, y: 11, modifiers: {}), area
       )
       discard btn.handleMouseEvent(
-        MouseEvent(kind: Release, button: Left, x: 15, y: 11, modifiers: {}), area
+        MouseEvent(kind: Release, button: Left, x: 20, y: 11, modifiers: {}), area
       )
       check enterCount == 1
       check clickCount == 1
@@ -375,7 +375,7 @@ suite "Button Widget Tests":
       let area = rect(10, 10, 20, 3)
 
       discard btn.handleMouseEvent(
-        MouseEvent(kind: Press, button: Left, x: 15, y: 11, modifiers: {}), area
+        MouseEvent(kind: Press, button: Left, x: 20, y: 11, modifiers: {}), area
       )
       # Dragging out while held keeps the press alive (so it can be resumed).
       discard btn.handleMouseEvent(
@@ -384,13 +384,38 @@ suite "Button Widget Tests":
       check btn.state == Pressed
       # Dragging back in keeps it pressed, and releasing inside clicks.
       discard btn.handleMouseEvent(
-        MouseEvent(kind: Move, button: Left, x: 15, y: 11, modifiers: {}), area
+        MouseEvent(kind: Move, button: Left, x: 20, y: 11, modifiers: {}), area
       )
       check btn.state == Pressed
       discard btn.handleMouseEvent(
-        MouseEvent(kind: Release, button: Left, x: 15, y: 11, modifiers: {}), area
+        MouseEvent(kind: Release, button: Left, x: 20, y: 11, modifiers: {}), area
       )
       check clickCount == 1
+
+    test "Only the drawn button reacts to the mouse":
+      # (minWidth, area width, drawn width); 7 leaves an odd margin, 3 clamps.
+      for (minWidth, areaWidth, width) in [
+        (0, 20, 4), (10, 20, 10), (0, 7, 4), (0, 3, 3)
+      ]:
+        var clickCount = 0
+        var btn = newButton("OK", minWidth = minWidth)
+        btn.onClick = proc() =
+          clickCount.inc()
+        let area = rect(2, 1, areaWidth, 3)
+        var buf = newBuffer(24, 5)
+        btn.render(area, buf)
+        for y in area.y ..< area.bottom:
+          for x in area.x ..< area.right:
+            let drawn = buf[x, y].style == btn.normalStyle
+            let before = clickCount
+            check btn.handleMouseEvent(
+              MouseEvent(kind: Press, button: Left, x: x, y: y), area
+            ) == (if drawn: erConsume else: erContinue)
+            discard btn.handleMouseEvent(
+              MouseEvent(kind: Release, button: Left, x: x, y: y), area
+            )
+            check clickCount == before + ord(drawn)
+        check clickCount == width * area.height
 
     test "Keyboard activation keeps focus visual":
       var btn = newButton("Test")
