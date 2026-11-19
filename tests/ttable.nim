@@ -382,6 +382,22 @@ suite "Table Widget Tests":
       t.scrollOffset == 0
       buf.toStrings() == expected.toStrings()
 
+  test "highlightNext before the first render keeps the row visible":
+    var expected = newTable(@[column("A")], (0 .. 19).mapIt(tableRow(@[$it])))
+    var expectedBuf = newBuffer(10, 8)
+    expected.render(expectedBuf.area, expectedBuf)
+    expected.highlightNext()
+    expected.render(expectedBuf.area, expectedBuf)
+
+    var t = newTable(@[column("A")], (0 .. 19).mapIt(tableRow(@[$it])))
+    t.highlightNext()
+    var buf = newBuffer(10, 8)
+    t.render(buf.area, buf)
+    check:
+      t.highlightedIndex == 1
+      t.scrollOffset == 0
+      buf.toStrings() == expectedBuf.toStrings()
+
   test "pageDown without a highlighted row":
     var empty = newTable(@[column("A")])
     var tall = newBuffer(10, 8)

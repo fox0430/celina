@@ -317,7 +317,8 @@ proc highlightNext*(widget: List) =
     if widget.items[newIndex].selectable:
       widget.highlightedIndex = newIndex
       # Scroll if needed
-      if newIndex >= widget.scrollOffset + widget.visibleCount:
+      if widget.visibleCount > 0 and
+          newIndex >= widget.scrollOffset + widget.visibleCount:
         widget.scrollOffset = newIndex - widget.visibleCount + 1
       if widget.onHighlight != nil:
         widget.onHighlight(newIndex)
