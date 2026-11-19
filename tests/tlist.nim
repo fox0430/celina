@@ -270,6 +270,28 @@ suite "List Widget Tests":
       listWidget.highlightedIndex == 99
       listWidget.scrollOffset == 90 # 100 - 10
 
+  test "Negative scroll offsets clamp to the first item":
+    var listWidget = list((1 .. 20).mapIt($it))
+    var expected = newBuffer(10, 4)
+    listWidget.render(expected.area, expected)
+
+    listWidget.scrollDown(3)
+    listWidget.scrollDown(-1)
+    check listWidget.scrollOffset == 2
+    listWidget.scrollDown(-5)
+    check listWidget.scrollOffset == 0
+    listWidget.scrollDown(100)
+    check listWidget.scrollOffset == 16
+    listWidget.scrollUp(-10)
+    check listWidget.scrollOffset == 16
+
+    listWidget.scrollOffset = -3
+    var buf = newBuffer(10, 4)
+    listWidget.render(buf.area, buf)
+    check:
+      listWidget.scrollOffset == 0
+      buf.toStrings() == expected.toStrings()
+
   test "Keyboard event handling":
     # Test keyboard input
     var listWidget = selectList(@["A", "B", "C"])

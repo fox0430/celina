@@ -364,12 +364,13 @@ proc highlightLast*(widget: List) =
 
 proc scrollUp*(widget: List, lines: int = 1) =
   ## Scroll the list up
-  widget.scrollOffset = max(0, widget.scrollOffset - lines)
+  let maxScroll = max(0, widget.items.len - widget.visibleCount)
+  widget.scrollOffset = clamp(widget.scrollOffset - lines, 0, maxScroll)
 
 proc scrollDown*(widget: List, lines: int = 1) =
   ## Scroll the list down
   let maxScroll = max(0, widget.items.len - widget.visibleCount)
-  widget.scrollOffset = min(maxScroll, widget.scrollOffset + lines)
+  widget.scrollOffset = clamp(widget.scrollOffset + lines, 0, maxScroll)
 
 proc pageUp*(widget: List) =
   ## Scroll up by one page
@@ -567,7 +568,7 @@ method render*(widget: List, area: Rect, buf: var Buffer) =
 
   # Ensure scroll offset is valid
   let maxScroll = max(0, widget.items.len - widget.visibleCount)
-  widget.scrollOffset = min(widget.scrollOffset, maxScroll)
+  widget.scrollOffset = clamp(widget.scrollOffset, 0, maxScroll)
 
   # Calculate content area (accounting for scrollbar)
   let contentWidth =
