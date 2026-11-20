@@ -307,6 +307,13 @@ proc isSelected*(widget: List, index: int): bool =
   index in widget.selectedIndices
 
 # Navigation
+proc scrollIntoView(widget: List, index: int) =
+  ## Scroll so that `index` is visible, from either side
+  if index < widget.scrollOffset:
+    widget.scrollOffset = index
+  elif widget.visibleCount > 0 and index >= widget.scrollOffset + widget.visibleCount:
+    widget.scrollOffset = index - widget.visibleCount + 1
+
 proc highlightNext*(widget: List) =
   ## Move highlight to next selectable item
   if widget.items.len == 0:
@@ -316,14 +323,13 @@ proc highlightNext*(widget: List) =
   while newIndex < widget.items.len:
     if widget.items[newIndex].selectable:
       widget.highlightedIndex = newIndex
-      # Scroll if needed
-      if widget.visibleCount > 0 and
-          newIndex >= widget.scrollOffset + widget.visibleCount:
-        widget.scrollOffset = newIndex - widget.visibleCount + 1
+      widget.scrollIntoView(newIndex)
       if widget.onHighlight != nil:
         widget.onHighlight(newIndex)
-      break
+      return
     newIndex.inc()
+  if widget.highlightedIndex in 0 ..< widget.items.len:
+    widget.scrollIntoView(widget.highlightedIndex)
 
 proc highlightPrevious*(widget: List) =
   ## Move highlight to previous selectable item
@@ -334,13 +340,13 @@ proc highlightPrevious*(widget: List) =
   while newIndex >= 0:
     if widget.items[newIndex].selectable:
       widget.highlightedIndex = newIndex
-      # Scroll if needed
-      if newIndex < widget.scrollOffset:
-        widget.scrollOffset = newIndex
+      widget.scrollIntoView(newIndex)
       if widget.onHighlight != nil:
         widget.onHighlight(newIndex)
-      break
+      return
     newIndex.dec()
+  if widget.highlightedIndex in 0 ..< widget.items.len:
+    widget.scrollIntoView(widget.highlightedIndex)
 
 proc highlightFirst*(widget: List) =
   ## Move highlight to first selectable item
