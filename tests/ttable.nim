@@ -398,6 +398,49 @@ suite "Table Widget Tests":
       t.scrollOffset == 0
       buf.toStrings() == expectedBuf.toStrings()
 
+  test "highlightNext and highlightPrevious bring an off-screen row back":
+    var t = newTable(@[column("A")], (0 .. 19).mapIt(tableRow(@[$it])))
+    var buf = newBuffer(10, 8)
+    t.render(buf.area, buf)
+    require t.visibleRowCount == 4
+
+    t.scrollDown(10)
+    t.highlightNext()
+    check:
+      t.highlightedIndex == 1
+      t.scrollOffset == 1
+
+    t.highlightLast()
+    t.scrollUp(10)
+    t.highlightPrevious()
+    check:
+      t.highlightedIndex == 18
+      t.scrollOffset == 15
+
+    t.highlightLast()
+    t.scrollUp(10)
+    t.highlightNext()
+    check:
+      t.highlightedIndex == 19
+      t.scrollOffset == 16
+
+    t.highlightFirst()
+    t.scrollDown(10)
+    t.highlightPrevious()
+    check:
+      t.highlightedIndex == 0
+      t.scrollOffset == 0
+
+  test "highlightNext after scrollDown before the first render keeps the row visible":
+    var t = newTable(@[column("A")], (0 .. 19).mapIt(tableRow(@[$it])))
+    t.scrollDown(10)
+    t.highlightNext()
+    var buf = newBuffer(10, 8)
+    t.render(buf.area, buf)
+    check:
+      t.highlightedIndex == 1
+      t.scrollOffset == 1
+
   test "pageDown without a highlighted row":
     var empty = newTable(@[column("A")])
     var tall = newBuffer(10, 8)

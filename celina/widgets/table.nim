@@ -374,6 +374,14 @@ proc isSelected*(widget: Table, index: int): bool =
   index in widget.selectedIndices
 
 # Navigation
+proc scrollIntoView(widget: Table, index: int) =
+  ## Scroll so that `index` is visible, from either side
+  if index < widget.scrollOffset:
+    widget.scrollOffset = index
+  elif widget.visibleRowCount > 0 and
+      index >= widget.scrollOffset + widget.visibleRowCount:
+    widget.scrollOffset = index - widget.visibleRowCount + 1
+
 proc highlightNext*(widget: Table) =
   ## Move highlight to next selectable row
   if widget.rows.len == 0:
@@ -383,14 +391,13 @@ proc highlightNext*(widget: Table) =
   while newIndex < widget.rows.len:
     if widget.rows[newIndex].selectable:
       widget.highlightedIndex = newIndex
-      # Scroll if needed
-      if widget.visibleRowCount > 0 and
-          newIndex >= widget.scrollOffset + widget.visibleRowCount:
-        widget.scrollOffset = newIndex - widget.visibleRowCount + 1
+      widget.scrollIntoView(newIndex)
       if widget.onHighlight != nil:
         widget.onHighlight(newIndex)
-      break
+      return
     newIndex.inc()
+  if widget.highlightedIndex in 0 ..< widget.rows.len:
+    widget.scrollIntoView(widget.highlightedIndex)
 
 proc highlightPrevious*(widget: Table) =
   ## Move highlight to previous selectable row
@@ -401,13 +408,13 @@ proc highlightPrevious*(widget: Table) =
   while newIndex >= 0:
     if widget.rows[newIndex].selectable:
       widget.highlightedIndex = newIndex
-      # Scroll if needed
-      if newIndex < widget.scrollOffset:
-        widget.scrollOffset = newIndex
+      widget.scrollIntoView(newIndex)
       if widget.onHighlight != nil:
         widget.onHighlight(newIndex)
-      break
+      return
     newIndex.dec()
+  if widget.highlightedIndex in 0 ..< widget.rows.len:
+    widget.scrollIntoView(widget.highlightedIndex)
 
 proc scrollUp*(widget: Table, lines: int = 1) =
   ## Scroll the table up
@@ -449,10 +456,7 @@ proc revealHighlight(widget: Table) =
   ## Scroll the table so that the highlighted row is visible.
   if widget.visibleRowCount <= 0 or widget.highlightedIndex < 0:
     return
-  if widget.highlightedIndex < widget.scrollOffset:
-    widget.scrollOffset = widget.highlightedIndex
-  elif widget.highlightedIndex >= widget.scrollOffset + widget.visibleRowCount:
-    widget.scrollOffset = widget.highlightedIndex - widget.visibleRowCount + 1
+  widget.scrollIntoView(widget.highlightedIndex)
   widget.scrollOffset =
     clamp(widget.scrollOffset, 0, max(0, widget.rows.len - widget.visibleRowCount))
 

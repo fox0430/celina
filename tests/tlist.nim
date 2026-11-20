@@ -308,6 +308,49 @@ suite "List Widget Tests":
       listWidget.scrollOffset == 0
       buf.toStrings() == expectedBuf.toStrings()
 
+  test "highlightNext and highlightPrevious bring an off-screen item back":
+    var listWidget = list((1 .. 20).mapIt($it))
+    var buf = newBuffer(10, 4)
+    listWidget.render(buf.area, buf)
+    require listWidget.visibleCount == 4
+
+    listWidget.scrollDown(10)
+    listWidget.highlightNext()
+    check:
+      listWidget.highlightedIndex == 1
+      listWidget.scrollOffset == 1
+
+    listWidget.highlightLast()
+    listWidget.scrollUp(10)
+    listWidget.highlightPrevious()
+    check:
+      listWidget.highlightedIndex == 18
+      listWidget.scrollOffset == 15
+
+    listWidget.highlightLast()
+    listWidget.scrollUp(10)
+    listWidget.highlightNext()
+    check:
+      listWidget.highlightedIndex == 19
+      listWidget.scrollOffset == 16
+
+    listWidget.highlightFirst()
+    listWidget.scrollDown(10)
+    listWidget.highlightPrevious()
+    check:
+      listWidget.highlightedIndex == 0
+      listWidget.scrollOffset == 0
+
+  test "highlightNext after scrollDown before the first render keeps the item visible":
+    var listWidget = list((1 .. 20).mapIt($it))
+    listWidget.scrollDown(10)
+    listWidget.highlightNext()
+    var buf = newBuffer(10, 4)
+    listWidget.render(buf.area, buf)
+    check:
+      listWidget.highlightedIndex == 1
+      listWidget.scrollOffset == 1
+
   test "Keyboard event handling":
     # Test keyboard input
     var listWidget = selectList(@["A", "B", "C"])
