@@ -438,6 +438,424 @@ suite "Table Widget Tests":
       t.scrollOffset == 0
       t.highlightedIndex == 0
 
+  test "pageDown keeps the highlight visible with unselectable rows":
+    var rows = (0 ..< 100).mapIt(tableRow(@[$it]))
+    for i in 5 .. 30:
+      rows[i].selectable = false
+    var t = newTable(@[column("A")], rows)
+    var calls: seq[int]
+    t.onHighlight = proc(index: int) =
+      calls.add(index)
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    require t.visibleRowCount == 10
+
+    t.pageDown()
+    check:
+      t.scrollOffset == 22
+      t.highlightedIndex == 31
+      t.highlightedIndex >= t.scrollOffset
+      t.highlightedIndex < t.scrollOffset + t.visibleRowCount
+      calls == @[31]
+
+  test "pageDown from a highlight above the view keeps it visible":
+    var t = newTable(@[column("A")], (0 ..< 100).mapIt(tableRow(@[$it])))
+    var calls: seq[int]
+    t.onHighlight = proc(index: int) =
+      calls.add(index)
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    t.scrollDown(50)
+    require t.scrollOffset == 50
+    require t.highlightedIndex == 0
+
+    t.pageDown()
+    check:
+      t.scrollOffset == 55
+      t.highlightedIndex == 55
+      t.highlightedIndex >= t.scrollOffset
+      t.highlightedIndex < t.scrollOffset + t.visibleRowCount
+      calls == @[55]
+
+  test "pageUp keeps the highlight visible with unselectable rows":
+    var rows = (0 ..< 100).mapIt(tableRow(@[$it]))
+    for i in 26 .. 40:
+      rows[i].selectable = false
+    var t = newTable(@[column("A")], rows)
+    var calls: seq[int]
+    t.onHighlight = proc(index: int) =
+      calls.add(index)
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    t.scrollOffset = 40
+    t.highlightedIndex = 45
+
+    t.pageUp()
+    check:
+      t.scrollOffset == 35
+      t.highlightedIndex == 44
+      t.highlightedIndex >= t.scrollOffset
+      t.highlightedIndex < t.scrollOffset + t.visibleRowCount
+      calls == @[44]
+
+  test "pageUp from a highlight below the view keeps it visible":
+    var t = newTable(@[column("A")], (0 ..< 100).mapIt(tableRow(@[$it])))
+    var calls: seq[int]
+    t.onHighlight = proc(index: int) =
+      calls.add(index)
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    t.scrollOffset = 10
+    t.highlightedIndex = 80
+
+    t.pageUp()
+    check:
+      t.scrollOffset == 5
+      t.highlightedIndex == 14
+      t.highlightedIndex >= t.scrollOffset
+      t.highlightedIndex < t.scrollOffset + t.visibleRowCount
+      calls == @[14]
+
+  test "page moves keep the highlight visible with one visible row":
+    var rows = (0 ..< 10).mapIt(tableRow(@[$it]))
+    rows[1].selectable = false
+    var t = newTable(@[column("A")], rows)
+    var buf = newBuffer(10, 5)
+    t.render(buf.area, buf)
+    require t.visibleRowCount == 1
+
+    t.pageDown()
+    check:
+      t.scrollOffset == 2
+      t.highlightedIndex == 2
+    t.pageDown()
+    check:
+      t.scrollOffset == 3
+      t.highlightedIndex == 3
+    t.pageUp()
+    check:
+      t.scrollOffset == 2
+      t.highlightedIndex == 2
+
+    var unselectableFirstRows = (0 ..< 10).mapIt(tableRow(@[$it]))
+    unselectableFirstRows[0].selectable = false
+    var first = newTable(@[column("A")], unselectableFirstRows)
+    var firstBuf = newBuffer(10, 5)
+    first.render(firstBuf.area, firstBuf)
+    require first.visibleRowCount == 1
+    first.scrollOffset = 1
+    first.highlightedIndex = 1
+
+    first.pageUp()
+    check:
+      first.scrollOffset == 1
+      first.highlightedIndex == 1
+
+  test "page moves leave a table shorter than the page in view":
+    var t = newTable(@[column("A")], (0 ..< 3).mapIt(tableRow(@[$it])))
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    require t.visibleRowCount == 10
+
+    t.pageDown()
+    check:
+      t.scrollOffset == 0
+      t.highlightedIndex == 2
+    t.pageUp()
+    check:
+      t.scrollOffset == 0
+      t.highlightedIndex == 0
+
+  test "fullPageDown keeps the highlight visible with an unselectable page":
+    var rows = (0 ..< 100).mapIt(tableRow(@[$it]))
+    for i in 10 .. 19:
+      rows[i].selectable = false
+    var t = newTable(@[column("A")], rows)
+    var calls: seq[int]
+    t.onHighlight = proc(index: int) =
+      calls.add(index)
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    require t.visibleRowCount == 10
+
+    t.fullPageDown()
+    check:
+      t.scrollOffset == 11
+      t.highlightedIndex == 20
+      t.highlightedIndex >= t.scrollOffset
+      t.highlightedIndex < t.scrollOffset + t.visibleRowCount
+      calls == @[20]
+
+  test "fullPageUp keeps the highlight visible with an unselectable page":
+    var rows = (0 ..< 100).mapIt(tableRow(@[$it]))
+    for i in 10 .. 19:
+      rows[i].selectable = false
+    var t = newTable(@[column("A")], rows)
+    var calls: seq[int]
+    t.onHighlight = proc(index: int) =
+      calls.add(index)
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    t.scrollOffset = 20
+    t.highlightedIndex = 20
+
+    t.fullPageUp()
+    check:
+      t.scrollOffset == 9
+      t.highlightedIndex == 9
+      t.highlightedIndex >= t.scrollOffset
+      t.highlightedIndex < t.scrollOffset + t.visibleRowCount
+      calls == @[9]
+
+  test "fullPageUp reveals a highlight above the page":
+    var t = newTable(@[column("A")], (0 ..< 100).mapIt(tableRow(@[$it])))
+    var calls: seq[int]
+    t.onHighlight = proc(index: int) =
+      calls.add(index)
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    require t.visibleRowCount == 10
+    t.scrollOffset = 20
+    t.highlightedIndex = 5
+
+    t.fullPageUp()
+    check:
+      t.scrollOffset == 5
+      t.highlightedIndex == 5
+      t.highlightedIndex >= t.scrollOffset
+      t.highlightedIndex < t.scrollOffset + t.visibleRowCount
+      calls.len == 0
+
+  test "pageDown at the bottom keeps the last row highlighted":
+    var t = newTable(@[column("A")], (0 ..< 100).mapIt(tableRow(@[$it])))
+    var calls: seq[int]
+    t.onHighlight = proc(index: int) =
+      calls.add(index)
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    t.scrollOffset = 90
+    t.highlightedIndex = 95
+
+    t.pageDown()
+    check:
+      t.scrollOffset == 90
+      t.highlightedIndex == 99
+      calls == @[99]
+
+  test "pageDown returns to a highlight below the view":
+    var t = newTable(@[column("A")], (0 ..< 100).mapIt(tableRow(@[$it])))
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    t.highlightLast()
+    t.scrollUp(80)
+    require t.scrollOffset == 10
+    require t.highlightedIndex == 99
+    var calls: seq[int]
+    t.onHighlight = proc(index: int) =
+      calls.add(index)
+
+    t.pageDown()
+    check:
+      t.scrollOffset == 90
+      t.highlightedIndex == 99
+      t.highlightedIndex >= t.scrollOffset
+      t.highlightedIndex < t.scrollOffset + t.visibleRowCount
+      calls.len == 0
+
+  test "pageUp returns to a highlight above the view":
+    var t = newTable(@[column("A")], (0 ..< 100).mapIt(tableRow(@[$it])))
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    t.scrollDown(50)
+    require t.scrollOffset == 50
+    require t.highlightedIndex == 0
+    var calls: seq[int]
+    t.onHighlight = proc(index: int) =
+      calls.add(index)
+
+    t.pageUp()
+    check:
+      t.scrollOffset == 0
+      t.highlightedIndex == 0
+      t.highlightedIndex >= t.scrollOffset
+      t.highlightedIndex < t.scrollOffset + t.visibleRowCount
+      calls.len == 0
+
+  test "fullPageDown at the bottom does not move the highlight up":
+    var t = newTable(@[column("A")], (0 ..< 100).mapIt(tableRow(@[$it])))
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    t.scrollOffset = 90
+    t.highlightedIndex = 95
+    var calls: seq[int]
+    t.onHighlight = proc(index: int) =
+      calls.add(index)
+
+    t.fullPageDown()
+    check:
+      t.scrollOffset == 90
+      t.highlightedIndex == 95
+      calls.len == 0
+
+  test "page moves on an empty table clear the scroll offset":
+    var t = newTable(@[column("A")], (0 ..< 12).mapIt(tableRow(@[$it])))
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    require t.visibleRowCount == 10
+    t.scrollDown(2)
+    require t.scrollOffset == 2
+    while t.rows.len > 0:
+      t.removeRow(0)
+
+    t.pageDown()
+    check t.scrollOffset == 0
+    t.scrollOffset = 2
+    t.pageUp()
+    check t.scrollOffset == 0
+    t.scrollOffset = 2
+    t.fullPageDown()
+    check t.scrollOffset == 0
+    t.scrollOffset = 2
+    t.fullPageUp()
+    check t.scrollOffset == 0
+
+  test "pageDown keeps a visible highlight without firing onHighlight":
+    var rows = (0 ..< 100).mapIt(tableRow(@[$it]))
+    for i in 6 .. 20:
+      rows[i].selectable = false
+    var t = newTable(@[column("A")], rows)
+    var calls: seq[int]
+    t.onHighlight = proc(index: int) =
+      calls.add(index)
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    require t.visibleRowCount == 10
+    t.highlightedIndex = 5
+
+    t.pageDown()
+    check:
+      t.scrollOffset == 5
+      t.highlightedIndex == 5
+      calls.len == 0
+
+  test "pageUp keeps a visible highlight without firing onHighlight":
+    var rows = (0 ..< 100).mapIt(tableRow(@[$it]))
+    for i in 5 .. 15:
+      rows[i].selectable = false
+    var t = newTable(@[column("A")], rows)
+    var calls: seq[int]
+    t.onHighlight = proc(index: int) =
+      calls.add(index)
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    require t.visibleRowCount == 10
+    t.scrollOffset = 20
+    t.highlightedIndex = 20
+
+    t.pageUp()
+    check:
+      t.scrollOffset == 15
+      t.highlightedIndex == 20
+      calls.len == 0
+
+  test "page moves do not fire onHighlight when the highlight stays put":
+    var t = newTable(@[column("A")], (0 ..< 100).mapIt(tableRow(@[$it])))
+    var calls: seq[int]
+    t.onHighlight = proc(index: int) =
+      calls.add(index)
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    t.scrollOffset = 90
+    t.highlightedIndex = 99
+
+    t.pageDown()
+    t.fullPageDown()
+    check:
+      t.highlightedIndex == 99
+      calls.len == 0
+
+    t.scrollOffset = 0
+    t.highlightedIndex = 0
+    t.pageUp()
+    t.fullPageUp()
+    check:
+      t.highlightedIndex == 0
+      calls.len == 0
+
+    var one = newTable(@[column("A")], (0 ..< 1).mapIt(tableRow(@[$it])))
+    var oneBuf = newBuffer(10, 14)
+    one.render(oneBuf.area, oneBuf)
+    var oneCalls: seq[int]
+    one.onHighlight = proc(index: int) =
+      oneCalls.add(index)
+    one.pageDown()
+    check:
+      one.highlightedIndex == 0
+      oneCalls.len == 0
+
+  test "pageUp does not chase a highlight below the view":
+    var rows = (0 ..< 100).mapIt(tableRow(@[$it]))
+    for i in 0 ..< 100:
+      rows[i].selectable = i == 80
+    var t = newTable(@[column("A")], rows)
+    var calls: seq[int]
+    t.onHighlight = proc(index: int) =
+      calls.add(index)
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    require t.visibleRowCount == 10
+    t.scrollOffset = 10
+    t.highlightedIndex = 80
+
+    t.pageUp()
+    check:
+      t.scrollOffset == 5
+      t.highlightedIndex == 80
+      calls.len == 0
+
+  test "pageDown does not chase a highlight above the view":
+    var rows = (0 ..< 60).mapIt(tableRow(@[$it]))
+    for i in 0 ..< 60:
+      rows[i].selectable = i == 20
+    var t = newTable(@[column("A")], rows)
+    var calls: seq[int]
+    t.onHighlight = proc(index: int) =
+      calls.add(index)
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    require t.visibleRowCount == 10
+    t.scrollOffset = 40
+    t.highlightedIndex = 20
+
+    t.pageDown()
+    check:
+      t.scrollOffset == 45
+      t.highlightedIndex == 20
+      calls.len == 0
+
+  test "page moves recover a highlighted index past the last row":
+    var t = newTable(@[column("A")], (0 ..< 10).mapIt(tableRow(@[$it])))
+    var buf = newBuffer(10, 14)
+    t.render(buf.area, buf)
+    require t.visibleRowCount == 10
+
+    # Callers that write the public `rows` field can leave the highlight past
+    # the end; page moves must not keep it hidden.
+    t.rows.setLen(5)
+    t.highlightedIndex = 10
+    t.pageDown()
+    check:
+      t.highlightedIndex == 4
+      t.highlightedIndex >= t.scrollOffset
+      t.highlightedIndex < t.scrollOffset + t.visibleRowCount
+
+    t.highlightedIndex = 10
+    t.fullPageDown()
+    check:
+      t.highlightedIndex == 4
+      t.highlightedIndex >= t.scrollOffset
+      t.highlightedIndex < t.scrollOffset + t.visibleRowCount
+
   test "Border alignment correctness":
     # Test that borders align properly with content
     let columns = @[column("A", 5), column("B", 8), column("C", 6)]

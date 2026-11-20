@@ -440,60 +440,178 @@ proc highlightLast*(widget: Table) =
         widget.onHighlight(i)
       break
 
+proc isRowVisible(widget: Table, index: int): bool =
+  ## True when the row lies inside the drawn page.
+  index >= 0 and index < widget.rows.len and widget.visibleRowCount > 0 and
+    index >= widget.scrollOffset and index < widget.scrollOffset + widget.visibleRowCount
+
+proc revealHighlight(widget: Table) =
+  ## Scroll the table so that the highlighted row is visible.
+  if widget.visibleRowCount <= 0 or widget.highlightedIndex < 0:
+    return
+  if widget.highlightedIndex < widget.scrollOffset:
+    widget.scrollOffset = widget.highlightedIndex
+  elif widget.highlightedIndex >= widget.scrollOffset + widget.visibleRowCount:
+    widget.scrollOffset = widget.highlightedIndex - widget.visibleRowCount + 1
+  widget.scrollOffset =
+    clamp(widget.scrollOffset, 0, max(0, widget.rows.len - widget.visibleRowCount))
+
+proc normalizeHighlight(widget: Table) =
+  ## Snap a highlight left past the last row back into the table. `rows` and
+  ## `highlightedIndex` are public, so a caller that replaces `rows` can leave
+  ## the index out of range.
+  if widget.highlightedIndex >= widget.rows.len:
+    widget.highlightedIndex = widget.rows.len - 1
+
+proc firstSelectable(widget: Table, first, last: int): int =
+  ## First selectable row in `first .. last`, or -1 when there is none.
+  var i = max(first, 0)
+  let stop = min(last, widget.rows.len - 1)
+  while i <= stop:
+    if widget.rows[i].selectable:
+      return i
+    inc i
+  -1
+
+proc lastSelectable(widget: Table, first, last: int): int =
+  ## Last selectable row in `first .. last`, or -1 when there is none.
+  var i = min(last, widget.rows.len - 1)
+  let stop = max(first, 0)
+  while i >= stop:
+    if widget.rows[i].selectable:
+      return i
+    dec i
+  -1
+
+proc selectableInPage(widget: Table, direction: int): int =
+  ## First selectable row from the page edge in `direction`, looking past the
+  ## page when it has none.
+  let first = widget.scrollOffset
+  let last = min(first + widget.visibleRowCount - 1, widget.rows.len - 1)
+  if direction > 0:
+    result = widget.firstSelectable(first, last)
+    if result < 0:
+      result = widget.firstSelectable(last + 1, widget.rows.len - 1)
+  else:
+    result = widget.lastSelectable(first, last)
+    if result < 0:
+      result = widget.lastSelectable(0, first - 1)
+
+proc followsPageDirection(previous, landed, direction: int): bool =
+  ## True when moving to `landed` does not go against the page move.
+  ## `direction` is 1 for down and -1 for up.
+  previous < 0 or (direction > 0 and landed >= previous) or
+    (direction < 0 and landed <= previous)
+
+proc isAheadOfPage(widget: Table, index: int, direction: int): bool =
+  ## True when the row lies past the drawn page in `direction`.
+  if direction > 0:
+    index >= widget.scrollOffset + widget.visibleRowCount
+  else:
+    index < widget.scrollOffset
+
+proc settlePageHighlight(
+    widget: Table, target, previous, direction: int, previousVisible: bool
+) =
+  ## Keep the highlight on screen after a page move: prefer `target`, keep
+  ## `previous` while it is still on screen, and otherwise search from the page
+  ## edge. A row behind `previous` is not taken, so the highlight never moves
+  ## against the key. A highlight that was already off screen is revealed only
+  ## when it lies in the key direction, so the view never ends up scrolled
+  ## against the key.
+  var landed = target
+  if landed >= 0 and widget.isRowVisible(landed) and
+      followsPageDirection(previous, landed, direction):
+    widget.highlightedIndex = landed
+  elif widget.isRowVisible(previous):
+    return
+  else:
+    landed = widget.selectableInPage(direction)
+    if landed >= 0 and followsPageDirection(previous, landed, direction):
+      widget.highlightedIndex = landed
+    elif previous >= 0 and (
+      previousVisible or widget.isAheadOfPage(previous, direction)
+    ):
+      widget.revealHighlight()
+      return
+    else:
+      return
+  widget.revealHighlight()
+  if widget.highlightedIndex != previous and widget.onHighlight != nil:
+    widget.onHighlight(widget.highlightedIndex)
+
 proc pageUp*(widget: Table) =
-  ## Scroll up by half a page, at least one row (vim: Ctrl-U)
-  if widget.visibleRowCount > 0:
-    let scrollAmount = max(1, widget.visibleRowCount div 2)
-    widget.scrollUp(scrollAmount)
-    # Try to move highlight up as well
-    let targetIndex = max(0, widget.highlightedIndex - scrollAmount)
-    for i in countdown(targetIndex, 0):
-      if i < widget.rows.len and widget.rows[i].selectable:
-        widget.highlightedIndex = i
-        if widget.onHighlight != nil:
-          widget.onHighlight(i)
-        break
+  ## Scroll up by half a page, at least one row (vim: Ctrl-U). The highlight is
+  ## kept visible: one above the page is revealed (even past half a page), and
+  ## the move is undone rather than hiding it when no selectable row is above.
+  ## A highlight already left off screen below the page is not chased.
+  if widget.visibleRowCount <= 0:
+    return
+  if widget.rows.len == 0:
+    widget.scrollOffset = 0
+    return
+  widget.normalizeHighlight()
+  let previous = widget.highlightedIndex
+  let previousVisible = widget.isRowVisible(previous)
+  let scrollAmount = max(1, widget.visibleRowCount div 2)
+  widget.scrollUp(scrollAmount)
+
+  let start = max(0, min(previous, widget.rows.len - 1) - scrollAmount)
+  let target = widget.lastSelectable(0, start)
+  widget.settlePageHighlight(target, previous, -1, previousVisible)
 
 proc pageDown*(widget: Table) =
-  ## Scroll down by half a page, at least one row (vim: Ctrl-D)
-  if widget.visibleRowCount > 0:
-    let scrollAmount = max(1, widget.visibleRowCount div 2)
-    widget.scrollDown(scrollAmount)
-    # Try to move highlight down as well
-    let targetIndex =
-      max(0, min(widget.rows.len - 1, widget.highlightedIndex + scrollAmount))
-    for i in targetIndex ..< widget.rows.len:
-      if widget.rows[i].selectable:
-        widget.highlightedIndex = i
-        if widget.onHighlight != nil:
-          widget.onHighlight(i)
-        break
+  ## Scroll down by half a page, at least one row (vim: Ctrl-D). The highlight
+  ## is kept visible: one below the page is revealed (even past half a page),
+  ## and the move is undone rather than hiding it when no selectable row is
+  ## below. A highlight already left off screen above the page is not chased.
+  if widget.visibleRowCount <= 0:
+    return
+  if widget.rows.len == 0:
+    widget.scrollOffset = 0
+    return
+  widget.normalizeHighlight()
+  let previous = widget.highlightedIndex
+  let previousVisible = widget.isRowVisible(previous)
+  let scrollAmount = max(1, widget.visibleRowCount div 2)
+  widget.scrollDown(scrollAmount)
+
+  let start =
+    min(widget.rows.len - 1, max(0, min(previous, widget.rows.len - 1) + scrollAmount))
+  let target = widget.firstSelectable(start, widget.rows.len - 1)
+  widget.settlePageHighlight(target, previous, 1, previousVisible)
 
 proc fullPageUp*(widget: Table) =
-  ## Scroll up by full page (vim: Ctrl-B)
-  if widget.visibleRowCount > 0:
-    widget.scrollUp(widget.visibleRowCount)
-    # Move highlight to first visible row
-    for i in widget.scrollOffset ..<
-        min(widget.scrollOffset + widget.visibleRowCount, widget.rows.len):
-      if widget.rows[i].selectable:
-        widget.highlightedIndex = i
-        if widget.onHighlight != nil:
-          widget.onHighlight(i)
-        break
+  ## Scroll up by a full page (vim: Ctrl-B). The highlight follows the same
+  ## visibility rules as `pageUp`.
+  if widget.visibleRowCount <= 0:
+    return
+  if widget.rows.len == 0:
+    widget.scrollOffset = 0
+    return
+  widget.normalizeHighlight()
+  let previous = widget.highlightedIndex
+  let previousVisible = widget.isRowVisible(previous)
+  widget.scrollUp(widget.visibleRowCount)
+  let last = min(widget.scrollOffset + widget.visibleRowCount - 1, widget.rows.len - 1)
+  let target = widget.firstSelectable(widget.scrollOffset, last)
+  widget.settlePageHighlight(target, previous, -1, previousVisible)
 
 proc fullPageDown*(widget: Table) =
-  ## Scroll down by full page (vim: Ctrl-F)
-  if widget.visibleRowCount > 0:
-    widget.scrollDown(widget.visibleRowCount)
-    # Move highlight to first visible row
-    for i in widget.scrollOffset ..<
-        min(widget.scrollOffset + widget.visibleRowCount, widget.rows.len):
-      if widget.rows[i].selectable:
-        widget.highlightedIndex = i
-        if widget.onHighlight != nil:
-          widget.onHighlight(i)
-        break
+  ## Scroll down by a full page (vim: Ctrl-F). The highlight follows the same
+  ## visibility rules as `pageDown`.
+  if widget.visibleRowCount <= 0:
+    return
+  if widget.rows.len == 0:
+    widget.scrollOffset = 0
+    return
+  widget.normalizeHighlight()
+  let previous = widget.highlightedIndex
+  let previousVisible = widget.isRowVisible(previous)
+  widget.scrollDown(widget.visibleRowCount)
+  let last = min(widget.scrollOffset + widget.visibleRowCount - 1, widget.rows.len - 1)
+  let target = widget.firstSelectable(widget.scrollOffset, last)
+  widget.settlePageHighlight(target, previous, 1, previousVisible)
 
 # Event handling for vim-like navigation
 proc handleKeyEvent*(widget: Table, event: KeyEvent): EventResult =
