@@ -270,6 +270,166 @@ suite "List Widget Tests":
       listWidget.highlightedIndex == 99
       listWidget.scrollOffset == 90 # 100 - 10
 
+  test "pageDown moves the highlight so ArrowDown continues from the new page":
+    var listWidget = list((0 ..< 100).mapIt($it))
+    var buf = newBuffer(10, 10)
+    listWidget.render(buf.area, buf)
+    require listWidget.visibleCount == 10
+    require listWidget.highlightedIndex == 0
+
+    listWidget.pageDown()
+    check:
+      listWidget.scrollOffset == 10
+      listWidget.highlightedIndex == 10
+    listWidget.highlightNext()
+    check:
+      listWidget.scrollOffset == 10
+      listWidget.highlightedIndex == 11
+    listWidget.pageUp()
+    check:
+      listWidget.scrollOffset == 0
+      listWidget.highlightedIndex == 1
+
+  test "page moves keep the highlight visible with unselectable items":
+    var items = (0 ..< 100).mapIt(listItem($it))
+    for i in 5 .. 30:
+      items[i].selectable = false
+    var listWidget = newList(items)
+    listWidget.visibleCount = 10
+    var calls: seq[int]
+    listWidget.onHighlight = proc(index: int) =
+      calls.add(index)
+
+    listWidget.pageDown()
+    check:
+      listWidget.scrollOffset == 22
+      listWidget.highlightedIndex == 31
+      calls == @[31]
+
+    listWidget.scrollOffset = 40
+    listWidget.highlightedIndex = 45
+    listWidget.pageUp()
+    check:
+      listWidget.scrollOffset == 30
+      listWidget.highlightedIndex == 35
+      calls == @[31, 35]
+    listWidget.pageUp()
+    check:
+      listWidget.scrollOffset == 4
+      listWidget.highlightedIndex == 4
+      calls == @[31, 35, 4]
+
+  test "pageDown on the last page stops at the last item":
+    var listWidget = list((0 ..< 100).mapIt($it))
+    listWidget.visibleCount = 10
+    listWidget.scrollOffset = 90
+    listWidget.highlightedIndex = 95
+    var calls: seq[int]
+    listWidget.onHighlight = proc(index: int) =
+      calls.add(index)
+
+    listWidget.pageDown()
+    listWidget.pageDown()
+    check:
+      listWidget.scrollOffset == 90
+      listWidget.highlightedIndex == 99
+      calls == @[99]
+
+  test "page moves stop at the nearest selectable item before an unselectable end":
+    var items = (0 ..< 100).mapIt(listItem($it))
+    items[0].selectable = false
+    items[99].selectable = false
+    var listWidget = newList(items)
+    listWidget.visibleCount = 10
+    listWidget.scrollOffset = 90
+    listWidget.highlightedIndex = 95
+
+    listWidget.pageDown()
+    check:
+      listWidget.scrollOffset == 90
+      listWidget.highlightedIndex == 98
+
+    listWidget.scrollOffset = 0
+    listWidget.highlightedIndex = 5
+    listWidget.pageUp()
+    check:
+      listWidget.scrollOffset == 0
+      listWidget.highlightedIndex == 1
+
+    var head = (0 ..< 100).mapIt(listItem($it))
+    for i in 13 ..< 100:
+      head[i].selectable = false
+    var short = newList(head)
+    short.visibleCount = 10
+    short.highlightedIndex = 5
+    short.pageDown()
+    check:
+      short.scrollOffset == 10
+      short.highlightedIndex == 12
+
+  test "pageUp leaves a highlight below the view and pageDown reveals it":
+    var items = (0 ..< 100).mapIt(listItem($it))
+    for i in 0 ..< 100:
+      items[i].selectable = i == 80
+    var listWidget = newList(items)
+    listWidget.visibleCount = 10
+    listWidget.scrollOffset = 10
+    listWidget.highlightedIndex = 80
+    var calls: seq[int]
+    listWidget.onHighlight = proc(index: int) =
+      calls.add(index)
+
+    listWidget.pageUp()
+    check:
+      listWidget.scrollOffset == 0
+      listWidget.highlightedIndex == 80
+      calls.len == 0
+    listWidget.pageDown()
+    check:
+      listWidget.scrollOffset == 71
+      listWidget.highlightedIndex == 80
+      calls.len == 0
+
+  test "page moves after wheel scrolling return to the highlight":
+    var listWidget = list((0 ..< 100).mapIt($it))
+    listWidget.visibleCount = 10
+    var calls: seq[int]
+    listWidget.onHighlight = proc(index: int) =
+      calls.add(index)
+
+    listWidget.scrollDown(50)
+    listWidget.pageUp()
+    check:
+      listWidget.scrollOffset == 0
+      listWidget.highlightedIndex == 0
+
+    listWidget.highlightLast()
+    calls.setLen(0)
+    listWidget.scrollUp(80)
+    listWidget.pageDown()
+    check:
+      listWidget.scrollOffset == 90
+      listWidget.highlightedIndex == 99
+      calls.len == 0
+
+  test "page moves without a visible area or items":
+    var listWidget = list((0 ..< 20).mapIt($it))
+    listWidget.scrollOffset = 5
+    listWidget.pageDown()
+    listWidget.pageUp()
+    check:
+      listWidget.scrollOffset == 5
+      listWidget.highlightedIndex == 0
+
+    listWidget.visibleCount = 10
+    listWidget.items = @[]
+    listWidget.highlightedIndex = -1
+    listWidget.pageDown()
+    check listWidget.scrollOffset == 0
+    listWidget.scrollOffset = 5
+    listWidget.pageUp()
+    check listWidget.scrollOffset == 0
+
   test "Negative scroll offsets clamp to the first item":
     var listWidget = list((1 .. 20).mapIt($it))
     var expected = newBuffer(10, 4)

@@ -379,15 +379,144 @@ proc scrollDown*(widget: List, lines: int = 1) =
   let maxScroll = max(0, widget.items.len - widget.visibleCount)
   widget.scrollOffset = clamp(widget.scrollOffset + lines, 0, maxScroll)
 
+proc isItemVisible(widget: List, index: int): bool =
+  ## True when the item lies inside the drawn page.
+  index >= 0 and index < widget.items.len and widget.visibleCount > 0 and
+    index >= widget.scrollOffset and index < widget.scrollOffset + widget.visibleCount
+
+proc revealHighlight(widget: List) =
+  ## Scroll the list so that the highlighted item is visible.
+  if widget.visibleCount <= 0 or widget.highlightedIndex < 0:
+    return
+  widget.scrollIntoView(widget.highlightedIndex)
+  widget.scrollOffset =
+    clamp(widget.scrollOffset, 0, max(0, widget.items.len - widget.visibleCount))
+
+proc normalizeHighlight(widget: List) =
+  ## Snap a highlight left past the last item back into the list. `items` and
+  ## `highlightedIndex` are public, so a caller can leave it out of range.
+  if widget.highlightedIndex >= widget.items.len:
+    widget.highlightedIndex = widget.items.len - 1
+
+proc firstSelectable(widget: List, first, last: int): int =
+  ## First selectable item in `first .. last`, or -1 when there is none.
+  var i = max(first, 0)
+  let stop = min(last, widget.items.len - 1)
+  while i <= stop:
+    if widget.items[i].selectable:
+      return i
+    inc i
+  -1
+
+proc lastSelectable(widget: List, first, last: int): int =
+  ## Last selectable item in `first .. last`, or -1 when there is none.
+  var i = min(last, widget.items.len - 1)
+  let stop = max(first, 0)
+  while i >= stop:
+    if widget.items[i].selectable:
+      return i
+    dec i
+  -1
+
+proc selectableInPage(widget: List, direction: int): int =
+  ## First selectable item from the page edge in `direction`, looking past the
+  ## page when it has none.
+  let first = widget.scrollOffset
+  let last = min(first + widget.visibleCount - 1, widget.items.len - 1)
+  if direction > 0:
+    result = widget.firstSelectable(first, last)
+    if result < 0:
+      result = widget.firstSelectable(last + 1, widget.items.len - 1)
+  else:
+    result = widget.lastSelectable(first, last)
+    if result < 0:
+      result = widget.lastSelectable(0, first - 1)
+
+proc followsPageDirection(previous, landed, direction: int): bool =
+  ## True when moving to `landed` does not go against the page move.
+  ## `direction` is 1 for down and -1 for up.
+  previous < 0 or (direction > 0 and landed >= previous) or
+    (direction < 0 and landed <= previous)
+
+proc isAheadOfPage(widget: List, index: int, direction: int): bool =
+  ## True when the item lies past the drawn page in `direction`.
+  if direction > 0:
+    index >= widget.scrollOffset + widget.visibleCount
+  else:
+    index < widget.scrollOffset
+
+proc settlePageHighlight(
+    widget: List, target, previous, direction: int, previousVisible: bool
+) =
+  ## Keep the highlight on screen after a page move: prefer `target`, keep
+  ## `previous` while it is still on screen, and otherwise search from the page
+  ## edge. The highlight never moves against the key, and one that was already
+  ## off screen is revealed only when it lies in the key direction.
+  var landed = target
+  if landed >= 0 and widget.isItemVisible(landed) and
+      followsPageDirection(previous, landed, direction):
+    widget.highlightedIndex = landed
+  elif widget.isItemVisible(previous):
+    return
+  else:
+    landed = widget.selectableInPage(direction)
+    if landed >= 0 and followsPageDirection(previous, landed, direction):
+      widget.highlightedIndex = landed
+    elif previous >= 0 and (
+      previousVisible or widget.isAheadOfPage(previous, direction)
+    ):
+      widget.revealHighlight()
+      return
+    else:
+      return
+  widget.revealHighlight()
+  if widget.highlightedIndex != previous and widget.onHighlight != nil:
+    widget.onHighlight(widget.highlightedIndex)
+
 proc pageUp*(widget: List) =
-  ## Scroll up by one page
-  if widget.visibleCount > 0:
-    widget.scrollUp(widget.visibleCount)
+  ## Scroll up by one page and move the highlight up by one page. The highlight
+  ## is kept visible: one above the page is revealed, and the move is undone
+  ## rather than hiding it when no selectable item is above. A highlight
+  ## already left off screen below the page is not chased.
+  if widget.visibleCount <= 0:
+    return
+  if widget.items.len == 0:
+    widget.scrollOffset = 0
+    return
+  widget.normalizeHighlight()
+  let previous = widget.highlightedIndex
+  let previousVisible = widget.isItemVisible(previous)
+  let amount = widget.visibleCount
+  widget.scrollUp(amount)
+
+  let start = max(0, min(previous, widget.items.len - 1) - amount)
+  var target = widget.lastSelectable(0, start)
+  if target < 0:
+    target = widget.firstSelectable(start, previous - 1)
+  widget.settlePageHighlight(target, previous, -1, previousVisible)
 
 proc pageDown*(widget: List) =
-  ## Scroll down by one page
-  if widget.visibleCount > 0:
-    widget.scrollDown(widget.visibleCount)
+  ## Scroll down by one page and move the highlight down by one page. The
+  ## highlight is kept visible: one below the page is revealed, and the move is
+  ## undone rather than hiding it when no selectable item is below. A highlight
+  ## already left off screen above the page is not chased.
+  if widget.visibleCount <= 0:
+    return
+  if widget.items.len == 0:
+    widget.scrollOffset = 0
+    return
+  widget.normalizeHighlight()
+  let previous = widget.highlightedIndex
+  let previousVisible = widget.isItemVisible(previous)
+  let amount = widget.visibleCount
+  widget.scrollDown(amount)
+
+  let start =
+    min(widget.items.len - 1, max(0, min(previous, widget.items.len - 1) + amount))
+  var target = widget.firstSelectable(start, widget.items.len - 1)
+  if target < 0:
+    target = widget.lastSelectable(previous + 1, start)
+  widget.settlePageHighlight(target, previous, 1, previousVisible)
 
 # Event handling
 proc handleKeyEvent*(widget: List, event: KeyEvent): EventResult =
